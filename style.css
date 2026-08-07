@@ -2,13 +2,13 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  border-radius: 0 !important; /* すべての要素を完全に角ばらせる */
+  border-radius: 0 !important; 
 }
 
 body {
   font-family: 'Times New Roman', 'Yu Mincho', 'Hiragino Mincho ProN', 'MS PMincho', serif;
-  background-color: #1a1412; /* ダークウッド風の暗い褐色 */
-  color: #c0c0c0; /* 銀色 */
+  background-color: #1a1412; 
+  color: #c0c0c0; 
   display: flex;
   justify-content: center;
   align-items: center;
@@ -27,28 +27,28 @@ body {
 
 .panel {
   background: #281d18;
-  border: 3px double #7a600a; /* 金の二重枠 */
+  border: 3px double #7a600a; 
   padding: 30px;
   box-shadow: 0 0 15px rgba(0, 0, 0, 0.8);
 }
 
 .title-frame {
   text-align: center;
-  border-bottom: 2px solid #8b2626; /* くすんだ赤 */
+  border-bottom: 2px solid #8b2626; 
   padding-bottom: 15px;
   margin-bottom: 20px;
 }
 
 .title {
   font-size: 2.4rem;
-  color: #daa700; /* 金色 */
+  color: #daa700;
   letter-spacing: 4px;
   text-shadow: 2px 2px 4px #000;
 }
 
 .subtitle {
   font-size: 0.85rem;
-  color: #b59410; /* くすんだ黄 */
+  color: #b59410; 
   letter-spacing: 2px;
 }
 
@@ -68,8 +68,8 @@ input {
 
 button {
   padding: 12px;
-  background: #8b2626; /* くすんだ赤 */
-  color: #daa700; /* 金文字 */
+  background: #8b2626; 
+  color: #daa700; 
   border: 1px solid #7a600a;
   font-weight: bold;
   font-size: 1rem;
@@ -77,7 +77,7 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: #d97706; /* オレンジ */
+  background: #d97706; 
   color: #1a1412;
 }
 
@@ -93,7 +93,7 @@ button:disabled {
   margin-top: 25px;
   padding: 15px;
   background: #1c1410;
-  border: 1px solid #d97706; /* オレンジ枠 */
+  border: 1px solid #d97706; 
   font-size: 0.85rem;
   color: #a3a3a3;
   text-align: left;
@@ -119,18 +119,18 @@ button:disabled {
   color: #b59410;
 }
 
-/* --- ゲーム画面 (固定レイアウト) --- */
+/* ゲーム画面 */
 #game-screen {
   display: flex;
   gap: 20px;
-  width: 960px; /* 全体幅を完全に固定 */
+  width: 960px; 
   padding: 20px;
   background: #241b18;
   border: 2px solid #7a600a;
 }
 
 .board-container {
-  width: 680px; /* メイン盤面幅を固定 */
+  width: 680px; 
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -138,7 +138,7 @@ button:disabled {
 }
 
 .sidebar {
-  width: 220px; /* 履歴領域幅を固定 */
+  width: 220px; 
   flex-shrink: 0;
   background: #1a1412;
   border: 1px solid #b59410;
@@ -175,7 +175,7 @@ button:disabled {
   margin-left: 10px;
 }
 
-/* 中央テーブル情報 */
+/* 中央 */
 .table-center {
   text-align: center;
   background: #18110e;
@@ -192,7 +192,7 @@ button:disabled {
 .card-row {
   display: flex;
   gap: 10px;
-  min-height: 135px; /* 枚数が減っても高さを崩さない */
+  min-height: 135px; 
   width: 100%;
 }
 
@@ -200,7 +200,7 @@ button:disabled {
   width: 85px;
   height: 125px;
   background: #2a1f1b;
-  border: 2px solid #b59410; /* くすんだ黄色の枠 */
+  border: 2px solid #b59410;
   padding: 6px;
   display: flex;
   flex-direction: column;
@@ -225,3 +225,83 @@ button:disabled {
 
 .suit-heart { color: #8b2626; }
 .suit-spade { color: #7a600a; }
+
+/* 右下のクレジットボタン */
+.credit-btn {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  padding: 8px 16px;
+  background-color: #333;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 14px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: background-color 0.2s;
+}
+
+.credit-btn:hover {
+  background-color: #555;
+}
+
+
+.modal-overlay {
+  display: none; /* 初期状態は非表示 */
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+
+.modal-overlay.active {
+  display: flex;
+}
+
+
+.modal-content {
+  background: #ffffff;
+  color: #222222;
+  padding: 24px;
+  border-radius: 12px;
+  width: 500px;
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.modal-content h3 {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.modal-content p {
+  margin: 6px 0;
+  font-size: 14px;
+}
+
+
+.close-btn {
+  margin-top: 16px;
+  padding: 6px 18px;
+  background-color: #eee;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.close-btn:hover {
+  background-color: #ddd;
+}
+.main-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+}

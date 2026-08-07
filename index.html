@@ -21,7 +21,6 @@
           <button id="joinBtn" type="button">入室</button>
         </div>
 
-        <!-- 簡易ルールブック -->
         <div class="rulebook">
           <div class="rulebook-title">【 ルール 】</div>
           <ul>
@@ -35,14 +34,13 @@
               <br>・<strong>Joker</strong> は相手の強さをコピー
             </li>
             <li>引き分け時はカードが次回へ持ち越し（スタック）</li>
+            <p>相手と意思疎通ができる状況での対戦を推奨します</p>
           </ul>
         </div>
       </div>
-      <!-- 端のクレジット -->
-      <div class="credits">制作: hally</div>
-    </div>
+  </div>
 
-    <!-- ゲーム画面 -->
+  
     <div id="game-screen" class="screen hidden">
       <main class="board-container">
         <div class="room-bar">
@@ -79,13 +77,33 @@
         </section>
       </main>
 
-      <!-- 右側固定の履歴サイドバー -->
       <aside class="sidebar">
         <h3>対戦履歴</h3>
         <div id="history-list"></div>
       </aside>
     </div>
   </div>
+  <!-- 右下のクレジットボタン -->
+<button id="credit-btn" class="credit-btn">雑談</button>
+
+<!-- クレジット表示用モーダル -->
+<div id="credit-modal" class="modal-overlay">
+  <div class="modal-content">
+    <img src="images/demo.png" alt="" class="main-image">
+    <h3>Overthinking demo版</h3>
+    <p>私がおすすめするものは<strong>心理戦</strong>です。</p>
+    <p>理由はトランプ14枚程度でもできる手軽さと</p>
+    <p>色々な人とやることで何度も楽しめる点、</p>
+    <p>また、同じ人と何回もやることで</p>
+    <p>よりヒートアップした戦いができる点です。</p>
+    <p>心理戦のできるカードゲームやボードゲームをまとめている</p>
+    <p>  サイトがありましたので勝手ながら紹介させていただきます。</p>
+    <a href="https://boku-boardgame.net/psychological-game">
+      心理戦ゲームのおすすめ26選
+      </a>
+    <button id="close-credit-btn" class="close-btn">閉じる</button>
+  </div>
+</div>
   <script src="main.js"></script>
 </body>
 </html>

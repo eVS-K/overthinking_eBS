@@ -8,7 +8,7 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 app.use(express.static('public'));
 
-const TURN_TIME_LIMIT = 90; // 制限時間（秒）
+const TURN_TIME_LIMIT = 90; // 制限時間（s）
 
 const INITIAL_HAND = [
   { id: 'ace', name: 'Ace', strength: 14, desc: '能力なし' },
@@ -37,7 +37,7 @@ function resolveRound(c1, c2) {
   return 'draw';
 }
 
-// ターンタイマーの開始
+// タイマーの開始
 function startTurnTimer(roomId) {
   if (roomTimers[roomId]) clearTimeout(roomTimers[roomId]);
 
@@ -47,7 +47,7 @@ function startTurnTimer(roomId) {
   room.deadline = Date.now() + TURN_TIME_LIMIT * 1000;
 
   roomTimers[roomId] = setTimeout(() => {
-    // 時間切れ時：未選択のプレイヤーのカードを自動選択
+    // 時間切れ時：未選択のプレイヤーのカードをランダムに選択
     room.players.forEach(p => {
       if (!room.selections[p.id] && p.hand.length > 0) {
         const randomIdx = Math.floor(Math.random() * p.hand.length);

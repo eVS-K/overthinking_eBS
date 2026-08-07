@@ -43,11 +43,9 @@ socket.on('room_updated', (room) => {
   document.getElementById('current-round').textContent = room.round;
   document.getElementById('stack-count').textContent = room.stack.length;
 
-  // 1. 自分の情報取得（Socket ID または 名前で判定）
   const me = room.players.find(p => p.id === socket.id) || 
              room.players.find(p => p.name === myPlayerName);
 
-  // 2. 相手の情報取得（自分以外のプレイヤー）
   const opp = room.players.find(p => p !== me);
 
   // 自分の手札描画
@@ -57,17 +55,14 @@ socket.on('room_updated', (room) => {
     renderHand('my-hand', me.hand, 'spade', true);
   }
 
-  // 相手エリアの描画
   if (opp) {
     document.getElementById('opp-name').textContent = opp.name;
     document.getElementById('opp-score').textContent = opp.score;
     // 相手が入室したら手札を表示
     renderHand('opp-hand', opp.hand, 'heart', false);
   } else {
-    // 相手がまだいない（待機中）とき
     document.getElementById('opp-name').textContent = '待機中...';
     document.getElementById('opp-score').textContent = '0';
-    // カード描画領域を空にして枠だけ保つ
     document.getElementById('opp-hand').innerHTML = '';
   }
 
@@ -150,3 +145,15 @@ function renderHistory(history) {
     container.appendChild(item);
   });
 }
+const creditBtn = document.getElementById('credit-btn');
+const creditModal = document.getElementById('credit-modal');
+const closeCreditBtn = document.getElementById('close-credit-btn');
+
+creditBtn.addEventListener('click', () => {
+  creditModal.style.display = 'flex';
+});
+
+
+closeCreditBtn.addEventListener('click', () => {
+  creditModal.style.display = 'none';
+});
