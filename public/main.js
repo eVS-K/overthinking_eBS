@@ -1,4 +1,4 @@
-const socket = io('http://localhost:3000');
+const socket = io('https://overthinking-demo.onrender.com');
 
 let currentRoomId = '';
 let mySelectedCardId = null;
