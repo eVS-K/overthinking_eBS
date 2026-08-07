@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>OVERTHINKING</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- 入室画面 -->
+    <div id="login-screen" class="screen">
+      <div class="panel">
+        <div class="title-frame">
+          <h1 class="title">OVERTHINKING</h1>
+        </div>
+        
+        <div class="input-group">
+          <input type="text" id="roomIdInput" placeholder="部屋キー">
+          <input type="text" id="playerNameInput" placeholder="プレイヤー名">
+          <button id="joinBtn" type="button">入室</button>
+        </div>
+
+        <!-- 簡易ルールブック -->
+        <div class="rulebook">
+          <div class="rulebook-title">【 ルール 】</div>
+          <ul>
+            <li>全7ラウンドの 2人用 完全情報 心理戦 カードゲーム</li>
+            <li>互いに同じ7枚の手札から1枚ずつ出して勝負</li>
+            <li>基本的に数字が大きい方が勝利（場のカードを総取り）</li>
+            <li>数字の大きさは Two ＜ Three ＜･・･＜ King ＜ Ace</li>
+            <li><strong>特殊勝敗:</strong>
+              <br>・<strong>Two</strong> は <strong>Ace</strong> に勝利
+              <br>・<strong>Three</strong> は <strong>Joker</strong> に勝利
+              <br>・<strong>Joker</strong> は相手の強さをコピー
+            </li>
+            <li>引き分け時はカードが次回へ持ち越し（スタック）</li>
+          </ul>
+        </div>
+      </div>
+      <!-- 端のクレジット -->
+      <div class="credits">制作: hally</div>
+    </div>
+
+    <!-- ゲーム画面 -->
+    <div id="game-screen" class="screen hidden">
+      <main class="board-container">
+        <div class="room-bar">
+          ROOM KEY: <span id="display-room-id">-</span>
+        </div>
+
+        <section class="opponent-area">
+          <div class="player-header">
+            <span class="suit-icon suit-heart">♥</span>
+            <span id="opp-name">対戦相手</span> 
+            <span class="score-badge">獲得: <span id="opp-score">0</span> 枚</span>
+          </div>
+          <div id="opp-hand" class="card-row mini-cards"></div>
+        </section>
+
+        <section class="table-center">
+          <div class="round-info">ROUND <span id="current-round">1</span> / 7</div>
+          <div class="timer-info">TIME: <span id="timer-count">--</span>s</div>
+          <div class="stack-info">STACK: <span id="stack-count">0</span> CARDS</div>
+          <div id="status-message" class="status-msg">接続中...</div>
+        </section>
+
+        <section class="my-area">
+          <div class="player-header">
+            <span class="suit-icon suit-spade">♠</span>
+            <span id="my-name">あなた</span> 
+            <span class="score-badge">獲得: <span id="my-score">0</span> 枚</span>
+          </div>
+          <div id="my-hand" class="card-row"></div>
+          <div class="controls">
+            <button id="confirmBtn" disabled>決定</button>
+            <button id="restartBtn" class="hidden">もう一度遊ぶ</button>
+          </div>
+        </section>
+      </main>
+
+      <!-- 右側固定の履歴サイドバー -->
+      <aside class="sidebar">
+        <h3>対戦履歴</h3>
+        <div id="history-list"></div>
+      </aside>
+    </div>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>
