@@ -1,6 +1,6 @@
 const GAME_SERVER_URL = ['localhost', '127.0.0.1'].includes(window.location.hostname)
   ? window.location.origin
-  : 'https://overthinking-demo.onrender.com';
+  : 'https://overthinking-ebs.onrender.com';
 const TURN_TIME_LIMIT_MS = 90_000;
 
 const socket = window.io
