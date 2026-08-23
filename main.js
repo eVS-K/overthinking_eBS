@@ -32,6 +32,7 @@ const elements = {
   joinButton: document.getElementById('joinBtn'),
   loginMessage: document.getElementById('login-message'),
   roomId: document.getElementById('display-room-id'),
+  fullscreenButton: document.getElementById('fullscreenBtn'),
   homeButton: document.getElementById('homeBtn'),
   connectionState: document.getElementById('connection-state'),
   round: document.getElementById('current-round'),
@@ -121,6 +122,27 @@ function showGameScreen() {
 function showLoginScreen() {
   elements.gameScreen.classList.add('hidden');
   elements.loginScreen.classList.remove('hidden');
+}
+
+function updateFullscreenButton() {
+  const isActive = document.fullscreenElement === elements.gameScreen;
+  const canUseFullscreen = Boolean(document.fullscreenEnabled && elements.gameScreen.requestFullscreen);
+  elements.fullscreenButton.classList.toggle('hidden', !canUseFullscreen);
+  elements.fullscreenButton.setAttribute('aria-pressed', String(isActive));
+  elements.fullscreenButton.title = isActive ? '全画面表示を終了' : 'ゲーム画面を全画面で表示';
+  setText(elements.fullscreenButton.querySelector('span:last-child'), isActive ? '終了' : '全画面');
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement === elements.gameScreen) {
+      await document.exitFullscreen();
+    } else {
+      await elements.gameScreen.requestFullscreen();
+    }
+  } catch {
+    setText(elements.status, '全画面表示を開始できませんでした。');
+  }
 }
 
 function emitJoinRequest() {
@@ -287,8 +309,31 @@ function renderReveal(lastRound) {
   elements.revealArea.replaceChildren(result);
 
   if (isNewRound) {
+    playResultEffects(outcomeClass);
     window.setTimeout(() => elements.revealArea.classList.remove('reveal-new'), 600);
   }
+}
+
+function playResultEffects(outcomeClass) {
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const particleCount = reducedMotion ? 0 : window.innerWidth <= 660 ? 6 : 18;
+
+  for (let index = 0; index < particleCount; index += 1) {
+    const particle = document.createElement('i');
+    const angle = (Math.PI * 2 * index) / particleCount + (Math.random() - .5) * .28;
+    const distance = 42 + Math.random() * (window.innerWidth <= 660 ? 64 : 142);
+    particle.className = `result-particle particle-${outcomeClass}`;
+    particle.style.setProperty('--x', `${Math.cos(angle) * distance}px`);
+    particle.style.setProperty('--y', `${Math.sin(angle) * distance}px`);
+    particle.style.setProperty('--size', `${3 + Math.random() * 5}px`);
+    particle.style.setProperty('--delay', `${Math.random() * 110}ms`);
+    elements.revealArea.append(particle);
+    window.setTimeout(() => particle.remove(), 1_050);
+  }
+
+  elements.gameScreen.classList.remove('impact-win', 'impact-loss', 'impact-draw');
+  window.requestAnimationFrame(() => elements.gameScreen.classList.add(`impact-${outcomeClass}`));
+  window.setTimeout(() => elements.gameScreen.classList.remove(`impact-${outcomeClass}`), 720);
 }
 
 function createRevealCard(card, owner) {
@@ -479,6 +524,10 @@ elements.restartButton.addEventListener('click', () => {
   if (socket && currentRoomId) socket.emit('restart_game', { roomId: currentRoomId });
 });
 
+elements.fullscreenButton.addEventListener('click', toggleFullscreen);
+document.addEventListener('fullscreenchange', updateFullscreenButton);
+updateFullscreenButton();
+
 elements.homeButton.addEventListener('click', () => {
   const roomIdToLeave = currentRoomId;
   if (socket?.connected && roomIdToLeave) socket.emit('leave_room', { roomId: roomIdToLeave });
@@ -492,6 +541,7 @@ elements.homeButton.addEventListener('click', () => {
   previousScores.clear();
   clearSavedSession();
   resetTimer();
+  if (document.fullscreenElement === elements.gameScreen) document.exitFullscreen().catch(() => {});
   elements.homeButton.classList.add('hidden');
   elements.joinButton.disabled = false;
   setLoginMessage('');
