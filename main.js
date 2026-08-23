@@ -31,6 +31,7 @@ let chatSending = false;
 let pendingChatText = '';
 let chatSendTimeout = null;
 let chatRequestId = 0;
+let chatReady = false;
 
 const elements = {
   loginScreen: document.getElementById('login-screen'),
@@ -191,8 +192,9 @@ function renderTimer(room) {
 
 function createCard(card, suitType, isInteractive) {
   const cardElement = document.createElement('div');
-  const isSelected = card.id === mySelectedCardId;
-  const isCommitting = card.id === committedCardId;
+  // 両プレイヤーは同じIDのカードを持つため、選択状態は操作できる自分の手札だけに適用する。
+  const isSelected = isInteractive && card.id === mySelectedCardId;
+  const isCommitting = isInteractive && card.id === committedCardId;
   cardElement.className = `card card-${suitType}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.setAttribute('aria-label', `${card.name}、${card.desc}${isSelected ? '、選択中' : ''}`);
 
@@ -220,7 +222,15 @@ function createCard(card, suitType, isInteractive) {
   name.textContent = card.name;
   const suit = document.createElement('span');
   suit.textContent = suitType === 'spade' ? '♠' : '♥';
-  top.append(name, suit);
+  if (isSelected) {
+    const selectedMark = document.createElement('span');
+    selectedMark.className = 'card-selected-mark';
+    selectedMark.textContent = '✓';
+    selectedMark.setAttribute('aria-hidden', 'true');
+    top.append(name, selectedMark, suit);
+  } else {
+    top.append(name, suit);
+  }
 
   const center = document.createElement('div');
   center.className = 'card-center-suit';
@@ -405,7 +415,7 @@ function setChatFeedback(message = '') {
 
 function updateChatControls() {
   const message = elements.chatInput.value.trim();
-  const canUseChat = Boolean(socket?.connected && currentRoom && chatSentCount < chatLimit);
+  const canUseChat = Boolean(socket?.connected && currentRoom && chatReady && chatSentCount < chatLimit);
   const canSend = canUseChat && !chatSending && Boolean(message) && countChatCharacters(message) <= CHAT_MESSAGE_LIMIT;
   elements.chatInput.disabled = !canUseChat;
   elements.chatSendButton.disabled = !canSend;
@@ -490,6 +500,7 @@ function resetChat() {
   chatSending = false;
   pendingChatText = '';
   chatRequestId += 1;
+  chatReady = false;
   elements.chatInput.value = '';
   setChatFeedback('送信は1参加セッションにつき50回までです。');
   renderChatMessages();
@@ -589,6 +600,7 @@ function renderRoom(room) {
   renderHistory(roomView.history);
   renderStatus(roomView, me, opponent);
   updateConfirmButton();
+  if (!chatReady) setChatFeedback('チャットを準備しています…');
   updateChatControls();
 }
 
@@ -743,6 +755,7 @@ window.addEventListener('keydown', (event) => {
 if (socket) {
   socket.on('connect', () => {
     setConnectionState(true);
+    chatReady = false;
     updateChatControls();
     if (joinedRoom) emitJoinRequest();
   });
@@ -753,6 +766,7 @@ if (socket) {
     chatSendTimeout = null;
     chatSending = false;
     chatRequestId += 1;
+    chatReady = false;
     updateChatControls();
     if (currentRoom) renderStatus(currentRoom, null, null);
   });
@@ -769,6 +783,7 @@ if (socket) {
   });
 
   socket.on('chat_state', ({ messages, sent, limit }) => {
+    chatReady = true;
     chatLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, CHAT_MESSAGE_LIMIT) : CHAT_MESSAGE_LIMIT;
     chatSentCount = Number.isSafeInteger(sent) ? Math.min(Math.max(sent, 0), chatLimit) : 0;
     setChatMessages(messages);
