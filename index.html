@@ -2,108 +2,127 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>OVERTHINKING</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090d1a">
+  <title>OVERTHINKING — 2 PLAYER CARD DUEL</title>
   <link rel="stylesheet" href="style.css">
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" defer></script>
+  <script src="main.js" defer></script>
 </head>
 <body>
-  <div id="app">
-    <!-- 入室画面 -->
-    <div id="login-screen" class="screen">
-      <div class="panel">
-        <div class="title-frame">
-          <h1 class="title">OVERTHINKING</h1>
-        </div>
-        
-        <div class="input-group">
-          <input type="text" id="roomIdInput" placeholder="部屋キー">
-          <input type="text" id="playerNameInput" placeholder="プレイヤー名">
-          <button id="joinBtn" type="button">入室</button>
-        </div>
-
-        <div class="rulebook">
-          <div class="rulebook-title">【 ルール 】</div>
-          <ul>
-            <li>全7ラウンドの 2人用 完全情報 心理戦 カードゲーム</li>
-            <li>互いに同じ7枚の手札から1枚ずつ出して勝負</li>
-            <li>基本的に数字が大きい方が勝利（場のカードを総取り）</li>
-            <li>数字の大きさは Two ＜ Three ＜･・･＜ King ＜ Ace</li>
-            <li><strong>特殊勝敗:</strong>
-              <br>・<strong>Two</strong> は <strong>Ace</strong> に勝利
-              <br>・<strong>Three</strong> は <strong>Joker</strong> に勝利
-              <br>・<strong>Joker</strong> は相手の強さをコピー
-            </li>
-            <li>引き分け時はカードが次回へ持ち越し（スタック）</li>
-            <p>相手と意思疎通ができる状況での対戦を推奨します</p>
-          </ul>
-        </div>
-      </div>
+  <div class="atmosphere" aria-hidden="true">
+    <div class="glow glow-one"></div>
+    <div class="glow glow-two"></div>
+    <div class="noise"></div>
   </div>
 
-  
-    <div id="game-screen" class="screen hidden">
-      <main class="board-container">
-        <div class="room-bar">
-          ROOM KEY: <span id="display-room-id">-</span>
+  <div id="app">
+    <main id="login-screen" class="screen entry-screen">
+      <section class="entry-panel" aria-labelledby="game-title">
+        <div class="brand-lockup">
+          <span class="brand-kicker">TWO PLAYER · CARD DUEL</span>
+          <h1 id="game-title">OVER<span>THINKING</span></h1>
+          <p>読み合いの、その先へ。</p>
         </div>
 
-        <section class="opponent-area">
-          <div class="player-header">
-            <span class="suit-icon suit-heart">♥</span>
-            <span id="opp-name">対戦相手</span> 
-            <span class="score-badge">獲得: <span id="opp-score">0</span> 枚</span>
+        <form id="join-form" class="join-form" novalidate>
+          <label for="roomIdInput">ROOM KEY</label>
+          <div class="input-wrap">
+            <span aria-hidden="true">⌘</span>
+            <input type="text" id="roomIdInput" maxlength="24" autocomplete="off" placeholder="共有する部屋キー" required>
           </div>
-          <div id="opp-hand" class="card-row mini-cards"></div>
+
+          <label for="playerNameInput">PLAYER NAME <small>任意</small></label>
+          <div class="input-wrap">
+            <span aria-hidden="true">♠</span>
+            <input type="text" id="playerNameInput" maxlength="20" autocomplete="nickname" placeholder="あなたの名前">
+          </div>
+
+          <button id="joinBtn" class="primary-button" type="submit">
+            <span>対戦に入る</span><b aria-hidden="true">→</b>
+          </button>
+          <p id="login-message" class="form-message" role="status"></p>
+        </form>
+
+        <section class="rulebook" aria-labelledby="rulebook-title">
+          <div class="section-label" id="rulebook-title">GAME RULES</div>
+          <p class="rule-lead">全7ラウンド、同じ7枚の手札で戦う完全情報の心理戦。</p>
+          <div class="rule-grid">
+            <article><strong>01</strong><span>数字が大きい方が、場のカードを獲得</span></article>
+            <article><strong>02</strong><span>Two は Ace に、Three は Joker に勝利</span></article>
+            <article><strong>03</strong><span>Joker は相手の強さをコピー</span></article>
+            <article><strong>04</strong><span>引き分けたカードは次の勝負へ持ち越し</span></article>
+          </div>
+          <p class="rule-note">カードの強さ：Two ＜ Three ＜ … ＜ King ＜ Ace</p>
+        </section>
+      </section>
+    </main>
+
+    <div id="game-screen" class="screen hidden">
+      <main class="game-shell" aria-label="対戦ボード">
+        <header class="game-header">
+          <a class="game-brand" href="./" aria-label="OVERTHINKING のトップへ">OVER<span>THINKING</span></a>
+          <div class="room-chip"><span>ROOM</span><strong id="display-room-id">—</strong></div>
+          <div id="connection-state" class="connection-state"><i></i><span>接続中</span></div>
+        </header>
+
+        <section class="player-zone opponent-zone" aria-label="対戦相手の手札">
+          <div class="player-header">
+            <div class="identity"><span class="suit-icon suit-heart" aria-hidden="true">♥</span><div><span class="side-label">OPPONENT</span><strong id="opp-name">対戦相手を待機中</strong></div></div>
+            <div class="score-box"><span>獲得</span><strong id="opp-score">0</strong><small>CARDS</small></div>
+          </div>
+          <div id="opp-hand" class="card-row opponent-hand" aria-label="相手の手札"></div>
         </section>
 
-        <section class="table-center">
-          <div class="round-info">ROUND <span id="current-round">1</span> / 7</div>
-          <div class="timer-info">TIME: <span id="timer-count">--</span>s</div>
-          <div class="stack-info">STACK: <span id="stack-count">0</span> CARDS</div>
-          <div id="status-message" class="status-msg">接続中...</div>
+        <section class="table-center" aria-label="ラウンド情報">
+          <div class="round-dashboard">
+            <div class="round-count"><span>ROUND</span><strong id="current-round">1</strong><em>/ 7</em></div>
+            <div class="timer-block">
+              <div class="timer-text"><span>TURN TIMER</span><strong><span id="timer-count">--</span><small>s</small></strong></div>
+              <div class="timer-track" aria-hidden="true"><i id="timer-progress"></i></div>
+            </div>
+            <div class="stack-box"><span>STACK</span><strong id="stack-count">0</strong><small>CARDS</small></div>
+          </div>
+
+          <div id="reveal-area" class="reveal-area empty" aria-live="polite">
+            <span class="reveal-placeholder">両者が一枚を伏せると、ここで勝負が明かされます</span>
+          </div>
+          <p id="status-message" class="status-msg" role="status">接続を確認しています…</p>
         </section>
 
-        <section class="my-area">
+        <section class="player-zone my-zone" aria-label="あなたの手札">
           <div class="player-header">
-            <span class="suit-icon suit-spade">♠</span>
-            <span id="my-name">あなた</span> 
-            <span class="score-badge">獲得: <span id="my-score">0</span> 枚</span>
+            <div class="identity"><span class="suit-icon suit-spade" aria-hidden="true">♠</span><div><span class="side-label">YOU</span><strong id="my-name">あなた</strong></div></div>
+            <div class="score-box"><span>獲得</span><strong id="my-score">0</strong><small>CARDS</small></div>
           </div>
-          <div id="my-hand" class="card-row"></div>
+          <div id="my-hand" class="card-row my-hand" aria-label="あなたの手札"></div>
           <div class="controls">
-            <button id="confirmBtn" disabled>決定</button>
-            <button id="restartBtn" class="hidden">もう一度遊ぶ</button>
+            <button id="confirmBtn" class="primary-button confirm-button" type="button" disabled><span>この一枚で勝負する</span><b aria-hidden="true">↗</b></button>
+            <button id="restartBtn" class="secondary-button hidden" type="button">もう一度、読み合う</button>
           </div>
         </section>
       </main>
 
-      <aside class="sidebar">
-        <h3>対戦履歴</h3>
-        <div id="history-list"></div>
+      <aside class="sidebar" aria-label="対戦履歴">
+        <div class="sidebar-heading"><div><span class="side-label">MATCH LOG</span><h2>対戦履歴</h2></div><span id="spectator-count" class="spectator-count hidden"></span></div>
+        <div id="history-list" class="history-list" aria-live="polite">
+          <p class="history-empty">最初の勝負を待っています。</p>
+        </div>
       </aside>
     </div>
   </div>
-  <!-- 右下のクレジットボタン -->
-<button id="credit-btn" class="credit-btn">雑談</button>
 
-<!-- クレジット表示用モーダル -->
-<div id="credit-modal" class="modal-overlay">
-  <div class="modal-content">
-    <img src="images/demo.png" alt="" class="main-image">
-    <h3>Overthinking demo版</h3>
-    <p>私がおすすめするものは<strong>心理戦</strong>です。</p>
-    <p>理由はトランプ14枚程度でもできる手軽さと</p>
-    <p>色々な人とやることで何度も楽しめる点、</p>
-    <p>また、同じ人と何回もやることで</p>
-    <p>よりヒートアップした戦いができる点です。</p>
-    <p>心理戦のできるカードゲームやボードゲームをまとめている</p>
-    <p>  サイトがありましたので勝手ながら紹介させていただきます。</p>
-    <a href="https://boku-boardgame.net/psychological-game">
-      心理戦ゲームのおすすめ26選
-      </a>
-    <button id="close-credit-btn" class="close-btn">閉じる</button>
+  <button id="credit-btn" class="credit-btn" type="button" aria-haspopup="dialog" aria-controls="credit-modal">このゲームについて</button>
+  <div id="credit-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="credit-title" aria-hidden="true">
+    <div class="modal-content">
+      <button id="close-credit-btn" class="modal-close" type="button" aria-label="閉じる">×</button>
+      <img src="images/demo.png" alt="Overthinking demo版の紹介画像" class="main-image">
+      <p class="section-label">ABOUT THIS DEMO</p>
+      <h2 id="credit-title">Overthinking demo版</h2>
+      <p>私がおすすめするものは<strong>心理戦</strong>です。</p>
+      <p>トランプ14枚程度でもできる手軽さと、同じ相手と繰り返すほど熱くなる読み合いを楽しめます。</p>
+      <a href="https://boku-boardgame.net/psychological-game" target="_blank" rel="noopener noreferrer">心理戦ゲームのおすすめ26選 <span aria-hidden="true">↗</span></a>
+    </div>
   </div>
-</div>
-  <script src="main.js"></script>
 </body>
 </html>

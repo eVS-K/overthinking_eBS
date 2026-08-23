@@ -1,225 +1,384 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
+const { createInitialHand, resolveRound } = require('./game-rules');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, {
+  cors: { origin: true, methods: ['GET', 'POST'] }
+});
 
-app.use(express.static('public'));
+const TURN_TIME_LIMIT_MS = 90_000;
+const RECONNECT_GRACE_MS = 30_000;
+const MAX_ROOM_ID_LENGTH = 24;
+const MAX_PLAYER_NAME_LENGTH = 20;
 
-const TURN_TIME_LIMIT = 90; // 制限時間（s）
+const rooms = new Map();
+const roomTimers = new Map();
+const disconnectTimers = new Map();
 
-const INITIAL_HAND = [
-  { id: 'ace', name: 'Ace', strength: 14, desc: '能力なし' },
-  { id: 'king', name: 'King', strength: 13, desc: '能力なし' },
-  { id: 'queen', name: 'Queen', strength: 12, desc: '能力なし' },
-  { id: 'jack', name: 'Jack', strength: 11, desc: '能力なし' },
-  { id: 'joker', name: 'Joker', strength: 0, desc: '相手の強さをコピー' },
-  { id: 'three', name: 'Three', strength: 3, desc: 'Jokerに勝利' },
-  { id: 'two', name: 'Two', strength: 2, desc: 'Aceに勝利' }
-];
+app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'index.html')));
+app.get(['/index.html', '/main.js', '/style.css'], (request, response) => {
+  response.sendFile(path.join(__dirname, request.path));
+});
+app.use('/images', express.static(path.join(__dirname, 'images')));
+app.get('/health', (_request, response) => response.json({ status: 'ok' }));
 
-const rooms = {};
-const roomTimers = {};
-
-function resolveRound(c1, c2) {
-  if (c1.id === 'two' && c2.id === 'ace') return 'p1';
-  if (c2.id === 'two' && c1.id === 'ace') return 'p2';
-  if (c1.id === 'three' && c2.id === 'joker') return 'p1';
-  if (c2.id === 'three' && c1.id === 'joker') return 'p2';
-
-  let s1 = c1.id === 'joker' ? (c2.id === 'joker' ? 0 : c2.strength) : c1.strength;
-  let s2 = c2.id === 'joker' ? (c1.id === 'joker' ? 0 : c1.strength) : c2.strength;
-
-  if (s1 > s2) return 'p1';
-  if (s2 > s1) return 'p2';
-  return 'draw';
+function normalizeText(value, maxLength, fallback = '') {
+  if (typeof value !== 'string') return fallback;
+  return value.trim().replace(/[\u0000-\u001F\u007F]/g, '').slice(0, maxLength) || fallback;
 }
 
-// タイマーの開始
-function startTurnTimer(roomId) {
-  if (roomTimers[roomId]) clearTimeout(roomTimers[roomId]);
+function createRoom(id) {
+  return {
+    id,
+    players: [],
+    spectators: [],
+    round: 1,
+    stack: [],
+    history: [],
+    lastRound: null,
+    gameState: 'waiting',
+    selections: {},
+    deadline: 0,
+    pausedRemainingMs: TURN_TIME_LIMIT_MS,
+    winner: null,
+    needsFreshGame: false
+  };
+}
 
-  const room = rooms[roomId];
-  if (!room || room.gameState !== 'playing') return;
+function getRoom(roomId) {
+  return rooms.get(roomId);
+}
 
-  room.deadline = Date.now() + TURN_TIME_LIMIT * 1000;
+function getTimerKey(roomId, clientId) {
+  return `${roomId}:${clientId}`;
+}
 
-  roomTimers[roomId] = setTimeout(() => {
-    // 時間切れ時：未選択のプレイヤーのカードをランダムに選択
-    room.players.forEach(p => {
-      if (!room.selections[p.id] && p.hand.length > 0) {
-        const randomIdx = Math.floor(Math.random() * p.hand.length);
-        room.selections[p.id] = p.hand[randomIdx].id;
+function clearTurnTimer(roomId) {
+  const timer = roomTimers.get(roomId);
+  if (timer) clearTimeout(timer);
+  roomTimers.delete(roomId);
+}
+
+function clearDisconnectTimer(roomId, clientId) {
+  const key = getTimerKey(roomId, clientId);
+  const timer = disconnectTimers.get(key);
+  if (timer) clearTimeout(timer);
+  disconnectTimers.delete(key);
+}
+
+function resetGame(room) {
+  clearTurnTimer(room.id);
+  room.round = 1;
+  room.stack = [];
+  room.history = [];
+  room.lastRound = null;
+  room.selections = {};
+  room.deadline = 0;
+  room.pausedRemainingMs = TURN_TIME_LIMIT_MS;
+  room.winner = null;
+  room.players.forEach((player) => {
+    player.hand = createInitialHand();
+    player.score = 0;
+  });
+}
+
+function startNewGame(room) {
+  resetGame(room);
+  room.needsFreshGame = false;
+  if (room.players.length === 2 && room.players.every((player) => player.connected)) {
+    room.gameState = 'playing';
+    startTurnTimer(room);
+  } else {
+    room.gameState = 'waiting';
+  }
+}
+
+function startTurnTimer(room, durationMs = TURN_TIME_LIMIT_MS) {
+  clearTurnTimer(room.id);
+  if (room.gameState !== 'playing' || room.players.length !== 2 || !room.players.every((player) => player.connected)) return;
+
+  const safeDuration = Math.max(0, Math.min(durationMs, TURN_TIME_LIMIT_MS));
+  room.deadline = Date.now() + safeDuration;
+  room.pausedRemainingMs = safeDuration;
+
+  roomTimers.set(room.id, setTimeout(() => {
+    const latestRoom = getRoom(room.id);
+    if (!latestRoom || latestRoom.gameState !== 'playing') return;
+
+    latestRoom.players.forEach((player) => {
+      if (!latestRoom.selections[player.id] && player.hand.length > 0) {
+        const index = Math.floor(Math.random() * player.hand.length);
+        latestRoom.selections[player.id] = player.hand[index].id;
       }
     });
-    processTurn(roomId);
-  }, TURN_TIME_LIMIT * 1000);
+    processTurn(latestRoom);
+  }, safeDuration));
 }
 
-// ターンの判定処理
-function processTurn(roomId) {
-  if (roomTimers[roomId]) clearTimeout(roomTimers[roomId]);
+function pauseForReconnect(room) {
+  if (room.gameState !== 'playing') return;
+  room.pausedRemainingMs = Math.max(0, room.deadline - Date.now());
+  room.deadline = 0;
+  room.gameState = 'reconnecting';
+  clearTurnTimer(room.id);
+}
 
-  const room = rooms[roomId];
-  if (!room) return;
+function createRoomView(room, socketId) {
+  const player = room.players.find((candidate) => candidate.id === socketId);
+  const isSpectator = !player;
 
-  const p1 = room.players[0];
-  const p2 = room.players[1];
+  return {
+    id: room.id,
+    players: room.players.map(({ id, name, suit, hand, score, connected }) => ({
+      id,
+      name,
+      suit,
+      hand,
+      score,
+      connected
+    })),
+    spectatorCount: room.spectators.length,
+    round: room.round,
+    stack: room.stack,
+    history: room.history,
+    lastRound: room.lastRound,
+    gameState: room.gameState,
+    deadline: room.deadline,
+    winner: room.winner,
+    viewer: {
+      isSpectator,
+      hasConfirmedSelection: Boolean(player && room.selections[player.id])
+    }
+  };
+}
 
-  const c1Id = room.selections[p1.id];
-  const c2Id = room.selections[p2.id];
+function broadcastRoom(room) {
+  const members = io.sockets.adapter.rooms.get(room.id);
+  if (!members) return;
+  members.forEach((socketId) => {
+    const member = io.sockets.sockets.get(socketId);
+    if (member) member.emit('room_updated', createRoomView(room, socketId));
+  });
+}
 
-  const c1Index = p1.hand.findIndex(c => c.id === c1Id);
-  const c2Index = p2.hand.findIndex(c => c.id === c2Id);
+function emitError(socket, message) {
+  socket.emit('room_error', { message });
+}
 
-  const [c1] = p1.hand.splice(c1Index, 1);
-  const [c2] = p2.hand.splice(c2Index, 1);
+function processTurn(room) {
+  clearTurnTimer(room.id);
+  if (room.gameState !== 'playing' || room.players.length !== 2) return;
 
-  const result = resolveRound(c1, c2);
-  const totalCards = 2 + room.stack.length;
+  const [firstPlayer, secondPlayer] = room.players;
+  const firstCardId = room.selections[firstPlayer.id];
+  const secondCardId = room.selections[secondPlayer.id];
+  const firstIndex = firstPlayer.hand.findIndex((card) => card.id === firstCardId);
+  const secondIndex = secondPlayer.hand.findIndex((card) => card.id === secondCardId);
 
-  let roundWinner = null;
+  // サーバー側でカードを再検証する。状態が壊れても別のカードを消費しない。
+  if (firstIndex < 0 || secondIndex < 0) {
+    room.selections = {};
+    startTurnTimer(room, TURN_TIME_LIMIT_MS);
+    broadcastRoom(room);
+    return;
+  }
+
+  const [firstCard] = firstPlayer.hand.splice(firstIndex, 1);
+  const [secondCard] = secondPlayer.hand.splice(secondIndex, 1);
+  const result = resolveRound(firstCard, secondCard);
+  const awardedCards = 2 + room.stack.length;
+
+  let roundWinner = 'Draw';
   if (result === 'p1') {
-    p1.score += totalCards;
-    roundWinner = p1.name;
+    firstPlayer.score += awardedCards;
+    roundWinner = firstPlayer.name;
     room.stack = [];
   } else if (result === 'p2') {
-    p2.score += totalCards;
-    roundWinner = p2.name;
+    secondPlayer.score += awardedCards;
+    roundWinner = secondPlayer.name;
     room.stack = [];
   } else {
-    room.stack.push(c1, c2);
-    roundWinner = 'Draw';
+    room.stack.push(firstCard, secondCard);
   }
 
-  room.history.push({
+  const resultRecord = {
+    id: `${room.round}-${Date.now()}`,
     round: room.round,
-    p1Card: c1,
-    p2Card: c2,
-    winner: roundWinner
-  });
-
+    p1Card: firstCard,
+    p2Card: secondCard,
+    winner: roundWinner,
+    awardedCards: result === 'draw' ? 0 : awardedCards
+  };
+  room.history.push(resultRecord);
+  room.lastRound = resultRecord;
   room.selections = {};
+  room.deadline = 0;
 
-  if (p1.score > 8 || p2.score > 8 || room.round >= 7) {
+  if (firstPlayer.score > 8 || secondPlayer.score > 8 || room.round >= 7) {
     room.gameState = 'finished';
-    let winnerName = '引き分け';
-    if (p1.score > p2.score) winnerName = p1.name;
-    else if (p2.score > p1.score) winnerName = p2.name;
-    room.winner = winnerName;
+    room.winner = firstPlayer.score === secondPlayer.score
+      ? '引き分け'
+      : firstPlayer.score > secondPlayer.score ? firstPlayer.name : secondPlayer.name;
   } else {
     room.round += 1;
-    startTurnTimer(roomId);
+    startTurnTimer(room);
   }
 
-  io.to(roomId).emit('room_updated', room);
+  broadcastRoom(room);
+}
+
+function removePlayerAfterGrace(roomId, clientId) {
+  const room = getRoom(roomId);
+  if (!room) return;
+  const playerIndex = room.players.findIndex((player) => player.clientId === clientId && !player.connected);
+  if (playerIndex < 0) return;
+
+  room.players.splice(playerIndex, 1);
+  room.needsFreshGame = true;
+  resetGame(room);
+  room.gameState = 'waiting';
+
+  // 空いた席にすでに観戦者がいれば、先着順で次の対戦者にする。
+  // 中断された対局の手札・得点は resetGame で必ず初期化済み。
+  while (room.players.length < 2 && room.spectators.length > 0) {
+    const spectator = room.spectators.shift();
+    const spectatorSocket = io.sockets.sockets.get(spectator.id);
+    if (!spectatorSocket) continue;
+    room.players.push({
+      id: spectator.id,
+      clientId: spectator.clientId,
+      name: spectator.name,
+      suit: room.players.length === 0 ? '♠' : '♥',
+      hand: createInitialHand(),
+      score: 0,
+      connected: true
+    });
+  }
+
+  if (room.players.length === 0) {
+    rooms.delete(roomId);
+    return;
+  }
+  if (room.players.length === 2) startNewGame(room);
+  broadcastRoom(room);
+}
+
+function scheduleDisconnectRemoval(room, player) {
+  clearDisconnectTimer(room.id, player.clientId);
+  const key = getTimerKey(room.id, player.clientId);
+  disconnectTimers.set(key, setTimeout(() => {
+    disconnectTimers.delete(key);
+    removePlayerAfterGrace(room.id, player.clientId);
+  }, RECONNECT_GRACE_MS));
 }
 
 io.on('connection', (socket) => {
-  socket.on('join_room', ({ roomId, playerName }) => {
+  socket.on('join_room', (payload = {}) => {
+    const roomId = normalizeText(payload.roomId, MAX_ROOM_ID_LENGTH);
+    const playerName = normalizeText(payload.playerName, MAX_PLAYER_NAME_LENGTH, 'Player');
+    const clientId = normalizeText(payload.clientId, 80);
+
+    if (!roomId || !clientId) {
+      emitError(socket, '部屋キーを確認してから、もう一度入室してください。');
+      return;
+    }
+
     socket.join(roomId);
-
-    if (!rooms[roomId]) {
-      rooms[roomId] = {
-        id: roomId,
-        players: [],
-        spectators: [],
-        round: 1,
-        stack: [],
-        history: [],
-        gameState: 'waiting',
-        selections: {},
-        deadline: 0
-      };
+    let room = getRoom(roomId);
+    if (!room) {
+      room = createRoom(roomId);
+      rooms.set(roomId, room);
     }
 
-    const room = rooms[roomId];
-    const existingPlayer = room.players.find(p => p.id === socket.id);
-    if (!existingPlayer) {
-      if (room.players.length < 2) {
-        const suit = room.players.length === 0 ? '♠' : '♥';
-        room.players.push({
-          id: socket.id,
-          name: playerName,
-          suit: suit,
-          hand: JSON.parse(JSON.stringify(INITIAL_HAND)),
-          score: 0
-        });
-
-        if (room.players.length === 2) {
-          room.gameState = 'playing';
-          startTurnTimer(roomId);
-        }
-      } else {
-        room.spectators.push({ id: socket.id, name: playerName });
+    const returningPlayer = room.players.find((player) => player.clientId === clientId);
+    if (returningPlayer) {
+      const previousSocketId = returningPlayer.id;
+      clearDisconnectTimer(room.id, clientId);
+      returningPlayer.id = socket.id;
+      returningPlayer.name = playerName;
+      returningPlayer.connected = true;
+      if (room.selections[previousSocketId]) {
+        room.selections[socket.id] = room.selections[previousSocketId];
+        delete room.selections[previousSocketId];
       }
+      const previousSocket = io.sockets.sockets.get(previousSocketId);
+      if (previousSocket && previousSocketId !== socket.id) previousSocket.disconnect(true);
+
+      if (room.gameState === 'reconnecting' && room.players.every((player) => player.connected)) {
+        room.gameState = 'playing';
+        startTurnTimer(room, room.pausedRemainingMs);
+      }
+    } else if (room.players.length < 2) {
+      room.players.push({
+        id: socket.id,
+        clientId,
+        name: playerName,
+        suit: room.players.length === 0 ? '♠' : '♥',
+        hand: createInitialHand(),
+        score: 0,
+        connected: true
+      });
+
+      if (room.players.length === 2) startNewGame(room);
+    } else if (!room.spectators.some((spectator) => spectator.id === socket.id)) {
+      room.spectators.push({ id: socket.id, clientId, name: playerName });
     }
 
-    io.to(roomId).emit('room_updated', room);
+    broadcastRoom(room);
   });
 
-  socket.on('confirm_card', ({ roomId, cardId }) => {
-    const room = rooms[roomId];
+  socket.on('confirm_card', (payload = {}) => {
+    const room = getRoom(payload.roomId);
     if (!room || room.gameState !== 'playing') return;
 
-    const playerIndex = room.players.findIndex(p => p.id === socket.id);
-    if (playerIndex === -1) return;
-
-    const player = room.players[playerIndex];
-    if (!cardId && player.hand.length > 0) {
-      const randomIdx = Math.floor(Math.random() * player.hand.length);
-      cardId = player.hand[randomIdx].id;
+    const player = room.players.find((candidate) => candidate.id === socket.id);
+    if (!player || !player.connected || room.selections[player.id]) return;
+    if (typeof payload.cardId !== 'string' || !player.hand.some((card) => card.id === payload.cardId)) {
+      emitError(socket, 'そのカードは選択できません。もう一度選んでください。');
+      return;
     }
 
-    room.selections[socket.id] = cardId;
-
-    if (Object.keys(room.selections).length === 2) {
-      processTurn(roomId);
+    room.selections[player.id] = payload.cardId;
+    if (room.players.every((candidate) => room.selections[candidate.id])) {
+      processTurn(room);
     } else {
-      io.to(roomId).emit('room_updated', room);
+      broadcastRoom(room);
     }
   });
 
-  socket.on('restart_game', ({ roomId }) => {
-    const room = rooms[roomId];
-    if (!room) return;
-
-    room.round = 1;
-    room.stack = [];
-    room.history = [];
-    room.selections = {};
-    delete room.winner;
-
-    room.players.forEach(p => {
-      p.hand = JSON.parse(JSON.stringify(INITIAL_HAND));
-      p.score = 0;
-    });
-
-    if (room.players.length === 2) {
-      room.gameState = 'playing';
-      startTurnTimer(roomId);
-    } else {
-      room.gameState = 'waiting';
-    }
-
-    io.to(roomId).emit('room_updated', room);
+  socket.on('restart_game', (payload = {}) => {
+    const room = getRoom(payload.roomId);
+    if (!room || room.gameState !== 'finished') return;
+    if (!room.players.some((player) => player.id === socket.id)) return;
+    if (!room.players.every((player) => player.connected)) return;
+    startNewGame(room);
+    broadcastRoom(room);
   });
 
   socket.on('disconnect', () => {
-    for (const roomId in rooms) {
-      const room = rooms[roomId];
-      const pIndex = room.players.findIndex(p => p.id === socket.id);
-      if (pIndex !== -1) {
-        room.players.splice(pIndex, 1);
-        room.gameState = 'waiting';
-        if (roomTimers[roomId]) clearTimeout(roomTimers[roomId]);
-        io.to(roomId).emit('room_updated', room);
-        break;
+    for (const room of rooms.values()) {
+      const player = room.players.find((candidate) => candidate.id === socket.id);
+      if (player) {
+        player.connected = false;
+        pauseForReconnect(room);
+        scheduleDisconnectRemoval(room, player);
+        broadcastRoom(room);
+        return;
+      }
+
+      const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
+      if (spectatorIndex >= 0) {
+        room.spectators.splice(spectatorIndex, 1);
+        broadcastRoom(room);
+        return;
       }
     }
   });
 });
 
-server.listen(3000, () => console.log('Server 起動中: http://localhost:3000'));
+const port = Number(process.env.PORT) || 3000;
+server.listen(port, () => console.log(`Server listening on http://localhost:${port}`));
