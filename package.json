@@ -4,7 +4,7 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "node --test game-rules.test.js",
+    "test": "node --test",
     "start": "node server.js"
   },
   "keywords": [],

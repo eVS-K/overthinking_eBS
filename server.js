@@ -3,21 +3,128 @@ const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
 const { createInitialHand, resolveRound } = require('./game-rules');
+const { createFixedWindowLimiter, getClientIp, readPositiveInteger } = require('./security');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: true, methods: ['GET', 'POST'] }
-});
 
 const TURN_TIME_LIMIT_MS = 90_000;
 const RECONNECT_GRACE_MS = 30_000;
 const MAX_ROOM_ID_LENGTH = 24;
 const MAX_PLAYER_NAME_LENGTH = 20;
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://evs-k.github.io',
+  'https://overthinking-ebs.onrender.com',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
+];
+
+const MAX_ACTIVE_ROOMS = readPositiveInteger(process.env.MAX_ACTIVE_ROOMS, 300, { max: 5_000 });
+const MAX_SPECTATORS_PER_ROOM = readPositiveInteger(process.env.MAX_SPECTATORS_PER_ROOM, 40, { max: 500 });
+const MAX_SOCKETS_PER_IP = readPositiveInteger(process.env.MAX_SOCKETS_PER_IP, 32, { max: 500 });
+const MAX_HTTP_CONNECTIONS = readPositiveInteger(process.env.MAX_HTTP_CONNECTIONS, 800, { max: 10_000 });
+const RATE_LIMIT_TRACKED_IPS = readPositiveInteger(process.env.RATE_LIMIT_TRACKED_IPS, 5_000, { max: 50_000 });
+const SOCKET_EVENT_LIMIT = readPositiveInteger(process.env.SOCKET_EVENT_LIMIT, 24, { max: 1_000 });
+const SOCKET_EVENT_WINDOW_MS = 10_000;
+const ALLOW_ORIGINLESS_SOCKET_CONNECTIONS = process.env.ALLOW_ORIGINLESS_SOCKET_CONNECTIONS === 'true'
+  && process.env.NODE_ENV !== 'production';
+
+function normalizeOrigin(value) {
+  if (typeof value !== 'string') return '';
+  try {
+    return new URL(value.trim()).origin;
+  } catch {
+    return '';
+  }
+}
+
+const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(','))
+  .split(',')
+  .map(normalizeOrigin)
+  .filter(Boolean));
+
+function isAllowedOrigin(origin) {
+  if (!origin) return ALLOW_ORIGINLESS_SOCKET_CONNECTIONS;
+  return allowedOrigins.has(normalizeOrigin(origin));
+}
 
 const rooms = new Map();
 const roomTimers = new Map();
 const disconnectTimers = new Map();
+const activeSocketsByIp = new Map();
+const httpRequestLimiter = createFixedWindowLimiter({
+  limit: 240,
+  windowMs: 60_000,
+  maxEntries: RATE_LIMIT_TRACKED_IPS
+});
+const handshakeLimiter = createFixedWindowLimiter({
+  limit: 40,
+  windowMs: 60_000,
+  maxEntries: RATE_LIMIT_TRACKED_IPS
+});
+const roomCreationLimiter = createFixedWindowLimiter({
+  limit: 10,
+  windowMs: 10 * 60_000,
+  maxEntries: RATE_LIMIT_TRACKED_IPS
+});
+
+const limiterCleanupTimer = setInterval(() => {
+  httpRequestLimiter.prune();
+  handshakeLimiter.prune();
+  roomCreationLimiter.prune();
+}, 60_000);
+limiterCleanupTimer.unref();
+
+function activeSocketCount(ip) {
+  return activeSocketsByIp.get(ip) || 0;
+}
+
+function trackSocket(ip) {
+  activeSocketsByIp.set(ip, activeSocketCount(ip) + 1);
+}
+
+function untrackSocket(ip) {
+  const nextCount = activeSocketCount(ip) - 1;
+  if (nextCount > 0) activeSocketsByIp.set(ip, nextCount);
+  else activeSocketsByIp.delete(ip);
+}
+
+function allowSocketRequest(request, callback) {
+  const origin = request.headers.origin;
+  const ip = getClientIp(request);
+  if (!isAllowedOrigin(origin)) return callback('Origin is not allowed', false);
+  if (!handshakeLimiter.consume(ip)) return callback('Too many connection attempts', false);
+  if (activeSocketCount(ip) >= MAX_SOCKETS_PER_IP) return callback('Too many active connections', false);
+  return callback(null, true);
+}
+
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
+    methods: ['GET', 'POST'],
+    credentials: false
+  },
+  allowRequest: allowSocketRequest,
+  maxHttpBufferSize: 16 * 1024,
+  httpCompression: false,
+  perMessageDeflate: false
+});
+
+server.maxConnections = MAX_HTTP_CONNECTIONS;
+server.headersTimeout = 15_000;
+server.requestTimeout = 20_000;
+server.keepAliveTimeout = 5_000;
+
+app.disable('x-powered-by');
+app.use((request, response, next) => {
+  if (!httpRequestLimiter.consume(getClientIp(request))) {
+    response.setHeader('Retry-After', '60');
+    response.status(429).type('text').send('Too Many Requests');
+    return;
+  }
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  next();
+});
 
 app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'index.html')));
 app.get(['/index.html', '/main.js', '/style.css'], (request, response) => {
@@ -169,6 +276,25 @@ function emitError(socket, message) {
   socket.emit('room_error', { message });
 }
 
+function getBoundRoom(socket, suppliedRoomId) {
+  const roomId = normalizeText(suppliedRoomId, MAX_ROOM_ID_LENGTH);
+  if (!roomId || socket.data.roomId !== roomId) return null;
+  return getRoom(roomId);
+}
+
+function consumeSocketEvent(socket) {
+  const now = Date.now();
+  const state = socket.data.eventRate || { count: 0, resetAt: now + SOCKET_EVENT_WINDOW_MS };
+  if (state.resetAt <= now) {
+    state.count = 0;
+    state.resetAt = now + SOCKET_EVENT_WINDOW_MS;
+  }
+  if (state.count >= SOCKET_EVENT_LIMIT) return false;
+  state.count += 1;
+  socket.data.eventRate = state;
+  return true;
+}
+
 function processTurn(room) {
   clearTurnTimer(room.id);
   if (room.gameState !== 'playing' || room.players.length !== 2) return;
@@ -281,6 +407,23 @@ function scheduleDisconnectRemoval(room, player) {
 }
 
 io.on('connection', (socket) => {
+  const clientIp = getClientIp(socket.handshake);
+  if (activeSocketCount(clientIp) >= MAX_SOCKETS_PER_IP) {
+    socket.disconnect(true);
+    return;
+  }
+
+  trackSocket(clientIp);
+  socket.data.clientIp = clientIp;
+  socket.use((_event, next) => {
+    if (consumeSocketEvent(socket)) {
+      next();
+      return;
+    }
+    emitError(socket, '短時間に多くの操作が送信されました。少し待ってから再接続してください。');
+    socket.disconnect(true);
+  });
+
   socket.on('join_room', (payload = {}) => {
     const roomId = normalizeText(payload.roomId, MAX_ROOM_ID_LENGTH);
     const playerName = normalizeText(payload.playerName, MAX_PLAYER_NAME_LENGTH, 'Player');
@@ -291,14 +434,40 @@ io.on('connection', (socket) => {
       return;
     }
 
-    socket.join(roomId);
+    if (socket.data.roomId) {
+      const currentRoom = getRoom(socket.data.roomId);
+      if (socket.data.roomId === roomId && currentRoom) {
+        socket.emit('room_updated', createRoomView(currentRoom, socket.id));
+        return;
+      }
+      emitError(socket, '一度に参加できる部屋は一つです。ホームへ戻ってから別の部屋に入室してください。');
+      return;
+    }
+
     let room = getRoom(roomId);
     if (!room) {
+      if (rooms.size >= MAX_ACTIVE_ROOMS) {
+        emitError(socket, '現在、多くの部屋が使用中です。少し待ってから入室してください。');
+        return;
+      }
+      if (!roomCreationLimiter.consume(socket.data.clientIp)) {
+        emitError(socket, '部屋の作成回数が上限に達しました。時間をおいて再試行してください。');
+        return;
+      }
       room = createRoom(roomId);
       rooms.set(roomId, room);
     }
 
     const returningPlayer = room.players.find((player) => player.clientId === clientId);
+    const returningSpectator = room.spectators.find((spectator) => spectator.clientId === clientId);
+    if (!returningPlayer && !returningSpectator && room.players.length >= 2 && room.spectators.length >= MAX_SPECTATORS_PER_ROOM) {
+      emitError(socket, 'この部屋の観戦者数は上限に達しています。');
+      return;
+    }
+
+    socket.join(room.id);
+    socket.data.roomId = room.id;
+
     if (returningPlayer) {
       const previousSocketId = returningPlayer.id;
       clearDisconnectTimer(room.id, clientId);
@@ -316,6 +485,12 @@ io.on('connection', (socket) => {
         room.gameState = 'playing';
         startTurnTimer(room, room.pausedRemainingMs);
       }
+    } else if (returningSpectator) {
+      const previousSocketId = returningSpectator.id;
+      returningSpectator.id = socket.id;
+      returningSpectator.name = playerName;
+      const previousSocket = io.sockets.sockets.get(previousSocketId);
+      if (previousSocket && previousSocketId !== socket.id) previousSocket.disconnect(true);
     } else if (room.players.length < 2) {
       room.players.push({
         id: socket.id,
@@ -328,7 +503,7 @@ io.on('connection', (socket) => {
       });
 
       if (room.players.length === 2) startNewGame(room);
-    } else if (!room.spectators.some((spectator) => spectator.id === socket.id)) {
+    } else {
       room.spectators.push({ id: socket.id, clientId, name: playerName });
     }
 
@@ -336,17 +511,18 @@ io.on('connection', (socket) => {
   });
 
   socket.on('confirm_card', (payload = {}) => {
-    const room = getRoom(payload.roomId);
+    const room = getBoundRoom(socket, payload.roomId);
     if (!room || room.gameState !== 'playing') return;
 
     const player = room.players.find((candidate) => candidate.id === socket.id);
     if (!player || !player.connected || room.selections[player.id]) return;
-    if (typeof payload.cardId !== 'string' || !player.hand.some((card) => card.id === payload.cardId)) {
+    const cardId = normalizeText(payload.cardId, 40);
+    if (!cardId || !player.hand.some((card) => card.id === cardId)) {
       emitError(socket, 'そのカードは選択できません。もう一度選んでください。');
       return;
     }
 
-    room.selections[player.id] = payload.cardId;
+    room.selections[player.id] = cardId;
     if (room.players.every((candidate) => room.selections[candidate.id])) {
       processTurn(room);
     } else {
@@ -355,7 +531,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('restart_game', (payload = {}) => {
-    const room = getRoom(payload.roomId);
+    const room = getBoundRoom(socket, payload.roomId);
     if (!room || room.gameState !== 'finished') return;
     if (!room.players.some((player) => player.id === socket.id)) return;
     if (!room.players.every((player) => player.connected)) return;
@@ -364,9 +540,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('leave_room', (payload = {}) => {
-    const room = getRoom(payload.roomId);
+    const room = getBoundRoom(socket, payload.roomId);
     if (!room) return;
     socket.leave(room.id);
+    socket.data.roomId = undefined;
 
     const playerIndex = room.players.findIndex((player) => player.id === socket.id);
     if (playerIndex >= 0) {
@@ -383,22 +560,23 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    for (const room of rooms.values()) {
-      const player = room.players.find((candidate) => candidate.id === socket.id);
-      if (player) {
-        player.connected = false;
-        pauseForReconnect(room);
-        scheduleDisconnectRemoval(room, player);
-        broadcastRoom(room);
-        return;
-      }
+    untrackSocket(socket.data.clientIp);
+    const room = getRoom(socket.data.roomId);
+    if (!room) return;
 
-      const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
-      if (spectatorIndex >= 0) {
-        room.spectators.splice(spectatorIndex, 1);
-        broadcastRoom(room);
-        return;
-      }
+    const player = room.players.find((candidate) => candidate.id === socket.id);
+    if (player) {
+      player.connected = false;
+      pauseForReconnect(room);
+      scheduleDisconnectRemoval(room, player);
+      broadcastRoom(room);
+      return;
+    }
+
+    const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
+    if (spectatorIndex >= 0) {
+      room.spectators.splice(spectatorIndex, 1);
+      broadcastRoom(room);
     }
   });
 });
