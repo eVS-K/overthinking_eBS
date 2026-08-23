@@ -53,6 +53,7 @@
             <article><strong>03</strong><span>Joker は相手の強さをコピー</span></article>
             <article><strong>04</strong><span>引き分けたカードは次の勝負へ持ち越し</span></article>
           </div>
+          <p class="strategy-note"><strong>POINT</strong><span>これは単なる運任せのゲームではありません。残り札・スタック・相手の選択から局面を読み、より有効な一手を選ぶことが勝利への鍵です。</span></p>
           <p class="rule-note">カードの強さ：Two ＜ Three ＜ … ＜ King ＜ Ace</p>
         </section>
       </section>
@@ -63,7 +64,10 @@
         <header class="game-header">
           <a class="game-brand" href="./" aria-label="OVERTHINKING のトップへ">OVER<span>THINKING</span></a>
           <div class="room-chip"><span>ROOM</span><strong id="display-room-id">—</strong></div>
-          <div id="connection-state" class="connection-state"><i></i><span>接続中</span></div>
+          <div class="header-actions">
+            <button id="homeBtn" class="home-button hidden" type="button"><span aria-hidden="true">⌂</span> ホームへ戻る</button>
+            <div id="connection-state" class="connection-state"><i></i><span>接続中</span></div>
+          </div>
         </header>
 
         <section class="player-zone opponent-zone" aria-label="対戦相手の手札">
@@ -117,11 +121,11 @@
     <div class="modal-content">
       <button id="close-credit-btn" class="modal-close" type="button" aria-label="閉じる">×</button>
       <img src="images/demo.png" alt="Overthinking demo版の紹介画像" class="main-image">
-      <p class="section-label">ABOUT THIS DEMO</p>
-      <h2 id="credit-title">Overthinking demo版</h2>
-      <p>私がおすすめするものは<strong>心理戦</strong>です。</p>
-      <p>トランプ14枚程度でもできる手軽さと、同じ相手と繰り返すほど熱くなる読み合いを楽しめます。</p>
-      <a href="https://boku-boardgame.net/psychological-game" target="_blank" rel="noopener noreferrer">心理戦ゲームのおすすめ26選 <span aria-hidden="true">↗</span></a>
+      <p class="section-label">CREDITS</p>
+      <h2 id="credit-title">OVERTHINKING eBS</h2>
+      <p>本作は <strong>dub-227</strong> さんが開発したカードゲーム
+        <a class="inline-link" href="https://github.com/dub-227/overthinking_demo" target="_blank" rel="noopener noreferrer">overthinking_demo</a> を基に、eVS-K が編集・再構成したバージョンです。</p>
+      <p>原作のゲームルールを受け継ぎながら、対戦体験と画面表現を磨いています。</p>
     </div>
   </div>
 </body>

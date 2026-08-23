@@ -16,6 +16,7 @@ const savedSession = getSavedSession();
 let currentRoomId = savedSession?.roomId || '';
 let myPlayerName = savedSession?.playerName || '';
 let mySelectedCardId = null;
+let committedCardId = null;
 let joinedRoom = Boolean(savedSession);
 let currentRoom = null;
 let timerInterval = null;
@@ -31,6 +32,7 @@ const elements = {
   joinButton: document.getElementById('joinBtn'),
   loginMessage: document.getElementById('login-message'),
   roomId: document.getElementById('display-room-id'),
+  homeButton: document.getElementById('homeBtn'),
   connectionState: document.getElementById('connection-state'),
   round: document.getElementById('current-round'),
   timer: document.getElementById('timer-count'),
@@ -116,6 +118,11 @@ function showGameScreen() {
   elements.gameScreen.classList.remove('hidden');
 }
 
+function showLoginScreen() {
+  elements.gameScreen.classList.add('hidden');
+  elements.loginScreen.classList.remove('hidden');
+}
+
 function emitJoinRequest() {
   if (!socket || !socket.connected || !joinedRoom || !currentRoomId) return;
   socket.emit('join_room', {
@@ -148,7 +155,8 @@ function renderTimer(room) {
 function createCard(card, suitType, isInteractive) {
   const cardElement = document.createElement('div');
   const isSelected = card.id === mySelectedCardId;
-  cardElement.className = `card card-${suitType}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}`;
+  const isCommitting = card.id === committedCardId;
+  cardElement.className = `card card-${suitType}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.setAttribute('aria-label', `${card.name}、${card.desc}${isSelected ? '、選択中' : ''}`);
 
   if (isInteractive) {
@@ -156,6 +164,7 @@ function createCard(card, suitType, isInteractive) {
     cardElement.tabIndex = 0;
     const selectCard = () => {
       mySelectedCardId = mySelectedCardId === card.id ? null : card.id;
+      committedCardId = null;
       renderHand(elements.myHand, currentRoom?.players.find((player) => player.id === socket?.id)?.hand || [], 'spade', true);
       updateConfirmButton();
     };
@@ -200,8 +209,20 @@ function updateScore(element, player) {
   if (previousScore !== undefined && previousScore !== player.score) {
     element.classList.remove('score-pop');
     window.requestAnimationFrame(() => element.classList.add('score-pop'));
+    const gainedCards = player.score - previousScore;
+    if (gainedCards > 0) showScoreAward(element, gainedCards);
   }
   previousScores.set(player.id, player.score);
+}
+
+function showScoreAward(scoreElement, gainedCards) {
+  const scoreBox = scoreElement.closest('.score-box');
+  if (!scoreBox) return;
+  const award = document.createElement('span');
+  award.className = 'score-award';
+  award.textContent = `+${gainedCards} CARDS`;
+  scoreBox.append(award);
+  window.setTimeout(() => award.remove(), 1_150);
 }
 
 function renderReveal(lastRound) {
@@ -216,11 +237,40 @@ function renderReveal(lastRound) {
 
   const isNewRound = lastRound.id !== lastRoundId;
   lastRoundId = lastRound.id;
-  elements.revealArea.className = `reveal-area${isNewRound ? ' reveal-new' : ''}`;
+  const isDraw = lastRound.winner === 'Draw';
+  const me = currentRoom?.players.find((player) => player.id === socket?.id);
+  const firstPlayer = currentRoom?.players[0];
+  const isMyWin = Boolean(me && !isDraw && lastRound.winner === me.name);
+  const outcomeClass = isDraw ? 'draw' : isMyWin ? 'win' : me ? 'loss' : 'win';
+  elements.revealArea.className = `reveal-area outcome-${outcomeClass}${isNewRound ? ' reveal-new' : ''}`;
 
   const result = document.createElement('div');
   result.className = 'reveal-result';
-  const first = createRevealCard(lastRound.p1Card, 'YOU');
+  const outcome = document.createElement('div');
+  outcome.className = 'round-outcome';
+  const outcomeLabel = document.createElement('span');
+  outcomeLabel.textContent = `ROUND ${lastRound.round} RESULT`;
+  const outcomeTitle = document.createElement('strong');
+  outcomeTitle.textContent = isDraw
+    ? 'DRAW'
+    : me ? (isMyWin ? 'YOU WIN' : 'OPPONENT WINS') : `${lastRound.winner} WINS`;
+  const outcomeDetail = document.createElement('p');
+  if (isDraw) {
+    outcomeDetail.textContent = '引き分け — この2枚は次の勝負へ持ち越し';
+  } else {
+    const awardText = Number.isFinite(lastRound.awardedCards) ? `${lastRound.awardedCards}枚` : '場のカード';
+    outcomeDetail.textContent = `${lastRound.winner} が ${awardText} を獲得`;
+  }
+  outcome.append(outcomeLabel, outcomeTitle, outcomeDetail);
+
+  const firstOwner = currentRoom?.viewer?.isSpectator
+    ? 'PLAYER 1'
+    : firstPlayer?.id === socket?.id ? 'YOU' : 'OPPONENT';
+  const secondOwner = currentRoom?.viewer?.isSpectator
+    ? 'PLAYER 2'
+    : firstOwner === 'YOU' ? 'OPPONENT' : 'YOU';
+  const first = createRevealCard(lastRound.p1Card, firstOwner);
+  first.classList.add('left');
   const versus = document.createElement('div');
   versus.className = 'reveal-versus';
   const versusMark = document.createElement('b');
@@ -229,11 +279,11 @@ function renderReveal(lastRound) {
   const awardText = Number.isFinite(lastRound.awardedCards) ? ` · +${lastRound.awardedCards}` : '';
   winner.textContent = lastRound.winner === 'Draw'
     ? 'DRAW · STACK +2'
-    : `${lastRound.winner} WINS${awardText}`;
+    : `AWARD${awardText}`;
   versus.append(versusMark, winner);
-  const second = createRevealCard(lastRound.p2Card, 'OPPONENT');
+  const second = createRevealCard(lastRound.p2Card, secondOwner);
   second.classList.add('right');
-  result.append(first, versus, second);
+  result.append(outcome, first, versus, second);
   elements.revealArea.replaceChildren(result);
 
   if (isNewRound) {
@@ -339,6 +389,7 @@ function renderRoom(room) {
 
   if (me) {
     if (!me.hand.some((card) => card.id === mySelectedCardId)) mySelectedCardId = null;
+    if (!me.hand.some((card) => card.id === committedCardId)) committedCardId = null;
     setText(elements.myName, me.name);
     updateScore(elements.myScore, me);
     renderHand(elements.myHand, me.hand, 'spade', isInteractive);
@@ -365,6 +416,7 @@ function renderRoom(room) {
   elements.confirmButton.classList.toggle('hidden', roomView.gameState === 'finished' || roomView.viewer.isSpectator);
   elements.restartButton.classList.toggle('hidden', roomView.gameState !== 'finished' || roomView.viewer.isSpectator);
   elements.restartButton.disabled = Boolean(opponent && opponent.connected === false);
+  elements.homeButton.classList.toggle('hidden', !['waiting', 'finished'].includes(roomView.gameState));
 
   renderTimer(roomView);
   renderReveal(roomView.lastRound || roomView.history?.[roomView.history.length - 1]);
@@ -410,12 +462,41 @@ elements.joinForm.addEventListener('submit', (event) => {
 
 elements.confirmButton.addEventListener('click', () => {
   if (!socket || !currentRoomId || !mySelectedCardId || !currentRoom) return;
+  committedCardId = mySelectedCardId;
+  elements.myHand.querySelector('.selected')?.classList.add('committing');
   socket.emit('confirm_card', { roomId: currentRoomId, cardId: mySelectedCardId });
   elements.confirmButton.disabled = true;
+  window.setTimeout(() => {
+    if (committedCardId !== mySelectedCardId) return;
+    committedCardId = null;
+    const me = currentRoom?.players.find((player) => player.id === socket?.id);
+    const canChoose = Boolean(me && currentRoom?.gameState === 'playing' && !currentRoom.viewer.hasConfirmedSelection);
+    if (me) renderHand(elements.myHand, me.hand, 'spade', canChoose);
+  }, 620);
 });
 
 elements.restartButton.addEventListener('click', () => {
   if (socket && currentRoomId) socket.emit('restart_game', { roomId: currentRoomId });
+});
+
+elements.homeButton.addEventListener('click', () => {
+  const roomIdToLeave = currentRoomId;
+  if (socket?.connected && roomIdToLeave) socket.emit('leave_room', { roomId: roomIdToLeave });
+
+  joinedRoom = false;
+  currentRoomId = '';
+  mySelectedCardId = null;
+  committedCardId = null;
+  currentRoom = null;
+  lastRoundId = null;
+  previousScores.clear();
+  clearSavedSession();
+  resetTimer();
+  elements.homeButton.classList.add('hidden');
+  elements.joinButton.disabled = false;
+  setLoginMessage('');
+  showLoginScreen();
+  elements.roomIdInput.focus();
 });
 
 elements.creditButton.addEventListener('click', openCreditModal);

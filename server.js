@@ -231,12 +231,7 @@ function processTurn(room) {
   broadcastRoom(room);
 }
 
-function removePlayerAfterGrace(roomId, clientId) {
-  const room = getRoom(roomId);
-  if (!room) return;
-  const playerIndex = room.players.findIndex((player) => player.clientId === clientId && !player.connected);
-  if (playerIndex < 0) return;
-
+function resetAfterPlayerDeparture(room, playerIndex) {
   room.players.splice(playerIndex, 1);
   room.needsFreshGame = true;
   resetGame(room);
@@ -260,11 +255,20 @@ function removePlayerAfterGrace(roomId, clientId) {
   }
 
   if (room.players.length === 0) {
-    rooms.delete(roomId);
-    return;
+    rooms.delete(room.id);
+    return false;
   }
   if (room.players.length === 2) startNewGame(room);
   broadcastRoom(room);
+  return true;
+}
+
+function removePlayerAfterGrace(roomId, clientId) {
+  const room = getRoom(roomId);
+  if (!room) return;
+  const playerIndex = room.players.findIndex((player) => player.clientId === clientId && !player.connected);
+  if (playerIndex < 0) return;
+  resetAfterPlayerDeparture(room, playerIndex);
 }
 
 function scheduleDisconnectRemoval(room, player) {
@@ -357,6 +361,25 @@ io.on('connection', (socket) => {
     if (!room.players.every((player) => player.connected)) return;
     startNewGame(room);
     broadcastRoom(room);
+  });
+
+  socket.on('leave_room', (payload = {}) => {
+    const room = getRoom(payload.roomId);
+    if (!room) return;
+    socket.leave(room.id);
+
+    const playerIndex = room.players.findIndex((player) => player.id === socket.id);
+    if (playerIndex >= 0) {
+      const [player] = room.players.slice(playerIndex, playerIndex + 1);
+      clearDisconnectTimer(room.id, player.clientId);
+      resetAfterPlayerDeparture(room, playerIndex);
+    } else {
+      const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
+      if (spectatorIndex >= 0) {
+        room.spectators.splice(spectatorIndex, 1);
+        broadcastRoom(room);
+      }
+    }
   });
 
   socket.on('disconnect', () => {
