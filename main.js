@@ -2,6 +2,8 @@ const GAME_SERVER_URL = ['localhost', '127.0.0.1'].includes(window.location.host
   ? window.location.origin
   : 'https://overthinking-ebs.onrender.com';
 const TURN_TIME_LIMIT_MS = 90_000;
+const CHAT_MESSAGE_LIMIT = 50;
+const MAX_RENDERED_CHAT_MESSAGES = 100;
 
 const socket = window.io
   ? window.io(GAME_SERVER_URL, {
@@ -22,6 +24,13 @@ let currentRoom = null;
 let timerInterval = null;
 let lastRoundId = null;
 const previousScores = new Map();
+let chatMessages = [];
+let chatSentCount = 0;
+let chatLimit = CHAT_MESSAGE_LIMIT;
+let chatSending = false;
+let pendingChatText = '';
+let chatSendTimeout = null;
+let chatRequestId = 0;
 
 const elements = {
   loginScreen: document.getElementById('login-screen'),
@@ -51,6 +60,12 @@ const elements = {
   restartButton: document.getElementById('restartBtn'),
   history: document.getElementById('history-list'),
   spectatorCount: document.getElementById('spectator-count'),
+  chatList: document.getElementById('chat-list'),
+  chatForm: document.getElementById('chat-form'),
+  chatInput: document.getElementById('chat-input'),
+  chatSendButton: document.getElementById('chat-send-btn'),
+  chatCount: document.getElementById('chat-count'),
+  chatFeedback: document.getElementById('chat-feedback'),
   creditButton: document.getElementById('credit-btn'),
   creditModal: document.getElementById('credit-modal'),
   closeCreditButton: document.getElementById('close-credit-btn')
@@ -375,6 +390,112 @@ function renderHistory(history) {
   });
 }
 
+function countChatCharacters(value) {
+  return Array.from(value).length;
+}
+
+function normalizeChatInput(value) {
+  const oneLine = String(value || '').replace(/[\r\n\u0000-\u001F\u007F-\u009F]+/g, ' ');
+  return Array.from(oneLine).slice(0, CHAT_MESSAGE_LIMIT).join('');
+}
+
+function setChatFeedback(message = '') {
+  setText(elements.chatFeedback, message);
+}
+
+function updateChatControls() {
+  const message = elements.chatInput.value.trim();
+  const canUseChat = Boolean(socket?.connected && currentRoom && chatSentCount < chatLimit);
+  const canSend = canUseChat && !chatSending && Boolean(message) && countChatCharacters(message) <= CHAT_MESSAGE_LIMIT;
+  elements.chatInput.disabled = !canUseChat;
+  elements.chatSendButton.disabled = !canSend;
+  setText(elements.chatCount, `${Math.min(chatSentCount, chatLimit)} / ${chatLimit}`);
+}
+
+function normalizeIncomingChatMessage(value) {
+  if (!value || typeof value.id !== 'string' || typeof value.author !== 'string' || typeof value.text !== 'string') return null;
+  const author = Array.from(value.author.replace(/[\r\n\u0000-\u001F\u007F-\u009F]+/g, ' ').trim()).slice(0, 20).join('');
+  const text = Array.from(value.text.replace(/[\r\n\u0000-\u001F\u007F-\u009F]+/g, ' ').trim()).slice(0, CHAT_MESSAGE_LIMIT).join('');
+  if (!author || !text) return null;
+  return {
+    id: value.id.slice(0, 80),
+    author,
+    text,
+    sentAt: Number.isFinite(value.sentAt) ? value.sentAt : 0
+  };
+}
+
+function formatChatTime(sentAt) {
+  if (!sentAt) return '';
+  const date = new Date(sentAt);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderChatMessages() {
+  const shouldStickToBottom = elements.chatList.scrollHeight - elements.chatList.scrollTop - elements.chatList.clientHeight < 34;
+  elements.chatList.replaceChildren();
+  if (!chatMessages.length) {
+    const empty = document.createElement('p');
+    empty.className = 'chat-empty';
+    empty.textContent = '対戦相手にメッセージを送れます。';
+    elements.chatList.append(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  chatMessages.forEach((message) => {
+    const item = document.createElement('article');
+    item.className = 'chat-message';
+    const meta = document.createElement('div');
+    meta.className = 'chat-message-meta';
+    const author = document.createElement('strong');
+    author.textContent = message.author;
+    const time = document.createElement('time');
+    const formattedTime = formatChatTime(message.sentAt);
+    time.textContent = formattedTime;
+    if (formattedTime) time.dateTime = new Date(message.sentAt).toISOString();
+    meta.append(author, time);
+    const text = document.createElement('p');
+    text.textContent = message.text;
+    item.append(meta, text);
+    fragment.append(item);
+  });
+  elements.chatList.append(fragment);
+  if (shouldStickToBottom) elements.chatList.scrollTop = elements.chatList.scrollHeight;
+}
+
+function setChatMessages(messages) {
+  const seenIds = new Set();
+  chatMessages = (Array.isArray(messages) ? messages : [])
+    .map(normalizeIncomingChatMessage)
+    .filter((message) => message && !seenIds.has(message.id) && seenIds.add(message.id))
+    .slice(-MAX_RENDERED_CHAT_MESSAGES);
+  renderChatMessages();
+}
+
+function appendChatMessage(message) {
+  const safeMessage = normalizeIncomingChatMessage(message);
+  if (!safeMessage || chatMessages.some((item) => item.id === safeMessage.id)) return;
+  chatMessages = [...chatMessages, safeMessage].slice(-MAX_RENDERED_CHAT_MESSAGES);
+  renderChatMessages();
+}
+
+function resetChat() {
+  if (chatSendTimeout) window.clearTimeout(chatSendTimeout);
+  chatSendTimeout = null;
+  chatMessages = [];
+  chatSentCount = 0;
+  chatLimit = CHAT_MESSAGE_LIMIT;
+  chatSending = false;
+  pendingChatText = '';
+  chatRequestId += 1;
+  elements.chatInput.value = '';
+  setChatFeedback('送信は1参加セッションにつき50回までです。');
+  renderChatMessages();
+  updateChatControls();
+}
+
 function renderStatus(room, me, opponent) {
   if (!socket?.connected) {
     setText(elements.status, '接続が切れました。自動的に再接続しています…');
@@ -468,6 +589,7 @@ function renderRoom(room) {
   renderHistory(roomView.history);
   renderStatus(roomView, me, opponent);
   updateConfirmButton();
+  updateChatControls();
 }
 
 function openCreditModal() {
@@ -524,6 +646,65 @@ elements.restartButton.addEventListener('click', () => {
   if (socket && currentRoomId) socket.emit('restart_game', { roomId: currentRoomId });
 });
 
+elements.chatInput.addEventListener('input', () => {
+  const normalized = normalizeChatInput(elements.chatInput.value);
+  if (elements.chatInput.value !== normalized) elements.chatInput.value = normalized;
+  updateChatControls();
+});
+
+elements.chatForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const message = elements.chatInput.value.trim();
+  if (!message) {
+    setChatFeedback('メッセージを入力してください。');
+    updateChatControls();
+    return;
+  }
+  if (countChatCharacters(message) > CHAT_MESSAGE_LIMIT) {
+    setChatFeedback(`メッセージは${CHAT_MESSAGE_LIMIT}文字以内です。`);
+    updateChatControls();
+    return;
+  }
+  if (!socket?.connected || !currentRoom || chatSentCount >= chatLimit || chatSending) {
+    updateChatControls();
+    return;
+  }
+
+  chatSending = true;
+  pendingChatText = message;
+  const requestId = ++chatRequestId;
+  setChatFeedback('送信しています…');
+  updateChatControls();
+  if (chatSendTimeout) window.clearTimeout(chatSendTimeout);
+  chatSendTimeout = window.setTimeout(() => {
+    if (!chatSending || requestId !== chatRequestId) return;
+    chatSending = false;
+    setChatFeedback('送信を確認できませんでした。接続を確認して再試行してください。');
+    updateChatControls();
+  }, 5_000);
+
+  socket.emit('send_chat', { message }, (result) => {
+    if (requestId !== chatRequestId) return;
+    if (chatSendTimeout) window.clearTimeout(chatSendTimeout);
+    chatSendTimeout = null;
+    chatSending = false;
+    if (!result?.ok) {
+      setChatFeedback(result?.message || 'メッセージを送信できませんでした。');
+      updateChatControls();
+      return;
+    }
+
+    chatLimit = Number.isSafeInteger(result.limit) && result.limit > 0 ? Math.min(result.limit, CHAT_MESSAGE_LIMIT) : CHAT_MESSAGE_LIMIT;
+    chatSentCount = Number.isSafeInteger(result.sent)
+      ? Math.min(Math.max(0, result.sent), chatLimit)
+      : chatSentCount;
+    if (elements.chatInput.value.trim() === pendingChatText) elements.chatInput.value = '';
+    pendingChatText = '';
+    setChatFeedback(`送信しました。残り ${Math.max(0, chatLimit - chatSentCount)} 回です。`);
+    updateChatControls();
+  });
+});
+
 elements.fullscreenButton.addEventListener('click', toggleFullscreen);
 document.addEventListener('fullscreenchange', updateFullscreenButton);
 updateFullscreenButton();
@@ -539,6 +720,7 @@ elements.homeButton.addEventListener('click', () => {
   currentRoom = null;
   lastRoundId = null;
   previousScores.clear();
+  resetChat();
   clearSavedSession();
   resetTimer();
   if (document.fullscreenElement === elements.gameScreen) document.exitFullscreen().catch(() => {});
@@ -561,11 +743,17 @@ window.addEventListener('keydown', (event) => {
 if (socket) {
   socket.on('connect', () => {
     setConnectionState(true);
+    updateChatControls();
     if (joinedRoom) emitJoinRequest();
   });
 
   socket.on('disconnect', () => {
     setConnectionState(false);
+    if (chatSendTimeout) window.clearTimeout(chatSendTimeout);
+    chatSendTimeout = null;
+    chatSending = false;
+    chatRequestId += 1;
+    updateChatControls();
     if (currentRoom) renderStatus(currentRoom, null, null);
   });
 
@@ -578,6 +766,18 @@ if (socket) {
     elements.joinButton.disabled = false;
     setLoginMessage('');
     renderRoom(room);
+  });
+
+  socket.on('chat_state', ({ messages, sent, limit }) => {
+    chatLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, CHAT_MESSAGE_LIMIT) : CHAT_MESSAGE_LIMIT;
+    chatSentCount = Number.isSafeInteger(sent) ? Math.min(Math.max(sent, 0), chatLimit) : 0;
+    setChatMessages(messages);
+    setChatFeedback(`送信は1参加セッションにつき${chatLimit}回までです。`);
+    updateChatControls();
+  });
+
+  socket.on('chat_message', (message) => {
+    appendChatMessage(message);
   });
 
   socket.on('room_error', ({ message }) => {

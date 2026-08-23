@@ -4,6 +4,7 @@ const path = require('path');
 const { Server } = require('socket.io');
 const { createInitialHand, resolveRound } = require('./game-rules');
 const { createFixedWindowLimiter, getClientIp, readPositiveInteger } = require('./security');
+const { MAX_CHAT_MESSAGES_PER_SESSION, appendChatMessage } = require('./chat');
 
 const app = express();
 const server = http.createServer(app);
@@ -26,6 +27,8 @@ const MAX_HTTP_CONNECTIONS = readPositiveInteger(process.env.MAX_HTTP_CONNECTION
 const RATE_LIMIT_TRACKED_IPS = readPositiveInteger(process.env.RATE_LIMIT_TRACKED_IPS, 5_000, { max: 50_000 });
 const SOCKET_EVENT_LIMIT = readPositiveInteger(process.env.SOCKET_EVENT_LIMIT, 24, { max: 1_000 });
 const SOCKET_EVENT_WINDOW_MS = 10_000;
+const MAX_CHAT_SESSIONS_PER_ROOM = 128;
+const CHAT_SESSION_RETENTION_MS = 30 * 60_000;
 const ALLOW_ORIGINLESS_SOCKET_CONNECTIONS = process.env.ALLOW_ORIGINLESS_SOCKET_CONNECTIONS === 'true'
   && process.env.NODE_ENV !== 'production';
 
@@ -152,7 +155,10 @@ function createRoom(id) {
     deadline: 0,
     pausedRemainingMs: TURN_TIME_LIMIT_MS,
     winner: null,
-    needsFreshGame: false
+    needsFreshGame: false,
+    chat: [],
+    chatUsage: new Map(),
+    chatSequence: 0
   };
 }
 
@@ -293,6 +299,38 @@ function consumeSocketEvent(socket) {
   state.count += 1;
   socket.data.eventRate = state;
   return true;
+}
+
+function getParticipant(room, socketId) {
+  return room.players.find((player) => player.id === socketId)
+    || room.spectators.find((spectator) => spectator.id === socketId)
+    || null;
+}
+
+function pruneChatUsage(room, now = Date.now()) {
+  const activeClientIds = new Set([
+    ...room.players.map((player) => player.clientId),
+    ...room.spectators.map((spectator) => spectator.clientId)
+  ]);
+  for (const [clientId, usage] of room.chatUsage) {
+    if (!activeClientIds.has(clientId) && now - usage.lastSeenAt >= CHAT_SESSION_RETENTION_MS) {
+      room.chatUsage.delete(clientId);
+    }
+  }
+}
+
+function emitChatState(socket, room, clientId) {
+  pruneChatUsage(room);
+  const usage = room.chatUsage.get(clientId);
+  socket.emit('chat_state', {
+    messages: room.chat,
+    sent: usage?.count || 0,
+    limit: MAX_CHAT_MESSAGES_PER_SESSION
+  });
+}
+
+function replyToChat(acknowledge, result) {
+  if (typeof acknowledge === 'function') acknowledge(result);
 }
 
 function processTurn(room) {
@@ -438,6 +476,7 @@ io.on('connection', (socket) => {
       const currentRoom = getRoom(socket.data.roomId);
       if (socket.data.roomId === roomId && currentRoom) {
         socket.emit('room_updated', createRoomView(currentRoom, socket.id));
+        emitChatState(socket, currentRoom, socket.data.clientId);
         return;
       }
       emitError(socket, '一度に参加できる部屋は一つです。ホームへ戻ってから別の部屋に入室してください。');
@@ -467,6 +506,7 @@ io.on('connection', (socket) => {
 
     socket.join(room.id);
     socket.data.roomId = room.id;
+    socket.data.clientId = clientId;
 
     if (returningPlayer) {
       const previousSocketId = returningPlayer.id;
@@ -508,6 +548,37 @@ io.on('connection', (socket) => {
     }
 
     broadcastRoom(room);
+    emitChatState(socket, room, clientId);
+  });
+
+  socket.on('send_chat', (payload = {}, acknowledge) => {
+    const room = getRoom(socket.data.roomId);
+    const participant = room && getParticipant(room, socket.id);
+    if (!room || !participant) {
+      replyToChat(acknowledge, { ok: false, message: 'チャットに参加していません。' });
+      return;
+    }
+
+    const now = Date.now();
+    pruneChatUsage(room, now);
+    if (!room.chatUsage.has(participant.clientId) && room.chatUsage.size >= MAX_CHAT_SESSIONS_PER_ROOM) {
+      replyToChat(acknowledge, { ok: false, message: 'この部屋では新しいチャット参加を受け付けられません。' });
+      return;
+    }
+
+    const result = appendChatMessage(room, {
+      clientId: participant.clientId,
+      author: participant.name,
+      text: payload?.message,
+      now
+    });
+    if (!result.ok) {
+      replyToChat(acknowledge, { ok: false, message: result.error });
+      return;
+    }
+
+    io.to(room.id).emit('chat_message', result.message);
+    replyToChat(acknowledge, { ok: true, sent: result.sent, limit: result.limit });
   });
 
   socket.on('confirm_card', (payload = {}) => {

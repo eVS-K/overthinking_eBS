@@ -113,6 +113,23 @@
         <div id="history-list" class="history-list" aria-live="polite">
           <p class="history-empty">最初の勝負を待っています。</p>
         </div>
+        <section class="chat-panel" aria-labelledby="chat-title">
+          <div class="chat-heading">
+            <div><span class="side-label">ROOM CHAT</span><h3 id="chat-title">ルームチャット</h3></div>
+            <span id="chat-count" class="chat-count">0 / 50</span>
+          </div>
+          <div id="chat-list" class="chat-list" role="log" aria-live="polite" aria-relevant="additions text">
+            <p class="chat-empty">対戦相手にメッセージを送れます。</p>
+          </div>
+          <form id="chat-form" class="chat-form" novalidate>
+            <label class="sr-only" for="chat-input">メッセージ</label>
+            <div class="chat-input-row">
+              <input id="chat-input" type="text" maxlength="100" autocomplete="off" placeholder="50文字まで・改行不可" aria-describedby="chat-count chat-feedback">
+              <button id="chat-send-btn" class="chat-send-button" type="submit" disabled>送信</button>
+            </div>
+            <p id="chat-feedback" class="chat-feedback" role="status">送信は1参加セッションにつき50回までです。</p>
+          </form>
+        </section>
       </aside>
     </div>
   </div>
