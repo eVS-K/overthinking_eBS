@@ -106,6 +106,23 @@ test('Ranked REST APIはauth/CSRF/Origin/ownership/idempotency/payload境界を�
   assert.equal([first.body.idempotent, duplicate.body.idempotent].filter(Boolean).length, 1);
   assert.equal((await runtime.repository.listMoves(gameId)).length, 1);
 
+  // The route identifier is authoritative.  Keeping it out of the JSON body
+  // prevents a client-side retry helper from accidentally creating a second
+  // source of truth for the game id.
+  const duplicatedGameId = await fetch(`${runtime.baseUrl}/api/ranked/games/${gameId}/moves`, {
+    method: 'POST', headers: headers(), body: JSON.stringify({
+      gameId,
+      expectedRound: 2,
+      cardId: 'king',
+      requestId: '20000000-0000-4000-8000-000000000099'
+    })
+  });
+  const duplicatedGameIdBody = await duplicatedGameId.json();
+  assert.equal(duplicatedGameId.status, 400);
+  assert.equal(duplicatedGameIdBody.error.code, 'INVALID_MOVE');
+  assert.equal(duplicatedGameIdBody.error.message, 'Move body contains unsupported fields.');
+  assert.equal((await runtime.repository.listMoves(gameId)).length, 1);
+
   const foreign = await fetch(`${runtime.baseUrl}/api/ranked/games/${gameId}/moves`, {
     method: 'POST', headers: headers(TOKEN_B, CSRF_B), body: JSON.stringify({ expectedRound: 2, cardId: 'ace', requestId: '20000000-0000-4000-8000-000000000002' })
   });

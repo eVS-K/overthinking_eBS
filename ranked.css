@@ -85,6 +85,7 @@
 .ranked-handle-form > div { display: flex; min-width: 0; gap: 10px; }
 .ranked-handle-form input { min-width: 0; padding: 9px 10px; border: 1px solid var(--line-strong); color: var(--ink); background: rgba(5, 9, 20, .45); font-family: var(--mono); font-size: 12px; }
 .ranked-handle-form .ranked-text-button { flex: 0 0 auto; border: 1px solid var(--line-strong); padding-inline: 11px; color: var(--blue-bright); }
+.ranked-handle-hint { margin: 8px 0 0; color: var(--faint); font-family: var(--mono); font-size: 9px; letter-spacing: .03em; line-height: 1.55; }
 
 .ranked-empty-state { display: grid; justify-items: start; gap: 18px; max-width: 590px; padding: 36px 0 10px; }
 .ranked-empty-state p { margin: 0; color: #c0cce0; font-size: 13px; line-height: 1.85; }
@@ -108,6 +109,8 @@
 .ranked-ai-state strong { color: var(--blue-bright); font-family: var(--serif); font-size: 22px; font-weight: 400; }
 .ranked-ai-state > span:nth-of-type(2) { margin-left: 14px; }
 .ranked-ai-state > span:nth-of-type(2) + strong { color: var(--heart); }
+.ranked-opponent-hand { display: flex; gap: 6px; min-width: 0; padding: 10px 2px 4px; overflow-x: auto; scrollbar-width: thin; }
+.ranked-opponent-card { flex: 1 1 0; min-width: 0; padding: 8px 5px; overflow: hidden; border: 1px solid rgba(255, 150, 170, .34); color: #ffc2cd; background: linear-gradient(145deg, rgba(90, 42, 66, .5), rgba(31, 23, 45, .68)); font-family: var(--serif); font-size: clamp(11px, 1.7vw, 14px); line-height: 1; text-align: center; text-overflow: ellipsis; text-shadow: 0 0 12px rgba(255, 150, 170, .2); white-space: nowrap; }
 
 .ranked-round-result { display: grid; justify-items: center; gap: 8px; min-width: 0; margin-top: 17px; padding: 14px; border: 1px solid rgba(242, 189, 105, .42); color: var(--gold-bright); background: radial-gradient(circle at center, rgba(242, 189, 105, .17), transparent 72%); text-align: center; }
 .ranked-round-result.round-won { border-color: rgba(242, 189, 105, .62); color: var(--gold-bright); }
@@ -230,6 +233,8 @@
   .ranked-scoreline > div > strong { font-size: 34px; }
   .ranked-round-meta > strong { font-size: 20px !important; }
   .ranked-ai-state { padding-block: 10px; }
+  .ranked-opponent-hand { gap: 5px; padding-top: 8px; }
+  .ranked-opponent-card { flex: 0 0 83px; padding-block: 9px; }
   .ranked-round-result { margin-top: 12px; padding: 12px 8px; }
   .ranked-round-result strong { font-size: clamp(21px, 7vw, 29px); }
   .ranked-duel { gap: 6px; }

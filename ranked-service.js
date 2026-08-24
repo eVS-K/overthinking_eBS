@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const {
   CARD_IDS,
+  INITIAL_HAND_SIZE,
   RANKED_RULES_VERSION,
   applyRound,
   cardIdFromIndex,
@@ -29,6 +30,7 @@ const {
 
 const RANKED_RATING_VERSION = 'ewma-half-life-50-v1';
 const TURN_TIME_LIMIT_MS = 90_000;
+const FINAL_ROUND_TIME_LIMIT_MS = 15_000;
 const DEFAULT_ABANDON_AFTER_MS = 24 * 60 * 60_000;
 const HANDLE_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60_000;
 const INITIAL_VALUE_SCALED = (BigInt(INITIAL_EV_NUMERATOR) * VALUE_SCALE + BigInt(INITIAL_EV_DENOMINATOR) / 2n)
@@ -105,6 +107,7 @@ class RankedService {
     seedEncryptionKey,
     now = () => new Date(),
     turnTimeLimitMs = TURN_TIME_LIMIT_MS,
+    finalRoundTimeLimitMs = FINAL_ROUND_TIME_LIMIT_MS,
     abandonAfterMs = DEFAULT_ABANDON_AFTER_MS,
     leaderboardCacheTtlMs = 15_000
   }) {
@@ -116,6 +119,7 @@ class RankedService {
     this.seedEncryptionKey = seedEncryptionKey;
     this.now = now;
     this.turnTimeLimitMs = turnTimeLimitMs;
+    this.finalRoundTimeLimitMs = finalRoundTimeLimitMs;
     this.abandonAfterMs = abandonAfterMs;
     this.leaderboardCacheTtlMs = leaderboardCacheTtlMs;
     this.leaderboardCache = new Map();
@@ -129,6 +133,10 @@ class RankedService {
 
   seasonSpec() {
     return buildCurrentSeasonSpec(this.valueLookup);
+  }
+
+  turnTimeLimitForRound(round) {
+    return round === INITIAL_HAND_SIZE ? this.finalRoundTimeLimitMs : this.turnTimeLimitMs;
   }
 
   async ensureCurrentSeasonInTransaction(tx, { lockActive = false } = {}) {
@@ -189,7 +197,7 @@ class RankedService {
         state,
         currentRound: 1,
         turnStartedAt: now,
-        deadline: dateAfter(now, this.turnTimeLimitMs),
+        deadline: dateAfter(now, this.turnTimeLimitForRound(1)),
         encryptedSeed: encryptSeed(seed, this.seedEncryptionKey),
         seedCommitment: seedCommitment(seed)
       });
@@ -271,7 +279,7 @@ class RankedService {
         playerCardId: move.cardId,
         requestId: move.requestId,
         timeout: false,
-        thinkingTimeMs: Math.max(0, Math.min(this.turnTimeLimitMs, now.getTime() - asDate(game.turnStartedAt).getTime())),
+        thinkingTimeMs: Math.max(0, Math.min(this.turnTimeLimitForRound(game.currentRound), now.getTime() - asDate(game.turnStartedAt).getTime())),
         now
       });
     });
@@ -292,7 +300,7 @@ class RankedService {
       playerCardId,
       requestId: null,
       timeout: true,
-      thinkingTimeMs: this.turnTimeLimitMs,
+      thinkingTimeMs: this.turnTimeLimitForRound(game.currentRound),
       now,
       responseForTimeout: false
     });
@@ -315,7 +323,7 @@ class RankedService {
     } else {
       nextGame.currentRound = game.currentRound + 1;
       nextGame.turnStartedAt = now;
-      nextGame.deadline = dateAfter(now, this.turnTimeLimitMs);
+      nextGame.deadline = dateAfter(now, this.turnTimeLimitForRound(nextGame.currentRound));
       nextGame = await tx.saveGame(nextGame);
     }
 
@@ -421,6 +429,10 @@ class RankedService {
       status: game.status,
       currentRound: game.currentRound,
       playerHand: getLegalCardIds(game.state.playerMask),
+      // This is not hidden information: every opponent card is revealed when
+      // played, and the Random Opponent's hand therefore remains derivable.
+      // Returning it directly makes that essential tactical context clear.
+      opponentHand: getLegalCardIds(game.state.aiMask),
       aiRemainingCards: popcount(game.state.aiMask),
       playerScore: game.state.playerScore,
       aiScore: game.state.aiScore,
@@ -585,6 +597,7 @@ module.exports = {
   HANDLE_CHANGE_COOLDOWN_MS,
   INITIAL_VALUE_SCALED,
   RANKED_RATING_VERSION,
+  FINAL_ROUND_TIME_LIMIT_MS,
   RankedError,
   RankedService,
   TURN_TIME_LIMIT_MS,

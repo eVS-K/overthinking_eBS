@@ -70,7 +70,7 @@ not commit a real `.env` file.
 | `SUPABASE_ANON_KEY` | Ranked/Auth | Supabase publishable/anon key. It is not a service-role key. |
 | `RANKED_SEED_ENCRYPTION_KEY` | Ranked | 32-byte AES-256 key as 64 hex characters or base64. This is a secret. |
 | `RANKED_VALUES_FILE` | Ranked | Optional absolute path to a reviewed generated value table. Defaults to the checked-in artifact. |
-| `RANKED_TURN_TIME_LIMIT_MS` | Ranked | Per-turn deadline; defaults to `90000`. |
+| `RANKED_TURN_TIME_LIMIT_MS` | Ranked | Rounds 1–6 deadline; defaults to `90000`. The forced final round is always `15000` ms. |
 | `RANKED_ABANDON_AFTER_MS` | Ranked | Delay after a missed deadline before automatic forfeit; defaults to 24 hours. |
 | `SESSION_ABSOLUTE_MS` | Ranked/Auth | Absolute app-session lifetime; defaults to 30 days. |
 | `SESSION_IDLE_MS` | Ranked/Auth | Idle app-session lifetime; defaults to 7 days. |

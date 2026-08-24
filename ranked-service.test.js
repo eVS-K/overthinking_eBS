@@ -4,6 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { MemoryRankedRepository } = require('./ranked-repository');
 const { RankedError, RankedService } = require('./ranked-service');
+const { decryptSeed } = require('./ranked-crypto');
+const { applyRound } = require('./ranked-engine');
+const { deriveAiCardId } = require('./ranked-rng');
 const { RankedValueLookup, createSignedRankedValueTable } = require('./ranked-values');
 
 const USER_A = '00000000-0000-4000-8000-0000000000a1';
@@ -34,10 +37,24 @@ test('1 userにつきactive Ranked gameは1件だけで、active stateはseedを
   assert.equal(first.id, second.id);
   assert.equal(first.status, 'active');
   assert.equal(first.playerHand.length, 7);
+  assert.equal(first.opponentHand.length, 7);
+  assert.deepEqual(first.opponentHand, ['ace', 'king', 'queen', 'jack', 'joker', 'three', 'two']);
   assert.equal(first.aiRemainingCards, 7);
   assert.equal(typeof first.seedCommitment, 'string');
   assert.equal(Object.hasOwn(first, 'seed'), false);
   assert.equal(JSON.stringify(first).includes('encryptedSeed'), false);
+});
+
+test('公開handleは20文字以内のASCII許可文字だけを受け入れ、空白と不可視文字を拒否する', async () => {
+  const { service } = makeService();
+  for (const invalid of ['ab', 'abcdefghijklmnopqrstu', 'valid handle', ' valid', 'valid ', 'valid\u200Bhandle', 'valid\nhandle', '全角Handle']) {
+    await assert.rejects(
+      service.updateHandle(USER_A, invalid),
+      (error) => error instanceof RankedError && error.code === 'INVALID_HANDLE'
+    );
+  }
+  const updated = await service.updateHandle(USER_A, 'Player-2026');
+  assert.equal(updated.handle, 'Player-2026');
 });
 
 test('moveはserver authoritativeで、同一requestIdはidempotent、カードは一度しか消費されない', async () => {
@@ -48,6 +65,8 @@ test('moveはserver authoritativeで、同一requestIdはidempotent、カード�
   assert.equal(first.idempotent, false);
   assert.equal(duplicate.idempotent, true);
   assert.equal(first.round.playerCardId, duplicate.round.playerCardId);
+  assert.equal(first.game.opponentHand.length, 6);
+  assert.equal(first.game.opponentHand.includes(first.round.aiCardId), false);
   const persisted = await repository.findGameById(game.id);
   assert.equal(persisted.currentRound, 2);
   assert.equal(persisted.state.playerMask.toString(2).split('1').length - 1, 6);
@@ -111,6 +130,45 @@ test('deadline後はserver-side deterministic timeout moveとなり、resume可�
   const [move] = await runtime.repository.listMoves(game.id);
   assert.equal(move.timeout, true);
   assert.ok(move.regret >= 0n);
+});
+
+test('最終ラウンドはserver-sideで15秒締切になり、timeout記録も15秒になる', async () => {
+  const runtime = makeService();
+  const now = new Date('2026-08-24T00:00:00.000Z');
+  const initial = await runtime.service.createOrResumeGame(USER_A);
+  const stored = await runtime.repository.findGameById(initial.id);
+  let state = stored.state;
+  // Five draws leave a valid round-six state with a ten-card stack.  Select
+  // the deterministic opponent card in round six too, so the forced seventh
+  // round is reached without an early score-based game end.
+  for (const cardId of ['ace', 'king', 'queen', 'jack', 'joker']) {
+    state = applyRound(state, cardId, cardId).state;
+  }
+  const staged = {
+    ...stored,
+    state,
+    currentRound: 6,
+    turnStartedAt: now,
+    deadline: new Date(now.getTime() + 90_000)
+  };
+  const seed = decryptSeed(staged.encryptedSeed, TEST_KEY);
+  const playerCardId = deriveAiCardId(seed, { gameId: staged.id, round: staged.currentRound, state: staged.state });
+  const sixthRound = await runtime.repository.transaction((tx) => runtime.service.executeRoundInTransaction(tx, staged, {
+    playerCardId,
+    requestId: REQUEST_A,
+    timeout: false,
+    thinkingTimeMs: 0,
+    now
+  }));
+  assert.equal(sixthRound.game.currentRound, 7);
+  assert.equal(new Date(sixthRound.game.deadline).getTime() - now.getTime(), 15_000);
+
+  runtime.advance(15_000);
+  const settled = await runtime.service.getActiveGame(USER_A);
+  assert.equal(settled.status, 'completed');
+  const moves = await runtime.repository.listMoves(initial.id);
+  assert.equal(moves.at(-1).timeout, true);
+  assert.equal(moves.at(-1).thinkingTimeMs, 15_000);
 });
 
 test('長時間放置されたdeadlineはforfeitとして一回だけratingへ反映される', async () => {

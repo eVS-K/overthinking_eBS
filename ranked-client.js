@@ -19,7 +19,7 @@
   const elements = Object.fromEntries([
     'ranked-loading', 'ranked-auth', 'ranked-auth-actions', 'ranked-auth-notice', 'ranked-dashboard', 'ranked-logout', 'ranked-auth-status', 'ranked-auth-status-label', 'ranked-start', 'ranked-empty-state', 'ranked-board',
     'ranked-postgame', 'ranked-game-status', 'ranked-round', 'ranked-timer', 'ranked-player-score', 'ranked-ai-score',
-    'ranked-ai-remaining', 'ranked-stack', 'ranked-player-hand', 'ranked-confirm', 'ranked-forfeit', 'ranked-instruction',
+    'ranked-ai-remaining', 'ranked-stack', 'ranked-opponent-hand', 'ranked-player-hand', 'ranked-confirm', 'ranked-forfeit', 'ranked-instruction',
     'ranked-round-result', 'ranked-history-list', 'ranked-message', 'ranked-rating', 'ranked-rank', 'ranked-decision-ev',
     'ranked-games', 'ranked-record', 'ranked-provisional', 'ranked-provisional-note', 'ranked-handle-form', 'ranked-handle-input',
     'ranked-postgame-result', 'ranked-postgame-score', 'ranked-postgame-performance', 'ranked-postgame-regret', 'ranked-postgame-rating',
@@ -116,6 +116,15 @@
     return button;
   }
 
+  function createOpponentCard(cardId) {
+    const [name, description] = CARD_INFO[cardId] || [cardId, ''];
+    const card = document.createElement('span');
+    card.className = 'ranked-opponent-card';
+    card.textContent = name;
+    card.title = description ? `${name} — ${description}` : name;
+    return card;
+  }
+
   function renderHistory(history = []) {
     const container = elements['ranked-history-list'];
     container.replaceChildren();
@@ -127,7 +136,7 @@
       const number = document.createElement('span'); number.className = 'history-round'; number.textContent = `R${round.round}`;
       const detail = document.createElement('div'); detail.className = 'history-detail';
       const title = document.createElement('strong');
-      title.textContent = round.winner === 'player' ? 'YOU WIN' : round.winner === 'ai' ? 'RANDOM AI WINS' : 'DRAW · STACK';
+      title.textContent = round.winner === 'player' ? 'YOU WIN' : round.winner === 'ai' ? 'RANDOM OPPONENT WINS' : 'DRAW · STACK';
       const cards = document.createElement('span');
       cards.textContent = `${CARD_INFO[round.playerCardId]?.[0] || round.playerCardId}  vs  ${CARD_INFO[round.aiCardId]?.[0] || round.aiCardId}${round.timeout ? ' · TIMEOUT' : ''}`;
       detail.append(title, cards); row.append(number, detail); container.append(row);
@@ -197,7 +206,7 @@
     const outcome = last.winner === 'player' ? 'won' : last.winner === 'ai' ? 'lost' : 'draw';
     target.className = `ranked-round-result round-${outcome}${isNewRound ? ' round-new' : ''}`;
     const line = document.createElement('strong');
-    line.textContent = last.winner === 'player' ? 'YOU WIN THE ROUND' : last.winner === 'ai' ? 'RANDOM AI WINS THE ROUND' : 'DRAW — STACK GROWS';
+    line.textContent = last.winner === 'player' ? 'YOU WIN THE ROUND' : last.winner === 'ai' ? 'RANDOM OPPONENT WINS THE ROUND' : 'DRAW — STACK GROWS';
     const duel = document.createElement('div');
     duel.className = 'ranked-duel';
     const playerCard = document.createElement('span');
@@ -208,7 +217,7 @@
     const versus = document.createElement('i'); versus.textContent = 'VS'; versus.setAttribute('aria-hidden', 'true');
     const aiCard = document.createElement('span');
     aiCard.className = 'ranked-duel-card ranked-duel-ai';
-    const aiLabel = document.createElement('small'); aiLabel.textContent = 'RANDOM AI';
+    const aiLabel = document.createElement('small'); aiLabel.textContent = 'RANDOM OPPONENT';
     const aiName = document.createElement('b'); aiName.textContent = CARD_INFO[last.aiCardId]?.[0] || last.aiCardId;
     aiCard.append(aiLabel, aiName);
     duel.append(playerCard, versus, aiCard);
@@ -233,16 +242,21 @@
     if (presentation.isNewRound) triggerRoundImpact(game.history[game.history.length - 1].winner);
     if (active) {
       if (!game.playerHand.includes(state.selectedCardId)) state.selectedCardId = null;
-      elements['ranked-game-status'].textContent = state.pendingMove ? 'SUBMITTING' : 'IN PROGRESS';
+      elements['ranked-game-status'].textContent = state.pendingMove ? 'SUBMITTING' : game.currentRound === 7 ? 'FINAL · 15 SEC' : 'IN PROGRESS';
       elements['ranked-round'].textContent = String(game.currentRound);
       updateScore(elements['ranked-player-score'], game.playerScore, presentation.playerGain);
       updateScore(elements['ranked-ai-score'], game.aiScore, presentation.aiGain);
       elements['ranked-ai-remaining'].textContent = String(game.aiRemainingCards);
       elements['ranked-stack'].textContent = String(game.stackCount);
+      elements['ranked-opponent-hand'].replaceChildren(...(game.opponentHand || []).map(createOpponentCard));
       elements['ranked-player-hand'].replaceChildren(...game.playerHand.map(createCard));
       elements['ranked-confirm'].disabled = !state.selectedCardId || Boolean(state.pendingMove);
       elements['ranked-forfeit'].disabled = Boolean(state.pendingMove);
-      elements['ranked-instruction'].textContent = state.pendingMove ? 'サーバーが勝負を確定しています…' : '一枚を選び、Random AIに挑んでください。';
+      elements['ranked-instruction'].textContent = state.pendingMove
+        ? 'サーバーが勝負を確定しています…'
+        : game.currentRound === 7
+          ? 'FINAL ROUND — 残りの一枚で勝負します。15秒以内に確定してください。'
+          : '一枚を選び、ランダムの相手に挑んでください。';
       startTimer(game.deadline); return;
     }
     const finalOutcome = game.actualResult === 'win' ? 'win' : game.actualResult === 'draw' ? 'draw' : game.actualResult === 'forfeit' ? 'forfeit' : 'loss';
@@ -254,7 +268,7 @@
     elements['ranked-postgame-regret'].textContent = formatNumber(game.totalRegret, 4);
     elements['ranked-postgame-rating'].textContent = `${Math.round(game.ratingBefore ?? 1000)} → ${Math.round(game.ratingAfter ?? 1000)}`;
     elements['ranked-postgame-luck'].textContent = `${game.luck >= 0 ? '+' : ''}${formatNumber(game.luck, 4)}`;
-    elements['ranked-seed-reveal'].textContent = game.seed ? `AI seed revealed for replay verification: ${game.seed}` : '';
+    elements['ranked-seed-reveal'].textContent = game.seed ? `Random seed revealed for replay verification: ${game.seed}` : '';
   }
 
   function clearTimer() { if (state.timer) window.clearInterval(state.timer); state.timer = null; }
@@ -309,7 +323,15 @@
     state.pendingMove = proposal;
     renderGame(state.game);
     try {
-      const result = await api(`/api/ranked/games/${state.pendingMove.gameId}/moves`, { method: 'POST', body: state.pendingMove, stateChanging: true });
+      // gameId belongs exclusively in the URL.  The Ranked API deliberately
+      // accepts only the three decision fields in the JSON body, so never
+      // leak this local retry bookkeeping field into the request payload.
+      const moveBody = {
+        expectedRound: state.pendingMove.expectedRound,
+        cardId: state.pendingMove.cardId,
+        requestId: state.pendingMove.requestId
+      };
+      const result = await api(`/api/ranked/games/${state.pendingMove.gameId}/moves`, { method: 'POST', body: moveBody, stateChanging: true });
       state.pendingMove = null; state.retryMove = null; state.selectedCardId = null; renderGame(result.game); await refreshProfile(); await refreshLeaderboard();
     } catch (error) {
       if (error.details?.game) {
@@ -330,7 +352,12 @@
   }
   async function updateHandle(event) {
     event.preventDefault();
-    try { const result = await api('/api/profile', { method: 'PATCH', body: { handle: elements['ranked-handle-input'].value.trim() }, stateChanging: true }); renderProfile(result.profile); setMessage('公開handleを更新しました。'); } catch (error) { setMessage(error.message); }
+    const handle = elements['ranked-handle-input'].value;
+    if (!/^[A-Za-z0-9_-]{3,20}$/.test(handle)) {
+      setMessage('PUBLIC HANDLEは3〜20文字の半角英数字、_、-のみです。空白・改行・不可視文字は使用できません。');
+      return;
+    }
+    try { const result = await api('/api/profile', { method: 'PATCH', body: { handle }, stateChanging: true }); renderProfile(result.profile); setMessage('公開handleを更新しました。'); } catch (error) { setMessage(error.message); }
   }
   async function logout() {
     try { await api('/api/auth/logout', { method: 'POST', body: {}, stateChanging: true }); window.location.assign('/ranked'); } catch (error) { setMessage(error.message); }

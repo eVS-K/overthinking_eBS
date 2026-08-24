@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#090d1a">
   <meta name="robots" content="noindex">
   <title>OVERTHINKING — RANKED vs RANDOM</title>
-  <link rel="stylesheet" href="/style.css?v=ranked-v3">
-  <link rel="stylesheet" href="/ranked.css?v=ranked-v3">
-  <script src="/ranked-client.js?v=ranked-v3" defer></script>
+  <link rel="stylesheet" href="/style.css?v=ranked-v4">
+  <link rel="stylesheet" href="/ranked.css?v=ranked-v4">
+  <script src="/ranked-client.js?v=ranked-v4" defer></script>
 </head>
 <body class="ranked-page">
   <div class="atmosphere" aria-hidden="true">
@@ -36,7 +36,7 @@
     <section id="ranked-auth" class="ranked-panel ranked-auth hidden" aria-labelledby="ranked-auth-title">
       <span class="section-label">RANKED vs RANDOM</span>
       <h1 id="ranked-auth-title">決断の質で、<br><span>勝負する。</span></h1>
-      <p>Random AIとの全局面をサーバーで判定し、実勝敗ではなく一手ごとのDecision EVでRatingを記録します。</p>
+      <p>ランダムの相手との全局面をサーバーで判定し、実勝敗ではなく一手ごとのDecision EVでRatingを記録します。</p>
       <div id="ranked-auth-actions" class="ranked-auth-actions">
         <a class="primary-button" href="/auth/login/google"><span>Googleでサインイン</span><b aria-hidden="true">→</b></a>
         <a class="secondary-button" href="/auth/login/github"><span>GitHubでサインイン</span><b aria-hidden="true">→</b></a>
@@ -61,8 +61,9 @@
         <p id="ranked-provisional-note" class="ranked-provisional-note">PROVISIONAL — 0 / 50</p>
         <form id="ranked-handle-form" class="ranked-handle-form" novalidate>
           <label for="ranked-handle-input">PUBLIC HANDLE</label>
-          <div><input id="ranked-handle-input" type="text" minlength="3" maxlength="20" autocomplete="nickname" pattern="[A-Za-z0-9_-]{3,20}"><button class="ranked-text-button" type="submit">UPDATE</button></div>
+          <div><input id="ranked-handle-input" type="text" minlength="3" maxlength="20" autocomplete="nickname" autocapitalize="off" spellcheck="false" inputmode="latin" pattern="[A-Za-z0-9_-]{3,20}" aria-describedby="ranked-handle-hint" title="3–20文字の半角英数字、_、-のみ使用できます"><button class="ranked-text-button" type="submit">UPDATE</button></div>
         </form>
+        <p id="ranked-handle-hint" class="ranked-handle-hint">3–20 characters · A–Z / 0–9 / _ / - only · spaces and invisible characters are not allowed</p>
       </section>
 
       <section id="ranked-game-panel" class="ranked-panel ranked-game" aria-labelledby="ranked-game-title">
@@ -72,7 +73,7 @@
         </div>
 
         <div id="ranked-empty-state" class="ranked-empty-state">
-          <p>AIは残り手札から一様ランダムに選択します。あなたの一手だけを送信し、結果・Rating・Regretはサーバーが確定します。</p>
+          <p>ランダムの相手は残り手札から一様ランダムに選択します。あなたの一手だけを送信し、結果・Rating・Regretはサーバーが確定します。</p>
           <button id="ranked-start" class="primary-button" type="button"><span>RANKEDを開始</span><b aria-hidden="true">→</b></button>
         </div>
 
@@ -80,9 +81,10 @@
           <div class="ranked-scoreline">
             <div><span>YOU</span><strong id="ranked-player-score">0</strong></div>
             <div class="ranked-round-meta"><span>ROUND <strong id="ranked-round">1</strong> / 7</span><strong id="ranked-timer">--</strong><small>SECONDS</small></div>
-            <div><span>RANDOM AI</span><strong id="ranked-ai-score">0</strong></div>
+            <div><span>RANDOM OPPONENT</span><strong id="ranked-ai-score">0</strong></div>
           </div>
-          <div class="ranked-ai-state"><span>AI REMAINING</span><strong id="ranked-ai-remaining">7</strong><small>CARDS</small><span>STACK</span><strong id="ranked-stack">0</strong><small>CARDS</small></div>
+          <div class="ranked-ai-state"><span>OPPONENT HAND</span><strong id="ranked-ai-remaining">7</strong><small>CARDS</small><span>STACK</span><strong id="ranked-stack">0</strong><small>CARDS</small></div>
+          <div id="ranked-opponent-hand" class="ranked-opponent-hand" aria-label="ランダムの相手の残り手札"></div>
           <div id="ranked-round-result" class="ranked-round-result hidden"></div>
           <p id="ranked-instruction" class="ranked-instruction">一枚を選んでください。</p>
           <div id="ranked-player-hand" class="ranked-card-row" aria-label="あなたのRanked手札"></div>
