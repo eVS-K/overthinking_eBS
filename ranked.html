@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090d1a">
+  <meta name="robots" content="noindex">
+  <title>OVERTHINKING — RANKED vs RANDOM</title>
+  <link rel="stylesheet" href="/style.css?v=ranked-v2">
+  <link rel="stylesheet" href="/ranked.css?v=ranked-v2">
+  <script src="/ranked-client.js?v=ranked-v2" defer></script>
+</head>
+<body class="ranked-page">
+  <div class="atmosphere" aria-hidden="true">
+    <div class="glow glow-one"></div>
+    <div class="glow glow-two"></div>
+    <div class="noise"></div>
+  </div>
+
+  <header class="ranked-site-header">
+    <a class="game-brand" href="/" aria-label="PRIVATE PvPへ戻る">OVER<span>THINKING</span></a>
+    <nav class="ranked-nav" aria-label="モード選択">
+      <a href="/">PRIVATE PvP</a>
+      <a href="#leaderboard">LEADERBOARD</a>
+      <button id="ranked-logout" class="ranked-text-button hidden" type="button">LOG OUT</button>
+    </nav>
+  </header>
+
+  <main class="ranked-layout">
+    <section id="ranked-loading" class="ranked-panel ranked-loading" aria-live="polite">
+      <span class="section-label">RANKED SYSTEM</span>
+      <p>認証状態を確認しています…</p>
+    </section>
+
+    <section id="ranked-auth" class="ranked-panel ranked-auth hidden" aria-labelledby="ranked-auth-title">
+      <span class="section-label">RANKED vs RANDOM</span>
+      <h1 id="ranked-auth-title">決断の質で、<br><span>勝負する。</span></h1>
+      <p>Random AIとの全局面をサーバーで判定し、実勝敗ではなく一手ごとのDecision EVでRatingを記録します。</p>
+      <div id="ranked-auth-actions" class="ranked-auth-actions">
+        <a class="primary-button" href="/auth/login/google"><span>Googleでサインイン</span><b aria-hidden="true">→</b></a>
+        <a class="secondary-button" href="/auth/login/github"><span>GitHubでサインイン</span><b aria-hidden="true">→</b></a>
+      </div>
+      <p id="ranked-auth-notice" class="ranked-auth-notice hidden" role="status"></p>
+      <p class="ranked-fine-print">Rankedは同一Originの安全なセッションを使います。Guest PvPにはログイン不要です。</p>
+    </section>
+
+    <div id="ranked-dashboard" class="ranked-dashboard hidden">
+      <section class="ranked-panel ranked-profile" aria-labelledby="ranked-profile-title">
+        <div class="ranked-panel-head">
+          <div><span class="section-label">RANKED PROFILE</span><h1 id="ranked-profile-title" data-profile-handle>PLAYER</h1></div>
+          <span id="ranked-provisional" class="ranked-badge">PROVISIONAL</span>
+        </div>
+        <div class="ranked-stats-grid">
+          <article><span>RATING</span><strong id="ranked-rating">—</strong></article>
+          <article><span>RANK</span><strong id="ranked-rank">—</strong></article>
+          <article><span>DECISION EV</span><strong id="ranked-decision-ev">—</strong></article>
+          <article><span>GAMES</span><strong id="ranked-games">0</strong></article>
+        </div>
+        <p id="ranked-record" class="ranked-record">W 0 · D 0 · L 0</p>
+        <p id="ranked-provisional-note" class="ranked-provisional-note">PROVISIONAL — 0 / 50</p>
+        <form id="ranked-handle-form" class="ranked-handle-form" novalidate>
+          <label for="ranked-handle-input">PUBLIC HANDLE</label>
+          <div><input id="ranked-handle-input" type="text" minlength="3" maxlength="20" autocomplete="nickname" pattern="[A-Za-z0-9_-]{3,20}"><button class="ranked-text-button" type="submit">UPDATE</button></div>
+        </form>
+      </section>
+
+      <section id="ranked-game-panel" class="ranked-panel ranked-game" aria-labelledby="ranked-game-title">
+        <div class="ranked-panel-head">
+          <div><span class="section-label">RANKED vs RANDOM</span><h2 id="ranked-game-title">SERVER-AUTHORITATIVE DUEL</h2></div>
+          <span id="ranked-game-status" class="ranked-badge ranked-badge-blue">READY</span>
+        </div>
+
+        <div id="ranked-empty-state" class="ranked-empty-state">
+          <p>AIは残り手札から一様ランダムに選択します。あなたの一手だけを送信し、結果・Rating・Regretはサーバーが確定します。</p>
+          <button id="ranked-start" class="primary-button" type="button"><span>RANKEDを開始</span><b aria-hidden="true">→</b></button>
+        </div>
+
+        <div id="ranked-board" class="hidden" aria-live="polite">
+          <div class="ranked-scoreline">
+            <div><span>YOU</span><strong id="ranked-player-score">0</strong></div>
+            <div class="ranked-round-meta"><span>ROUND <strong id="ranked-round">1</strong> / 7</span><strong id="ranked-timer">--</strong><small>SECONDS</small></div>
+            <div><span>RANDOM AI</span><strong id="ranked-ai-score">0</strong></div>
+          </div>
+          <div class="ranked-ai-state"><span>AI REMAINING</span><strong id="ranked-ai-remaining">7</strong><small>CARDS</small><span>STACK</span><strong id="ranked-stack">0</strong><small>CARDS</small></div>
+          <div id="ranked-round-result" class="ranked-round-result hidden"></div>
+          <p id="ranked-instruction" class="ranked-instruction">一枚を選んでください。</p>
+          <div id="ranked-player-hand" class="ranked-card-row" aria-label="あなたのRanked手札"></div>
+          <div class="ranked-game-actions">
+            <button id="ranked-confirm" class="primary-button" type="button" disabled><span>この一枚で勝負する</span><b aria-hidden="true">↗</b></button>
+            <button id="ranked-forfeit" class="secondary-button" type="button">FORFEIT</button>
+          </div>
+        </div>
+
+        <section id="ranked-postgame" class="ranked-postgame hidden" aria-live="polite">
+          <span class="section-label">MATCH COMPLETE</span>
+          <h3 id="ranked-postgame-result">—</h3>
+          <div class="ranked-postgame-grid">
+            <article><span>DECISION PERFORMANCE</span><strong id="ranked-postgame-performance">—</strong></article>
+            <article><span>TOTAL REGRET</span><strong id="ranked-postgame-regret">—</strong></article>
+            <article><span>RATING</span><strong id="ranked-postgame-rating">—</strong></article>
+            <article><span>LUCK</span><strong id="ranked-postgame-luck">—</strong></article>
+          </div>
+          <p id="ranked-seed-reveal" class="ranked-seed-reveal"></p>
+          <button id="ranked-play-again" class="primary-button" type="button"><span>次のRankedへ</span><b aria-hidden="true">→</b></button>
+        </section>
+      </section>
+
+      <aside class="ranked-panel ranked-history" aria-labelledby="ranked-history-title">
+        <div class="ranked-panel-head"><div><span class="section-label">MATCH LOG</span><h2 id="ranked-history-title">対局履歴</h2></div></div>
+        <div id="ranked-history-list" class="ranked-history-list"><p class="history-empty">対局を開始すると、ここにラウンド履歴が表示されます。</p></div>
+      </aside>
+    </div>
+
+    <section id="leaderboard" class="ranked-panel ranked-leaderboard" aria-labelledby="leaderboard-title">
+      <div class="ranked-panel-head"><div><span class="section-label">OFFICIAL LEADERBOARD</span><h2 id="leaderboard-title">Decision EV Ranking</h2></div><span id="leaderboard-season" class="ranked-badge">CURRENT SEASON</span></div>
+      <p class="ranked-leaderboard-note">50 game以上のプロフィールだけを掲載します。これはserver-authoritativeかつautomation-resistantですが、外部solverの利用を完全には見分けられません。</p>
+      <div id="leaderboard-list" class="leaderboard-list" aria-live="polite"><p class="history-empty">ランキングを読み込んでいます…</p></div>
+    </section>
+  </main>
+  <p id="ranked-message" class="ranked-message" role="status" aria-live="polite"></p>
+</body>
+</html>

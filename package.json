@@ -4,7 +4,10 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "node --test",
+    "test": "npm run generate-ranked-values && node --test",
+    "generate-ranked-values": "node scripts/generate-ranked-values.js",
+    "migrate": "node scripts/migrate.js",
+    "rotate-ranked-season": "node scripts/rotate-ranked-season.js --confirm",
     "start": "node server.js"
   },
   "keywords": [],
@@ -13,6 +16,7 @@
   "type": "commonjs",
   "dependencies": {
     "express": "^5.2.1",
+    "pg": "^8.13.1",
     "socket.io": "^4.8.3"
   }
 }

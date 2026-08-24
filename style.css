@@ -90,6 +90,16 @@ button:focus-visible, input:focus-visible, a:focus-visible, .card:focus-visible 
 .brand-lockup h1 span, .game-brand span { color: var(--gold); }
 .brand-lockup > p { margin: 14px 0 0; color: var(--muted); font-size: 14px; letter-spacing: .12em; }
 
+.mode-selector { width: min(100%, 610px); margin: 31px auto 0; padding: 13px; border: 1px solid var(--line); background: rgba(4, 9, 21, .34); }
+.mode-selector-label { display: block; margin: 0 0 9px; color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .15em; text-align: center; }
+.mode-selector-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.mode-option { display: grid; align-content: center; gap: 4px; min-height: 61px; min-width: 0; padding: 10px 9px; border: 1px solid transparent; color: var(--muted); background: rgba(28, 36, 63, .36); text-align: center; text-decoration: none; transition: border-color .2s ease, background .2s ease, color .2s ease, transform .2s ease; }
+.mode-option b { overflow: hidden; color: inherit; font-family: var(--mono); font-size: 10px; letter-spacing: .035em; text-overflow: ellipsis; white-space: nowrap; }
+.mode-option small { overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.mode-option:not(.mode-option-active):hover { border-color: var(--blue); color: var(--blue-bright); background: rgba(71, 100, 173, .17); transform: translateY(-2px); }
+.mode-option-active { border-color: rgba(242, 189, 105, .43); color: var(--gold-bright); background: rgba(242, 189, 105, .09); }
+.mode-option-active small { color: #caa874; }
+
 .join-form {
   display: grid;
   gap: 8px;
@@ -336,7 +346,12 @@ input::placeholder { color: #65708b; }
 @media (max-width: 660px) {
   .entry-screen { padding: max(16px, env(safe-area-inset-top)) 12px calc(46px + env(safe-area-inset-bottom)); }
   .entry-panel { width: 100%; min-width: 0; padding: 28px 19px; justify-self: stretch; }
-  .brand-lockup h1 { font-size: 39px; }
+  .brand-lockup h1 { max-width: 100%; font-size: clamp(32px, 8.7vw, 39px); letter-spacing: .06em; text-indent: .06em; }
+  .mode-selector { margin-top: 25px; padding: 9px; }
+  .mode-selector-options { gap: 5px; }
+  .mode-option { min-height: 56px; padding: 8px 5px; }
+  .mode-option b { font-size: 8px; letter-spacing: 0; }
+  .mode-option small { font-size: 8px; }
   .rule-grid { grid-template-columns: 1fr; }
   .strategy-note { padding: 12px; font-size: 11px; }
   #game-screen { width: calc(100% - 16px); gap: 10px; margin: 8px auto calc(62px + env(safe-area-inset-bottom)); }
@@ -382,6 +397,9 @@ input::placeholder { color: #65708b; }
 }
 
 @media (max-width: 390px) {
+  .mode-selector { margin-inline: -4px; width: calc(100% + 8px); }
+  .mode-option { min-height: 52px; }
+  .mode-option small { display: none; }
   .round-dashboard { grid-template-columns: 1fr 1.2fr 1fr; }
   .timer-text span { font-size: 8px; }
   .timer-text strong { font-size: 13px; }

@@ -38,9 +38,10 @@ test('制限器は追跡キーを上限で抑え、期限切れのキーを回�
 });
 
 test('クライアントIPはプロキシの転送IPを優先し、不正値は安全に退避する', () => {
-  assert.equal(getClientIp({ headers: { 'x-forwarded-for': '203.0.113.24, 10.0.0.1' } }), '203.0.113.24');
+  assert.equal(getClientIp({ headers: { 'x-forwarded-for': '203.0.113.24, 10.0.0.1' } }, { trustProxy: true }), '203.0.113.24');
+  assert.equal(getClientIp({ headers: { 'x-forwarded-for': '203.0.113.24' }, socket: { remoteAddress: '127.0.0.1' } }), '127.0.0.1');
   assert.equal(getClientIp({ headers: {}, socket: { remoteAddress: '::ffff:127.0.0.1' } }), '::ffff:127.0.0.1');
-  assert.equal(getClientIp({ headers: { 'x-forwarded-for': 'not-an-ip' } }), 'unknown');
+  assert.equal(getClientIp({ headers: { 'x-forwarded-for': 'not-an-ip' } }, { trustProxy: true }), 'unknown');
 });
 
 test('環境変数の数値は安全な範囲だけを受け入れる', () => {

@@ -1,6 +1,7 @@
 const GAME_SERVER_URL = ['localhost', '127.0.0.1'].includes(window.location.hostname)
   ? window.location.origin
   : 'https://overthinking-ebs.onrender.com';
+const RANKED_APP_URL = new URL('/ranked', GAME_SERVER_URL).toString();
 const TURN_TIME_LIMIT_MS = 90_000;
 const CHAT_MESSAGE_LIMIT = 50;
 const MAX_RENDERED_CHAT_MESSAGES = 100;
@@ -71,6 +72,13 @@ const elements = {
   creditModal: document.getElementById('credit-modal'),
   closeCreditButton: document.getElementById('close-credit-btn')
 };
+
+// The legacy board can remain on GitHub Pages, while account-bearing Ranked
+// always crosses to the same-origin backend that owns the secure session.
+const rankedModeLink = document.getElementById('ranked-mode-link');
+const leaderboardModeLink = document.getElementById('leaderboard-mode-link');
+if (rankedModeLink) rankedModeLink.href = RANKED_APP_URL;
+if (leaderboardModeLink) leaderboardModeLink.href = `${RANKED_APP_URL}#leaderboard`;
 
 const clientId = getOrCreateClientId();
 

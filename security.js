@@ -11,13 +11,15 @@ function normalizeIp(value) {
   return /^[0-9a-f:.]+$/i.test(candidate) ? candidate.toLowerCase() : '';
 }
 
-function getClientIp(request = {}) {
-  const forwarded = request.headers?.['x-forwarded-for'];
-  const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  const forwardedIp = typeof forwardedValue === 'string'
-    ? normalizeIp(forwardedValue.split(',')[0])
-    : '';
-  if (forwardedIp) return forwardedIp;
+function getClientIp(request = {}, { trustProxy = false } = {}) {
+  if (trustProxy) {
+    const forwarded = request.headers?.['x-forwarded-for'];
+    const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+    const forwardedIp = typeof forwardedValue === 'string'
+      ? normalizeIp(forwardedValue.split(',')[0])
+      : '';
+    if (forwardedIp) return forwardedIp;
+  }
 
   return normalizeIp(request.socket?.remoteAddress)
     || normalizeIp(request.connection?.remoteAddress)

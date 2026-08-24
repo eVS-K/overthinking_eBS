@@ -5,6 +5,8 @@ const { Server } = require('socket.io');
 const { createInitialHand, resolveRound } = require('./game-rules');
 const { createFixedWindowLimiter, getClientIp, readPositiveInteger } = require('./security');
 const { MAX_CHAT_MESSAGES_PER_SESSION, appendChatMessage } = require('./chat');
+const { registerRankedRoutes } = require('./ranked-api');
+const { createRankedRuntime, startRankedDeadlineSweeper } = require('./ranked-runtime');
 
 const app = express();
 const server = http.createServer(app);
@@ -31,6 +33,11 @@ const MAX_CHAT_SESSIONS_PER_ROOM = 128;
 const CHAT_SESSION_RETENTION_MS = 30 * 60_000;
 const ALLOW_ORIGINLESS_SOCKET_CONNECTIONS = process.env.ALLOW_ORIGINLESS_SOCKET_CONNECTIONS === 'true'
   && process.env.NODE_ENV !== 'production';
+const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
+
+function getRequestIp(request) {
+  return getClientIp(request, { trustProxy: TRUST_PROXY });
+}
 
 function normalizeOrigin(value) {
   if (typeof value !== 'string') return '';
@@ -94,7 +101,7 @@ function untrackSocket(ip) {
 
 function allowSocketRequest(request, callback) {
   const origin = request.headers.origin;
-  const ip = getClientIp(request);
+  const ip = getRequestIp(request);
   if (!isAllowedOrigin(origin)) return callback('Origin is not allowed', false);
   if (!handshakeLimiter.consume(ip)) return callback('Too many connection attempts', false);
   if (activeSocketCount(ip) >= MAX_SOCKETS_PER_IP) return callback('Too many active connections', false);
@@ -120,12 +127,23 @@ server.keepAliveTimeout = 5_000;
 
 app.disable('x-powered-by');
 app.use((request, response, next) => {
-  if (!httpRequestLimiter.consume(getClientIp(request))) {
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  response.setHeader('X-Frame-Options', 'DENY');
+  response.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  response.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://cdn.socket.io; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
+  );
+  if (process.env.NODE_ENV === 'production') {
+    response.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  if (!httpRequestLimiter.consume(getRequestIp(request))) {
     response.setHeader('Retry-After', '60');
     response.status(429).type('text').send('Too Many Requests');
     return;
   }
-  response.setHeader('X-Content-Type-Options', 'nosniff');
   next();
 });
 
@@ -133,8 +151,19 @@ app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'ind
 app.get(['/index.html', '/main.js', '/style.css'], (request, response) => {
   response.sendFile(path.join(__dirname, request.path));
 });
+// Ranked/Auth lives on the backend origin so the opaque session cookie is never
+// exposed to the GitHub Pages legacy client.  The legacy PvP entry point above
+// remains deliberately unchanged and continues to work without an account.
+app.get('/ranked', (_request, response) => response.sendFile(path.join(__dirname, 'ranked.html')));
+app.get(['/ranked.html', '/ranked-client.js', '/ranked.css'], (request, response) => {
+  response.sendFile(path.join(__dirname, request.path));
+});
 app.use('/images', express.static(path.join(__dirname, 'images')));
-app.get('/health', (_request, response) => response.json({ status: 'ok' }));
+const rankedRuntime = createRankedRuntime();
+const rankedDeadlineSweeper = startRankedDeadlineSweeper(rankedRuntime);
+registerRankedRoutes(app, { runtime: rankedRuntime, getClientIp: getRequestIp });
+
+app.get('/health', (_request, response) => response.json({ status: 'ok', ranked: rankedRuntime.available ? 'available' : 'unavailable' }));
 
 function normalizeText(value, maxLength, fallback = '') {
   if (typeof value !== 'string') return fallback;
@@ -445,7 +474,7 @@ function scheduleDisconnectRemoval(room, player) {
 }
 
 io.on('connection', (socket) => {
-  const clientIp = getClientIp(socket.handshake);
+  const clientIp = getRequestIp(socket.handshake);
   if (activeSocketCount(clientIp) >= MAX_SOCKETS_PER_IP) {
     socket.disconnect(true);
     return;
@@ -653,4 +682,8 @@ io.on('connection', (socket) => {
 });
 
 const port = Number(process.env.PORT) || 3000;
-server.listen(port, () => console.log(`Server listening on http://localhost:${port}`));
+if (require.main === module) {
+  server.listen(port, () => console.log(`Server listening on http://localhost:${port}`));
+}
+
+module.exports = { app, server, io, rankedRuntime, rankedDeadlineSweeper };

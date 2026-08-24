@@ -1,0 +1,43 @@
+# GitHub Pages is the legacy guest-PvP landing only.  Keep backend-only Ranked
+# code and generated solver material out of the Pages artifact; Render serves
+# the same repository directly and is unaffected by this Jekyll exclusion list.
+exclude:
+  - .env.example
+  - SECURITY.md
+  - auth.js
+  - auth.test.js
+  - chat.js
+  - chat.test.js
+  - database.js
+  - data
+  - game-rules.js
+  - game-rules.test.js
+  - migrations
+  - node_modules
+  - package-lock.json
+  - package.json
+  - ranked-api.js
+  - ranked-api.test.js
+  - ranked-client.js
+  - ranked-crypto.js
+  - ranked-engine.js
+  - ranked-engine.test.js
+  - ranked-rng.js
+  - ranked-rng.test.js
+  - ranked-runtime.js
+  - ranked-runtime.test.js
+  - ranked-service.js
+  - ranked-service.test.js
+  - ranked-solver.js
+  - ranked-solver.test.js
+  - ranked-values.js
+  - ranked-values.test.js
+  - ranked.css
+  - ranked.html
+  - rating.js
+  - rating.test.js
+  - scripts
+  - security.js
+  - security.test.js
+  - server.js
+  - server.test.js

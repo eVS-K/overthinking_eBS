@@ -1,1 +1,9 @@
+.env
+.env.*
+!.env.example
 node_modules/
+npm-debug.log*
+# Generated only on the backend build host. Keeping it out of the repository
+# prevents a root-published GitHub Pages deployment from exposing the solver
+# table as a static asset.
+data/ranked-values.v1.json
