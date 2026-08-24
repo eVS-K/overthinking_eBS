@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, createAuthMiddleware, parseCookies } = require('./auth');
+const { CSRF_COOKIE_NAME, OAUTH_TRANSACTION_COOKIE_NAME, SESSION_COOKIE_NAME, createAuthMiddleware, parseCookies } = require('./auth');
 const { createFixedWindowLimiter } = require('./security');
 const { RankedError } = require('./ranked-service');
 
@@ -95,7 +95,7 @@ function registerRankedRoutes(app, { runtime, getClientIp }) {
   router.get('/auth/login/:provider', authLoginLimit, asyncRoute(async (request, response) => {
     noStore(response);
     const result = await auth.beginOAuth(request.params.provider);
-    response.setHeader('Set-Cookie', auth.oauthStateCookie(result.state));
+    response.setHeader('Set-Cookie', auth.oauthTransactionCookie(result.transactionToken));
     response.redirect(303, result.authorizationUrl);
   }));
 
@@ -107,17 +107,19 @@ function registerRankedRoutes(app, { runtime, getClientIp }) {
     try {
       result = await auth.completeOAuth({
         code: request.query.code,
-        state: request.query.state,
-        oauthStateToken: cookies[OAUTH_STATE_COOKIE_NAME],
+        oauthTransactionToken: cookies[OAUTH_TRANSACTION_COOKIE_NAME],
         previousSessionToken: cookies[SESSION_COOKIE_NAME]
       });
     } catch (error) {
-      response.append('Set-Cookie', auth.clearOAuthStateCookie());
-      throw error;
+      response.append('Set-Cookie', auth.clearOAuthTransactionCookie());
+      // OAuth failures should return the user to the sign-in UI, not leave a
+      // raw provider error or a Private PvP-looking backend root page.
+      response.redirect(303, '/ranked?login=failed');
+      return;
     }
     response.append('Set-Cookie', auth.sessionCookie(result.sessionToken));
     response.append('Set-Cookie', auth.csrfCookie(result.csrfToken));
-    response.append('Set-Cookie', auth.clearOAuthStateCookie());
+    response.append('Set-Cookie', auth.clearOAuthTransactionCookie());
     response.redirect(303, '/ranked');
   }));
 

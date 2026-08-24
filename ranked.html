@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#090d1a">
   <meta name="robots" content="noindex">
   <title>OVERTHINKING — RANKED vs RANDOM</title>
-  <link rel="stylesheet" href="/style.css?v=ranked-v2">
-  <link rel="stylesheet" href="/ranked.css?v=ranked-v2">
-  <script src="/ranked-client.js?v=ranked-v2" defer></script>
+  <link rel="stylesheet" href="/style.css?v=ranked-v3">
+  <link rel="stylesheet" href="/ranked.css?v=ranked-v3">
+  <script src="/ranked-client.js?v=ranked-v3" defer></script>
 </head>
 <body class="ranked-page">
   <div class="atmosphere" aria-hidden="true">
@@ -22,6 +22,7 @@
     <nav class="ranked-nav" aria-label="モード選択">
       <a href="https://evs-k.github.io/overthinking_eBS/">PRIVATE PvP</a>
       <a href="#leaderboard">LEADERBOARD</a>
+      <span id="ranked-auth-status" class="ranked-auth-status hidden" role="status"><i aria-hidden="true"></i><span id="ranked-auth-status-label">SIGNED IN</span></span>
       <button id="ranked-logout" class="ranked-text-button hidden" type="button">LOG OUT</button>
     </nav>
   </header>
@@ -95,6 +96,7 @@
           <span class="section-label">MATCH COMPLETE</span>
           <h3 id="ranked-postgame-result">—</h3>
           <div class="ranked-postgame-grid">
+            <article><span>FINAL SCORE</span><strong id="ranked-postgame-score">—</strong></article>
             <article><span>DECISION PERFORMANCE</span><strong id="ranked-postgame-performance">—</strong></article>
             <article><span>TOTAL REGRET</span><strong id="ranked-postgame-regret">—</strong></article>
             <article><span>RATING</span><strong id="ranked-postgame-rating">—</strong></article>

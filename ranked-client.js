@@ -14,15 +14,15 @@
     timer: null,
     timeoutRefreshInFlight: false,
     csrfCookieName: '__Host-overthinking-csrf',
-    presentation: { gameId: null, roundKey: null, playerScore: null, aiScore: null }
+    presentation: { gameId: null, status: null, roundKey: null, playerScore: null, aiScore: null }
   };
   const elements = Object.fromEntries([
-    'ranked-loading', 'ranked-auth', 'ranked-auth-actions', 'ranked-auth-notice', 'ranked-dashboard', 'ranked-logout', 'ranked-start', 'ranked-empty-state', 'ranked-board',
+    'ranked-loading', 'ranked-auth', 'ranked-auth-actions', 'ranked-auth-notice', 'ranked-dashboard', 'ranked-logout', 'ranked-auth-status', 'ranked-auth-status-label', 'ranked-start', 'ranked-empty-state', 'ranked-board',
     'ranked-postgame', 'ranked-game-status', 'ranked-round', 'ranked-timer', 'ranked-player-score', 'ranked-ai-score',
     'ranked-ai-remaining', 'ranked-stack', 'ranked-player-hand', 'ranked-confirm', 'ranked-forfeit', 'ranked-instruction',
     'ranked-round-result', 'ranked-history-list', 'ranked-message', 'ranked-rating', 'ranked-rank', 'ranked-decision-ev',
     'ranked-games', 'ranked-record', 'ranked-provisional', 'ranked-provisional-note', 'ranked-handle-form', 'ranked-handle-input',
-    'ranked-postgame-result', 'ranked-postgame-performance', 'ranked-postgame-regret', 'ranked-postgame-rating',
+    'ranked-postgame-result', 'ranked-postgame-score', 'ranked-postgame-performance', 'ranked-postgame-regret', 'ranked-postgame-rating',
     'ranked-postgame-luck', 'ranked-seed-reveal', 'ranked-play-again', 'leaderboard-list', 'leaderboard-season', 'ranked-game-panel'
   ].map((id) => [id, document.getElementById(id)]));
 
@@ -31,10 +31,10 @@
     elements['ranked-message'].classList.toggle('has-message', Boolean(message));
   }
   function setHidden(element, hidden) { element.classList.toggle('hidden', hidden); }
-  function setAuthNotice(message = '') {
+  function setAuthNotice(message = '', { blockSignIn = false } = {}) {
     elements['ranked-auth-notice'].textContent = message;
     setHidden(elements['ranked-auth-notice'], !message);
-    setHidden(elements['ranked-auth-actions'], Boolean(message));
+    setHidden(elements['ranked-auth-actions'], Boolean(message) && blockSignIn);
   }
   function cookies() {
     const result = {};
@@ -90,6 +90,8 @@
     elements['ranked-provisional-note'].textContent = profile.provisional
       ? `PROVISIONAL — ${profile.provisionalProgress} / 50`
       : `LEADERBOARD ELIGIBLE · N_eff ${formatNumber(profile.effectiveSampleSize, 1)}`;
+    elements['ranked-auth-status-label'].textContent = `SIGNED IN · ${profile.handle}`;
+    setHidden(elements['ranked-auth-status'], false);
   }
 
   function createCard(cardId) {
@@ -138,20 +140,21 @@
 
   function updatePresentation(game) {
     if (!game) {
-      state.presentation = { gameId: null, roundKey: null, playerScore: null, aiScore: null };
-      return { isNewRound: false, playerGain: 0, aiGain: 0 };
+      state.presentation = { gameId: null, status: null, roundKey: null, playerScore: null, aiScore: null };
+      return { isNewRound: false, isNewFinale: false, playerGain: 0, aiGain: 0 };
     }
     const last = game.history?.[game.history.length - 1];
     const nextRoundKey = roundKey(game, last);
     if (state.presentation.gameId !== game.id) {
-      state.presentation = { gameId: game.id, roundKey: nextRoundKey, playerScore: game.playerScore, aiScore: game.aiScore };
-      return { isNewRound: false, playerGain: 0, aiGain: 0 };
+      state.presentation = { gameId: game.id, status: game.status, roundKey: nextRoundKey, playerScore: game.playerScore, aiScore: game.aiScore };
+      return { isNewRound: false, isNewFinale: false, playerGain: 0, aiGain: 0 };
     }
     const isNewRound = Boolean(last && state.presentation.roundKey !== nextRoundKey);
+    const isNewFinale = state.presentation.status === 'active' && game.status !== 'active';
     const playerGain = isNewRound ? Math.max(0, game.playerScore - state.presentation.playerScore) : 0;
     const aiGain = isNewRound ? Math.max(0, game.aiScore - state.presentation.aiScore) : 0;
-    state.presentation = { gameId: game.id, roundKey: nextRoundKey, playerScore: game.playerScore, aiScore: game.aiScore };
-    return { isNewRound, playerGain, aiGain };
+    state.presentation = { gameId: game.id, status: game.status, roundKey: nextRoundKey, playerScore: game.playerScore, aiScore: game.aiScore };
+    return { isNewRound, isNewFinale, playerGain, aiGain };
   }
 
   function showScoreAward(scoreElement, gainedCards) {
@@ -242,8 +245,11 @@
       elements['ranked-instruction'].textContent = state.pendingMove ? 'サーバーが勝負を確定しています…' : '一枚を選び、Random AIに挑んでください。';
       startTimer(game.deadline); return;
     }
-    elements['ranked-game-status'].textContent = game.status === 'forfeited' ? 'FORFEITED' : 'COMPLETE';
-    elements['ranked-postgame-result'].textContent = game.actualResult === 'win' ? 'YOU WIN' : game.actualResult === 'draw' ? 'DRAW' : game.actualResult === 'forfeit' ? 'FORFEITED' : 'RANDOM AI WINS';
+    const finalOutcome = game.actualResult === 'win' ? 'win' : game.actualResult === 'draw' ? 'draw' : game.actualResult === 'forfeit' ? 'forfeit' : 'loss';
+    elements['ranked-postgame'].className = `ranked-postgame match-${finalOutcome}${presentation.isNewFinale ? ' match-new' : ''}`;
+    elements['ranked-game-status'].textContent = game.status === 'forfeited' ? 'FORFEITED' : 'MATCH COMPLETE';
+    elements['ranked-postgame-result'].textContent = finalOutcome === 'win' ? 'MATCH WON' : finalOutcome === 'draw' ? 'MATCH DRAW' : finalOutcome === 'forfeit' ? 'MATCH FORFEITED' : 'MATCH LOST';
+    elements['ranked-postgame-score'].textContent = `${game.playerScore} — ${game.aiScore}`;
     elements['ranked-postgame-performance'].textContent = formatNumber(game.decisionPerformance, 4);
     elements['ranked-postgame-regret'].textContent = formatNumber(game.totalRegret, 4);
     elements['ranked-postgame-rating'].textContent = `${Math.round(game.ratingBefore ?? 1000)} → ${Math.round(game.ratingAfter ?? 1000)}`;
@@ -338,8 +344,12 @@
     } catch (error) {
       setHidden(elements['ranked-loading'], true);
       setHidden(elements['ranked-auth'], false);
+      setHidden(elements['ranked-auth-status'], true);
+      const loginFailed = new URL(window.location.href).searchParams.get('login') === 'failed';
       if (error.code === 'RANKED_UNAVAILABLE') {
-        setAuthNotice('Rankedは現在、準備中または一時停止中です。Guest PvPは通常どおり利用できます。');
+        setAuthNotice('Rankedは現在、準備中または一時停止中です。Guest PvPは通常どおり利用できます。', { blockSignIn: true });
+      } else if (loginFailed) {
+        setAuthNotice('サインインを完了できませんでした。もう一度GoogleまたはGitHubでお試しください。');
       } else if (error.status !== 401) {
         setAuthNotice('認証状態を確認できませんでした。時間をおいて再試行してください。');
         setMessage(error.message);

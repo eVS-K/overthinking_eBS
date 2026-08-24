@@ -6,6 +6,7 @@ const { RankedError } = require('./ranked-service');
 const { MemoryRankedRepository } = require('./ranked-repository');
 const {
   AuthService,
+  OAUTH_TRANSACTION_COOKIE_NAME,
   SESSION_COOKIE_NAME,
   createAuthConfig,
   isAuthConfigured,
@@ -42,8 +43,8 @@ function makeRuntime() {
 
 async function finishLogin(service, previousSessionToken) {
   const begin = await service.beginOAuth('github');
-  const state = new URL(begin.authorizationUrl).searchParams.get('state');
-  return service.completeOAuth({ code: 'short-lived-auth-code', state, oauthStateToken: state, previousSessionToken });
+  assert.equal(new URL(begin.authorizationUrl).searchParams.has('state'), false);
+  return service.completeOAuth({ code: 'short-lived-auth-code', oauthTransactionToken: begin.transactionToken, previousSessionToken });
 }
 
 test('OAuth PKCE callbackはprovider tokenを保持せずhash化したapp sessionへ交換する', async () => {
@@ -59,27 +60,25 @@ test('OAuth PKCE callbackはprovider tokenを保持せずhash化したapp sessio
   assert.equal((await repository.getProfile(USER_ID)).handle.includes('player-'), true);
 });
 
-test('OAuth stateは一回限りで、session rotationは古いsessionを失効させる', async () => {
+test('OAuth transactionは一回限りで、session rotationは古いsessionを失効させる', async () => {
   const { service } = makeRuntime();
   const first = await finishLogin(service);
   const begin = await service.beginOAuth('google');
-  const state = new URL(begin.authorizationUrl).searchParams.get('state');
-  const second = await service.completeOAuth({ code: 'another-code', state, oauthStateToken: state, previousSessionToken: first.sessionToken });
+  const second = await service.completeOAuth({ code: 'another-code', oauthTransactionToken: begin.transactionToken, previousSessionToken: first.sessionToken });
   await assert.rejects(service.authenticate(first.sessionToken), (error) => error instanceof RankedError && error.code === 'AUTH_REQUIRED');
   assert.equal((await service.authenticate(second.sessionToken)).userId, USER_ID);
-  await assert.rejects(service.completeOAuth({ code: 'another-code', state, oauthStateToken: state }), (error) => error instanceof RankedError && error.code === 'OAUTH_STATE_INVALID');
+  await assert.rejects(service.completeOAuth({ code: 'another-code', oauthTransactionToken: begin.transactionToken }), (error) => error instanceof RankedError && error.code === 'OAUTH_TRANSACTION_INVALID');
 });
 
-test('OAuth callbackは開始したbrowserのHttpOnly state cookieなしには完了しない', async () => {
+test('OAuth callbackは開始したbrowserのHttpOnly transaction cookieなしには完了しない', async () => {
   const { service } = makeRuntime();
   const begin = await service.beginOAuth('github');
-  const state = new URL(begin.authorizationUrl).searchParams.get('state');
   await assert.rejects(
-    service.completeOAuth({ code: 'short-lived-auth-code', state, oauthStateToken: 'x'.repeat(43) }),
-    (error) => error instanceof RankedError && error.code === 'OAUTH_STATE_INVALID'
+    service.completeOAuth({ code: 'short-lived-auth-code', oauthTransactionToken: 'x'.repeat(43) }),
+    (error) => error instanceof RankedError && error.code === 'OAUTH_TRANSACTION_INVALID'
   );
   // A rejected cross-browser callback does not consume the legitimate flow.
-  const completed = await service.completeOAuth({ code: 'short-lived-auth-code', state, oauthStateToken: state });
+  const completed = await service.completeOAuth({ code: 'short-lived-auth-code', oauthTransactionToken: begin.transactionToken });
   assert.equal((await service.authenticate(completed.sessionToken)).userId, USER_ID);
 });
 
@@ -108,13 +107,13 @@ test('production cookieは__Host session属性を満たし、CSRF値は認証coo
   runtime.service.config.cookieSecure = true;
   const sessionCookie = runtime.service.sessionCookie('a'.repeat(43));
   const csrfCookie = runtime.service.csrfCookie('b'.repeat(43));
-  const oauthCookie = runtime.service.oauthStateCookie('c'.repeat(43));
+  const oauthCookie = runtime.service.oauthTransactionCookie('c'.repeat(43));
   assert.match(sessionCookie, /^__Host-overthinking-session=/);
   assert.match(sessionCookie, /; Path=\//);
   assert.match(sessionCookie, /; Secure/);
   assert.match(sessionCookie, /; HttpOnly/);
   assert.doesNotMatch(csrfCookie, /HttpOnly/);
-  assert.match(oauthCookie, /^__Host-overthinking-oauth-state=/);
+  assert.match(oauthCookie, new RegExp(`^${OAUTH_TRANSACTION_COOKIE_NAME}=`));
   assert.match(oauthCookie, /; HttpOnly/);
   assert.equal(parseCookies(`${SESSION_COOKIE_NAME}=token; other=value`)[SESSION_COOKIE_NAME], 'token');
 });

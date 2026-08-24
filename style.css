@@ -92,7 +92,7 @@ button:focus-visible, input:focus-visible, a:focus-visible, .card:focus-visible 
 
 .mode-selector { width: min(100%, 610px); margin: 31px auto 0; padding: 13px; border: 1px solid var(--line); background: rgba(4, 9, 21, .34); }
 .mode-selector-label { display: block; margin: 0 0 9px; color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .15em; text-align: center; }
-.mode-selector-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.mode-selector-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .mode-option { display: grid; align-content: center; gap: 4px; min-height: 61px; min-width: 0; padding: 10px 9px; border: 1px solid transparent; color: var(--muted); background: rgba(28, 36, 63, .36); text-align: center; text-decoration: none; transition: border-color .2s ease, background .2s ease, color .2s ease, transform .2s ease; }
 .mode-option b { overflow: hidden; color: inherit; font-family: var(--mono); font-size: 10px; letter-spacing: .035em; text-overflow: ellipsis; white-space: nowrap; }
 .mode-option small { overflow: hidden; color: var(--faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }

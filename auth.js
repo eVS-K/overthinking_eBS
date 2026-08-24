@@ -5,7 +5,7 @@ const { RankedError } = require('./ranked-service');
 
 const SESSION_COOKIE_NAME = '__Host-overthinking-session';
 const CSRF_COOKIE_NAME = '__Host-overthinking-csrf';
-const OAUTH_STATE_COOKIE_NAME = '__Host-overthinking-oauth-state';
+const OAUTH_TRANSACTION_COOKIE_NAME = '__Host-overthinking-oauth-transaction';
 const OAUTH_TRANSACTION_TTL_MS = 10 * 60_000;
 const DEFAULT_SESSION_ABSOLUTE_MS = 30 * 24 * 60 * 60_000;
 const DEFAULT_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
@@ -100,12 +100,11 @@ function generatePkce() {
   return { codeVerifier, codeChallenge };
 }
 
-function makeAuthorizationUrl(config, { provider, state, codeChallenge, redirectUri }) {
+function makeAuthorizationUrl(config, { provider, codeChallenge, redirectUri }) {
   if (!['google', 'github'].includes(provider)) throw new RankedError(400, 'UNSUPPORTED_PROVIDER', 'Unsupported sign-in provider.');
   const url = new URL('/auth/v1/authorize', config.supabaseUrl);
   url.searchParams.set('provider', provider);
   url.searchParams.set('redirect_to', redirectUri);
-  url.searchParams.set('state', state);
   url.searchParams.set('code_challenge', codeChallenge);
   url.searchParams.set('code_challenge_method', 'S256');
   return url.toString();
@@ -169,42 +168,44 @@ class AuthService {
     if (!['google', 'github'].includes(provider)) {
       throw new RankedError(404, 'UNSUPPORTED_PROVIDER', 'Unsupported sign-in provider.');
     }
-    const state = base64urlRandom(32);
+    // Supabase owns the OAuth provider `state` value. Supplying our own state
+    // to its /authorize endpoint makes GoTrue reject the request as
+    // bad_oauth_state. The application uses this separate opaque transaction
+    // token only in its HttpOnly cookie and hashed database record.
+    const transactionToken = base64urlRandom(32);
     const pkce = generatePkce();
     const now = this.nowDate();
     const redirectUri = `${this.config.appOrigin}/auth/callback`;
     await this.repository.createOAuthTransaction({
-      stateHash: sha256(state),
+      stateHash: sha256(transactionToken),
       provider,
       codeVerifier: pkce.codeVerifier,
       redirectUri,
       expiresAt: new Date(now.getTime() + OAUTH_TRANSACTION_TTL_MS)
     });
     return {
-      state,
+      transactionToken,
       authorizationUrl: makeAuthorizationUrl(this.config, {
         provider,
-        state,
         codeChallenge: pkce.codeChallenge,
         redirectUri
       })
     };
   }
 
-  async completeOAuth({ code, state, oauthStateToken, previousSessionToken }) {
+  async completeOAuth({ code, oauthTransactionToken, previousSessionToken }) {
     this.assertConfigured();
-    if (typeof code !== 'string' || code.length < 1 || code.length > 2_048 || typeof state !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(state)) {
+    if (typeof code !== 'string' || code.length < 1 || code.length > 2_048) {
       throw new RankedError(400, 'INVALID_OAUTH_CALLBACK', 'The sign-in callback is invalid.');
     }
-    // Bind one-time server state to the initiating browser. PKCE alone binds a
-    // code to this backend, but not necessarily to the browser receiving the
-    // callback; this HttpOnly SameSite cookie prevents login-CSRF/session swap.
-    if (typeof oauthStateToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(oauthStateToken)
-      || !timingSafeEqualText(oauthStateToken, state)) {
-      throw new RankedError(400, 'OAUTH_STATE_INVALID', 'The sign-in flow could not be verified.');
+    // Bind this one-time PKCE transaction to the browser that started it.
+    // Supabase validates its own OAuth `state`; this HttpOnly cookie prevents
+    // cross-browser callback/session swap at the application boundary.
+    if (typeof oauthTransactionToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(oauthTransactionToken)) {
+      throw new RankedError(400, 'OAUTH_TRANSACTION_INVALID', 'The sign-in flow could not be verified.');
     }
-    const transaction = await this.repository.transaction((tx) => tx.consumeOAuthTransaction(sha256(state), this.nowDate()));
-    if (!transaction) throw new RankedError(400, 'OAUTH_STATE_INVALID', 'The sign-in flow expired or was already used.');
+    const transaction = await this.repository.transaction((tx) => tx.consumeOAuthTransaction(sha256(oauthTransactionToken), this.nowDate()));
+    if (!transaction) throw new RankedError(400, 'OAUTH_TRANSACTION_INVALID', 'The sign-in flow expired or was already used.');
     const identity = await fetchSupabaseUser(this.config, {
       authCode: code,
       codeVerifier: transaction.codeVerifier,
@@ -290,9 +291,9 @@ class AuthService {
     });
   }
 
-  oauthStateCookie(state) {
-    if (typeof state !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(state)) throw new TypeError('OAuth state is invalid');
-    return serializeCookie(OAUTH_STATE_COOKIE_NAME, state, {
+  oauthTransactionCookie(transactionToken) {
+    if (typeof transactionToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(transactionToken)) throw new TypeError('OAuth transaction is invalid');
+    return serializeCookie(OAUTH_TRANSACTION_COOKIE_NAME, transactionToken, {
       maxAge: Math.floor(OAUTH_TRANSACTION_TTL_MS / 1_000),
       httpOnly: true,
       secure: this.config.cookieSecure,
@@ -301,8 +302,8 @@ class AuthService {
     });
   }
 
-  clearOAuthStateCookie() {
-    return serializeCookie(OAUTH_STATE_COOKIE_NAME, '', {
+  clearOAuthTransactionCookie() {
+    return serializeCookie(OAUTH_TRANSACTION_COOKIE_NAME, '', {
       maxAge: 0,
       httpOnly: true,
       secure: this.config.cookieSecure,
@@ -315,7 +316,7 @@ class AuthService {
     return [
       serializeCookie(SESSION_COOKIE_NAME, '', { maxAge: 0, httpOnly: true, secure: this.config.cookieSecure, sameSite: 'Lax', path: '/' }),
       serializeCookie(CSRF_COOKIE_NAME, '', { maxAge: 0, httpOnly: false, secure: this.config.cookieSecure, sameSite: 'Lax', path: '/' }),
-      this.clearOAuthStateCookie()
+      this.clearOAuthTransactionCookie()
     ];
   }
 }
@@ -350,7 +351,7 @@ module.exports = {
   DEFAULT_SESSION_ABSOLUTE_MS,
   DEFAULT_SESSION_IDLE_MS,
   OAUTH_TRANSACTION_TTL_MS,
-  OAUTH_STATE_COOKIE_NAME,
+  OAUTH_TRANSACTION_COOKIE_NAME,
   SESSION_COOKIE_NAME,
   base64urlRandom,
   createAuthConfig,

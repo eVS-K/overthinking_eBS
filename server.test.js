@@ -27,5 +27,5 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
   assert.match(rankedHtml, /RANKED vs RANDOM/);
   assert.match(rankedHtml, /href="https:\/\/evs-k\.github\.io\/overthinking_eBS\/"/);
   assert.equal(oauthRecovery.status, 200);
-  assert.match(await oauthRecovery.text(), /HttpOnly state cookie/);
+  assert.match(await oauthRecovery.text(), /HttpOnly transaction cookie/);
 });

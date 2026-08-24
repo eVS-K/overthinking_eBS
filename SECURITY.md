@@ -52,9 +52,9 @@ an idempotency `requestId` UUID; the game id is in the path.
    Pages entry page links there automatically; the Ranked header's Private PvP
    and logo links deliberately return to the canonical GitHub Pages guest PvP
    URL, rather than the backend root. If an OAuth provider falls back to that
-   Pages URL with a short-lived `code` and `state`, the Pages client immediately
-   forwards them to the backend callback; the backend still enforces its
-   HttpOnly state cookie, PKCE, and one-time transaction validation.
+   Pages URL with a short-lived `code`, the Pages client immediately forwards
+   it to the backend callback; the backend still enforces its HttpOnly
+   transaction cookie, PKCE, and one-time transaction validation.
 
 An example configuration is included in [`.env.example`](.env.example). Do
 not commit a real `.env` file.
@@ -87,11 +87,12 @@ or a committed configuration file.
 
 - v1 supports only Supabase-mediated Google and GitHub OAuth Authorization
   Code + PKCE. This application does not store or implement passwords.
-- OAuth `state` is one-time and stored hashed, and is also bound to a short
-  lived HttpOnly SameSite browser cookie; PKCE verifier data expires after 10
-  minutes. This prevents a cross-browser login callback/session swap. The
-  provider access token is used only for the immediate user lookup and then
-  discarded.
+- Supabase owns the provider OAuth `state`; this application does not inject a
+  second value into Supabase's `/authorize` URL. A separate one-time opaque
+  transaction token is stored only as a hash and bound to a short-lived
+  HttpOnly SameSite browser cookie. Its PKCE verifier expires after 10 minutes,
+  preventing cross-browser callback/session swap. The provider access token is
+  used only for the immediate user lookup and then discarded.
 - After OAuth, the backend creates a new 256-bit opaque session and CSRF token.
   PostgreSQL stores only SHA-256 hashes of them.
 - Production responses set `__Host-overthinking-session` with `Secure`,

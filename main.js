@@ -76,9 +76,7 @@ const elements = {
 // The legacy board can remain on GitHub Pages, while account-bearing Ranked
 // always crosses to the same-origin backend that owns the secure session.
 const rankedModeLink = document.getElementById('ranked-mode-link');
-const leaderboardModeLink = document.getElementById('leaderboard-mode-link');
 if (rankedModeLink) rankedModeLink.href = RANKED_APP_URL;
-if (leaderboardModeLink) leaderboardModeLink.href = `${RANKED_APP_URL}#leaderboard`;
 
 const clientId = getOrCreateClientId();
 

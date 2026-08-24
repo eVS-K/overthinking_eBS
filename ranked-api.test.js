@@ -73,11 +73,12 @@ test('Ranked REST APIはauth/CSRF/Origin/ownership/idempotency/payload境界を�
 
   const login = await fetch(`${runtime.baseUrl}/auth/login/github`, { redirect: 'manual' });
   assert.equal(login.status, 303);
-  assert.match(login.headers.get('set-cookie'), /__Host-overthinking-oauth-state=.*HttpOnly/);
-  const oauthState = new URL(login.headers.get('location')).searchParams.get('state');
-  const crossBrowserCallback = await fetch(`${runtime.baseUrl}/auth/callback?code=short&state=${oauthState}`, { redirect: 'manual' });
-  assert.equal(crossBrowserCallback.status, 400);
-  assert.match(crossBrowserCallback.headers.get('set-cookie'), /__Host-overthinking-oauth-state=.*Max-Age=0/);
+  assert.match(login.headers.get('set-cookie'), /__Host-overthinking-oauth-transaction=.*HttpOnly/);
+  assert.equal(new URL(login.headers.get('location')).searchParams.has('state'), false);
+  const crossBrowserCallback = await fetch(`${runtime.baseUrl}/auth/callback?code=short`, { redirect: 'manual' });
+  assert.equal(crossBrowserCallback.status, 303);
+  assert.equal(crossBrowserCallback.headers.get('location'), '/ranked?login=failed');
+  assert.match(crossBrowserCallback.headers.get('set-cookie'), /__Host-overthinking-oauth-transaction=.*Max-Age=0/);
 
   const missingCsrf = await fetch(`${runtime.baseUrl}/api/ranked/games`, { method: 'POST', headers: { Cookie: headers().Cookie, Origin: 'http://ranked.test', 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(missingCsrf.status, 403);

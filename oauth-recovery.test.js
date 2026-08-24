@@ -23,12 +23,11 @@ function runRecovery(href) {
 }
 
 test('GitHub Pagesへ誤って戻ったOAuth callbackをbackend callbackへ安全に戻す', () => {
-  const state = 'a'.repeat(43);
-  const target = runRecovery(`https://evs-k.github.io/overthinking_eBS/?code=short-lived-code&state=${state}`);
-  assert.equal(target, `https://overthinking-ebs.onrender.com/auth/callback?code=short-lived-code&state=${state}`);
+  const target = runRecovery('https://evs-k.github.io/overthinking_eBS/?code=short-lived-code');
+  assert.equal(target, 'https://overthinking-ebs.onrender.com/auth/callback?code=short-lived-code');
 });
 
-test('OAuth callback以外のURLや不正stateはPrivate PvP画面を遷移させない', () => {
+test('OAuth callback以外のURLはPrivate PvP画面を遷移させず、OAuth errorはRankedへ戻す', () => {
   assert.equal(runRecovery('https://evs-k.github.io/overthinking_eBS/'), null);
-  assert.equal(runRecovery('https://evs-k.github.io/overthinking_eBS/?code=value&state=invalid'), null);
+  assert.equal(runRecovery('https://evs-k.github.io/overthinking_eBS/?error=invalid_request'), 'https://overthinking-ebs.onrender.com/ranked?login=failed');
 });
