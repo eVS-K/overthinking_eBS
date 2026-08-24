@@ -43,6 +43,9 @@ function appendChatMessage(room, { clientId, author, text, now = Date.now() }) {
   room.chatSequence += 1;
   const message = {
     id: `${now}-${room.chatSequence}`,
+    // Server-internal only. It lets each recipient know whether a message is
+    // theirs (for the quiet incoming-chat cue) without exposing a client id.
+    authorClientId: clientId,
     author,
     text: sanitized.text,
     sentAt: now

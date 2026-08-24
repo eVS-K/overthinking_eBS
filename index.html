@@ -5,10 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#090d1a">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
-  <link rel="stylesheet" href="style.css?v=ranked-entry-v4">
+  <link rel="stylesheet" href="style.css?v=pvp-v6">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="https://overthinking-ebs.onrender.com/socket.io/socket.io.js" defer></script>
-  <script src="main.js?v=ranked-entry-v5" defer></script>
+  <script src="socket-loader.js?v=pvp-v7"></script>
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true">
@@ -47,8 +46,20 @@
             <input type="text" id="playerNameInput" maxlength="20" autocomplete="nickname" placeholder="あなたの名前">
           </div>
 
+          <fieldset class="join-options">
+            <legend>入室方法</legend>
+            <label class="check-option" for="spectate-mode-input">
+              <input id="spectate-mode-input" type="checkbox">
+              <span><strong>観戦者として参加する</strong><small>カードは操作せず、両者の手札と対局を見守ります。</small></span>
+            </label>
+            <label class="check-option check-option-sub" for="auto-join-seat-input">
+              <input id="auto-join-seat-input" type="checkbox" disabled>
+              <span><strong>空席ができたら対戦者として参加する</strong><small>希望した場合だけ、自動で対戦者に切り替わります。</small></span>
+            </label>
+          </fieldset>
+
           <button id="joinBtn" class="primary-button" type="submit">
-            <span>対戦に入る</span><b aria-hidden="true">→</b>
+            <span>入室する</span><b aria-hidden="true">→</b>
           </button>
           <p id="login-message" class="form-message" role="status"></p>
         </form>
@@ -75,14 +86,15 @@
           <div class="room-chip"><span>ルーム</span><strong id="display-room-id">—</strong></div>
           <div class="header-actions">
             <button id="fullscreenBtn" class="fullscreen-button" type="button" aria-pressed="false" title="ゲーム画面を全画面で表示"><span aria-hidden="true">⛶</span><span>全画面</span></button>
-            <button id="homeBtn" class="home-button hidden" type="button"><span aria-hidden="true">⌂</span> ホームへ戻る</button>
+            <span id="spectator-mode-badge" class="spectator-mode-badge hidden">観戦中</span>
+            <button id="homeBtn" class="home-button hidden" type="button"><span aria-hidden="true">⌂</span><span id="home-btn-label">ホームへ戻る</span></button>
             <div id="connection-state" class="connection-state"><i></i><span>接続中</span></div>
           </div>
         </header>
 
-        <section class="player-zone opponent-zone" aria-label="対戦相手の手札">
+        <section id="opponent-zone" class="player-zone opponent-zone" aria-label="対戦相手の手札">
           <div class="player-header">
-            <div class="identity"><span class="suit-icon suit-heart" aria-hidden="true">♥</span><div><span class="side-label">対戦相手</span><strong id="opp-name">対戦相手を待機中</strong></div></div>
+            <div class="identity"><span class="suit-icon suit-heart" aria-hidden="true">♥</span><div><span id="opp-side-label" class="side-label">対戦相手</span><strong id="opp-name">対戦相手を待機中</strong></div></div>
             <div class="score-box"><span>獲得</span><strong id="opp-score">0</strong><small>枚</small></div>
           </div>
           <div id="opp-hand" class="card-row opponent-hand" aria-label="相手の手札"></div>
@@ -104,15 +116,17 @@
           <p id="status-message" class="status-msg" role="status">接続を確認しています…</p>
         </section>
 
-        <section class="player-zone my-zone" aria-label="あなたの手札">
+        <section id="my-zone" class="player-zone my-zone" aria-label="あなたの手札">
           <div class="player-header">
-            <div class="identity"><span class="suit-icon suit-spade" aria-hidden="true">♠</span><div><span class="side-label">あなた</span><strong id="my-name">あなた</strong></div></div>
+            <div class="identity"><span class="suit-icon suit-spade" aria-hidden="true">♠</span><div><span id="my-side-label" class="side-label">あなた</span><strong id="my-name">あなた</strong></div></div>
             <div class="score-box"><span>獲得</span><strong id="my-score">0</strong><small>枚</small></div>
           </div>
           <div id="my-hand" class="card-row my-hand" aria-label="あなたの手札"></div>
-          <div class="controls">
+          <div id="player-controls" class="controls">
             <button id="confirmBtn" class="primary-button confirm-button" type="button" disabled><span>この一枚で勝負する</span><b aria-hidden="true">↗</b></button>
-            <button id="restartBtn" class="secondary-button hidden" type="button">もう一度、読み合う</button>
+            <button id="surrenderBtn" class="surrender-button hidden" type="button">降参する</button>
+            <button id="restartBtn" class="secondary-button hidden" type="button">対戦開始に同意する</button>
+            <button id="switchSpectatorBtn" class="spectator-switch-button hidden" type="button">観戦者に切り替える</button>
           </div>
         </section>
       </main>
@@ -125,10 +139,10 @@
         <section class="chat-panel" aria-labelledby="chat-title">
           <div class="chat-heading">
             <div><span class="side-label">ルームチャット</span><h3 id="chat-title">ルームチャット</h3></div>
-            <span id="chat-count" class="chat-count">0 / 50</span>
+            <div class="chat-heading-actions"><button id="chat-sound-toggle" class="chat-sound-toggle" type="button" aria-pressed="true">通知音 オン</button><span id="chat-count" class="chat-count">0 / 50</span></div>
           </div>
           <div id="chat-list" class="chat-list" role="log" aria-live="polite" aria-relevant="additions text">
-            <p class="chat-empty">対戦相手にメッセージを送れます。</p>
+            <p class="chat-empty">ルームの参加者にメッセージを送れます。</p>
           </div>
           <form id="chat-form" class="chat-form" novalidate>
             <label class="sr-only" for="chat-input">メッセージ</label>

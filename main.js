@@ -18,6 +18,8 @@ const socket = window.io
 const savedSession = getSavedSession();
 let currentRoomId = savedSession?.roomId || '';
 let myPlayerName = savedSession?.playerName || '';
+let joinAsSpectator = Boolean(savedSession?.joinAsSpectator);
+let autoJoinWhenSeatAvailable = Boolean(savedSession?.autoJoinWhenSeatAvailable);
 let mySelectedCardId = null;
 let committedCardId = null;
 let joinedRoom = Boolean(savedSession);
@@ -33,6 +35,9 @@ let pendingChatText = '';
 let chatSendTimeout = null;
 let chatRequestId = 0;
 let chatReady = false;
+let chatSoundEnabled = readChatSoundPreference();
+let chatAudioContext = null;
+let lastChatSoundAt = 0;
 
 const elements = {
   loginScreen: document.getElementById('login-screen'),
@@ -40,11 +45,15 @@ const elements = {
   joinForm: document.getElementById('join-form'),
   roomIdInput: document.getElementById('roomIdInput'),
   playerNameInput: document.getElementById('playerNameInput'),
+  spectateModeInput: document.getElementById('spectate-mode-input'),
+  autoJoinSeatInput: document.getElementById('auto-join-seat-input'),
   joinButton: document.getElementById('joinBtn'),
   loginMessage: document.getElementById('login-message'),
   roomId: document.getElementById('display-room-id'),
   fullscreenButton: document.getElementById('fullscreenBtn'),
   homeButton: document.getElementById('homeBtn'),
+  homeButtonLabel: document.getElementById('home-btn-label'),
+  spectatorModeBadge: document.getElementById('spectator-mode-badge'),
   connectionState: document.getElementById('connection-state'),
   round: document.getElementById('current-round'),
   timer: document.getElementById('timer-count'),
@@ -53,19 +62,27 @@ const elements = {
   status: document.getElementById('status-message'),
   revealArea: document.getElementById('reveal-area'),
   myName: document.getElementById('my-name'),
+  mySideLabel: document.getElementById('my-side-label'),
   myScore: document.getElementById('my-score'),
   myHand: document.getElementById('my-hand'),
   opponentName: document.getElementById('opp-name'),
+  opponentSideLabel: document.getElementById('opp-side-label'),
   opponentScore: document.getElementById('opp-score'),
   opponentHand: document.getElementById('opp-hand'),
+  opponentZone: document.getElementById('opponent-zone'),
+  myZone: document.getElementById('my-zone'),
+  playerControls: document.getElementById('player-controls'),
   confirmButton: document.getElementById('confirmBtn'),
+  surrenderButton: document.getElementById('surrenderBtn'),
   restartButton: document.getElementById('restartBtn'),
+  switchSpectatorButton: document.getElementById('switchSpectatorBtn'),
   history: document.getElementById('history-list'),
   spectatorCount: document.getElementById('spectator-count'),
   chatList: document.getElementById('chat-list'),
   chatForm: document.getElementById('chat-form'),
   chatInput: document.getElementById('chat-input'),
   chatSendButton: document.getElementById('chat-send-btn'),
+  chatSoundToggle: document.getElementById('chat-sound-toggle'),
   chatCount: document.getElementById('chat-count'),
   chatFeedback: document.getElementById('chat-feedback'),
   creditButton: document.getElementById('credit-btn'),
@@ -98,7 +115,14 @@ function getSavedSession() {
   try {
     const roomId = window.sessionStorage.getItem('overthinking-room-id');
     const playerName = window.sessionStorage.getItem('overthinking-player-name');
-    return roomId ? { roomId, playerName: playerName || 'プレイヤー' } : null;
+    return roomId
+      ? {
+        roomId,
+        playerName: playerName || 'プレイヤー',
+        joinAsSpectator: window.sessionStorage.getItem('overthinking-join-as-spectator') === 'true',
+        autoJoinWhenSeatAvailable: window.sessionStorage.getItem('overthinking-auto-join-seat') === 'true'
+      }
+      : null;
   } catch {
     return null;
   }
@@ -108,6 +132,8 @@ function saveSession() {
   try {
     window.sessionStorage.setItem('overthinking-room-id', currentRoomId);
     window.sessionStorage.setItem('overthinking-player-name', myPlayerName);
+    window.sessionStorage.setItem('overthinking-join-as-spectator', String(joinAsSpectator));
+    window.sessionStorage.setItem('overthinking-auto-join-seat', String(autoJoinWhenSeatAvailable));
   } catch {
     // ストレージが使えない環境でも、同一接続中の対戦は継続する。
   }
@@ -117,6 +143,8 @@ function clearSavedSession() {
   try {
     window.sessionStorage.removeItem('overthinking-room-id');
     window.sessionStorage.removeItem('overthinking-player-name');
+    window.sessionStorage.removeItem('overthinking-join-as-spectator');
+    window.sessionStorage.removeItem('overthinking-auto-join-seat');
   } catch {
     // ストレージが使えない環境では何もしない。
   }
@@ -172,8 +200,16 @@ function emitJoinRequest() {
   socket.emit('join_room', {
     roomId: currentRoomId,
     playerName: myPlayerName,
-    clientId
+    clientId,
+    joinAsSpectator,
+    autoJoinWhenSeatAvailable
   });
+}
+
+function syncSpectatorJoinOptions() {
+  const isSpectatorOption = elements.spectateModeInput.checked;
+  elements.autoJoinSeatInput.disabled = !isSpectatorOption;
+  if (!isSpectatorOption) elements.autoJoinSeatInput.checked = false;
 }
 
 function resetTimer() {
@@ -294,7 +330,35 @@ function showScoreAward(scoreElement, gainedCards) {
   window.setTimeout(() => award.remove(), 1_150);
 }
 
-function renderReveal(lastRound) {
+function renderReveal(lastRound, finishReason = null, winnerName = null) {
+  if (finishReason?.type === 'forfeit') {
+    const resultId = `forfeit:${finishReason.id || `${finishReason.forfeitedBy}:${winnerName}`}`;
+    const isNewResult = resultId !== lastRoundId;
+    lastRoundId = resultId;
+    const me = currentRoom?.players.find((player) => player.id === socket?.id);
+    const isSpectator = Boolean(currentRoom?.viewer?.isSpectator);
+    const outcomeClass = isSpectator
+      ? 'draw'
+      : finishReason.forfeitedBy === me?.name ? 'loss' : 'win';
+    elements.revealArea.className = `reveal-area outcome-${outcomeClass} reveal-forfeit${isNewResult ? ' reveal-new' : ''}`;
+
+    const result = document.createElement('div');
+    result.className = 'forfeit-result';
+    const label = document.createElement('span');
+    label.textContent = 'ゲーム終了';
+    const title = document.createElement('strong');
+    title.textContent = '降参により決着';
+    const detail = document.createElement('p');
+    detail.textContent = `${finishReason.forfeitedBy} が降参しました。${winnerName || '対戦相手'} の勝ちです。`;
+    result.append(label, title, detail);
+    elements.revealArea.replaceChildren(result);
+    if (isNewResult) {
+      playResultEffects(outcomeClass);
+      window.setTimeout(() => elements.revealArea.classList.remove('reveal-new'), 600);
+    }
+    return;
+  }
+
   if (!lastRound) {
     elements.revealArea.className = 'reveal-area empty';
     const placeholder = document.createElement('span');
@@ -453,8 +517,59 @@ function normalizeIncomingChatMessage(value) {
     id: value.id.slice(0, 80),
     author,
     text,
-    sentAt: Number.isFinite(value.sentAt) ? value.sentAt : 0
+    sentAt: Number.isFinite(value.sentAt) ? value.sentAt : 0,
+    isOwn: value.isOwn === true
   };
+}
+
+function readChatSoundPreference() {
+  try {
+    return window.sessionStorage.getItem('overthinking-chat-sound') !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+function updateChatSoundToggle() {
+  elements.chatSoundToggle.setAttribute('aria-pressed', String(chatSoundEnabled));
+  setText(elements.chatSoundToggle, chatSoundEnabled ? '通知音 オン' : '通知音 オフ');
+}
+
+function primeChatSound() {
+  if (!chatSoundEnabled || chatAudioContext) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  try {
+    chatAudioContext = new AudioContextClass();
+    chatAudioContext.resume?.().catch(() => {});
+  } catch {
+    chatAudioContext = null;
+  }
+}
+
+function playIncomingChatSound() {
+  if (!chatSoundEnabled || !chatAudioContext) return;
+  const now = Date.now();
+  // Keep a busy chat pleasant: one quiet cue at most every 1.2 seconds.
+  if (now - lastChatSoundAt < 1_200) return;
+  lastChatSoundAt = now;
+  try {
+    const start = chatAudioContext.currentTime;
+    const oscillator = chatAudioContext.createOscillator();
+    const gain = chatAudioContext.createGain();
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(660, start);
+    oscillator.frequency.exponentialRampToValueAtTime(820, start + 0.075);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.025, start + 0.014);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.11);
+    oscillator.connect(gain).connect(chatAudioContext.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 0.12);
+  } catch {
+    // Browsers may suspend audio in the background. The chat itself remains
+    // fully usable without sound.
+  }
 }
 
 function formatChatTime(sentAt) {
@@ -470,7 +585,7 @@ function renderChatMessages() {
   if (!chatMessages.length) {
     const empty = document.createElement('p');
     empty.className = 'chat-empty';
-    empty.textContent = '対戦相手にメッセージを送れます。';
+    empty.textContent = 'ルームの参加者にメッセージを送れます。';
     elements.chatList.append(empty);
     return;
   }
@@ -511,6 +626,7 @@ function appendChatMessage(message) {
   if (!safeMessage || chatMessages.some((item) => item.id === safeMessage.id)) return;
   chatMessages = [...chatMessages, safeMessage].slice(-MAX_RENDERED_CHAT_MESSAGES);
   renderChatMessages();
+  if (!safeMessage.isOwn) playIncomingChatSound();
 }
 
 function resetChat() {
@@ -535,11 +651,23 @@ function renderStatus(room, me, opponent) {
     return;
   }
   if (room.viewer.isSpectator) {
-    setText(elements.status, '観戦中です。手札と勝負の行方を見守れます。');
+    setText(
+      elements.status,
+      room.viewer.autoJoinWhenSeatAvailable
+        ? '観戦中です。空席ができた場合は対戦者として参加します。'
+        : '観戦中です。両者の手札と勝負の行方を見守れます。'
+    );
     return;
   }
   if (room.gameState === 'waiting') {
-    setText(elements.status, '対戦相手の入室を待っています…');
+    const bothPlayersReady = room.players.length === 2 && room.players.every((player) => player.connected);
+    if (!bothPlayersReady) {
+      setText(elements.status, '対戦相手の入室を待っています…');
+    } else if (room.viewer.hasAgreedToStart) {
+      setText(elements.status, '対戦開始に同意しました。相手の同意を待っています…');
+    } else {
+      setText(elements.status, '両者が「対戦開始に同意する」を押すと、対局が始まります。');
+    }
   } else if (room.gameState === 'reconnecting') {
     setText(elements.status, '対戦相手の再接続を待っています。制限時間は停止中です。');
   } else if (room.gameState === 'playing') {
@@ -548,9 +676,15 @@ function renderStatus(room, me, opponent) {
       : '一枚を選び、相手の思考を読んでください。');
   } else if (room.gameState === 'finished') {
     const opponentDisconnected = opponent?.connected === false;
-    setText(elements.status, opponentDisconnected
-      ? '対戦相手の再接続を待っています。'
-      : `ゲーム終了 — ${room.winner}`);
+    if (opponentDisconnected) {
+      setText(elements.status, '対戦相手の再接続を待っています。');
+    } else if (room.finishReason?.type === 'forfeit') {
+      setText(elements.status, `ゲーム終了 — ${room.finishReason.forfeitedBy} の降参により ${room.winner} の勝ちです。`);
+    } else if (room.players.length === 2 && room.players.every((player) => player.connected) && room.viewer.hasAgreedToStart) {
+      setText(elements.status, '再戦に同意しました。相手の同意を待っています…');
+    } else {
+      setText(elements.status, `ゲーム終了 — ${room.winner}。再戦する場合は「再戦に同意する」を押してください。`);
+    }
   }
 }
 
@@ -573,7 +707,8 @@ function renderRoom(room) {
     spectatorCount: room.spectatorCount ?? room.spectators?.length ?? 0,
     viewer: room.viewer || {
       isSpectator: !room.players.some((player) => player.id === socket?.id),
-      hasConfirmedSelection: Boolean(room.selections?.[socket?.id])
+      hasConfirmedSelection: Boolean(room.selections?.[socket?.id]),
+      hasAgreedToStart: false
     }
   };
   currentRoom = roomView;
@@ -582,43 +717,71 @@ function renderRoom(room) {
   setText(elements.round, roomView.round);
   setText(elements.stack, roomView.stack.length);
 
-  const me = roomView.players.find((player) => player.id === socket?.id);
-  const opponent = roomView.players.find((player) => player.id !== socket?.id);
+  const isSpectator = roomView.viewer.isSpectator;
+  const me = isSpectator ? null : roomView.players.find((player) => player.id === socket?.id);
+  const opponent = isSpectator ? null : roomView.players.find((player) => player.id !== socket?.id);
+  const spadePlayer = roomView.players.find((player) => player.suit === '♠');
+  const heartPlayer = roomView.players.find((player) => player.suit === '♥');
+  const displayedBottomPlayer = isSpectator ? spadePlayer : me;
+  const displayedTopPlayer = isSpectator ? heartPlayer : opponent;
   const isInteractive = Boolean(me && !roomView.viewer.isSpectator && roomView.gameState === 'playing' && !roomView.viewer.hasConfirmedSelection);
+  if (isSpectator) {
+    mySelectedCardId = null;
+    committedCardId = null;
+  }
 
-  if (me) {
-    if (!me.hand.some((card) => card.id === mySelectedCardId)) mySelectedCardId = null;
-    if (!me.hand.some((card) => card.id === committedCardId)) committedCardId = null;
-    setText(elements.myName, me.name);
-    updateScore(elements.myScore, me);
-    renderHand(elements.myHand, me.hand, 'spade', isInteractive);
+  if (displayedBottomPlayer) {
+    if (!isSpectator && !displayedBottomPlayer.hand.some((card) => card.id === mySelectedCardId)) mySelectedCardId = null;
+    if (!isSpectator && !displayedBottomPlayer.hand.some((card) => card.id === committedCardId)) committedCardId = null;
+    setText(elements.myName, displayedBottomPlayer.name);
+    updateScore(elements.myScore, displayedBottomPlayer);
+    renderHand(elements.myHand, displayedBottomPlayer.hand, 'spade', isInteractive);
   } else {
     mySelectedCardId = null;
-    setText(elements.myName, '観戦者');
-    setText(elements.myScore, '—');
+    setText(elements.myName, isSpectator ? '♠側を待機中' : 'あなた');
+    setText(elements.myScore, isSpectator ? '—' : '0');
     elements.myHand.replaceChildren();
   }
 
-  if (opponent) {
-    setText(elements.opponentName, opponent.connected === false ? `${opponent.name}（再接続中）` : opponent.name);
-    updateScore(elements.opponentScore, opponent);
-    renderHand(elements.opponentHand, opponent.hand, 'heart', false);
+  if (displayedTopPlayer) {
+    setText(elements.opponentName, displayedTopPlayer.connected === false ? `${displayedTopPlayer.name}（再接続中）` : displayedTopPlayer.name);
+    updateScore(elements.opponentScore, displayedTopPlayer);
+    renderHand(elements.opponentHand, displayedTopPlayer.hand, 'heart', false);
   } else {
-    setText(elements.opponentName, '対戦相手を待機中');
+    setText(elements.opponentName, isSpectator ? '♥側を待機中' : '対戦相手を待機中');
     setText(elements.opponentScore, '0');
     elements.opponentHand.replaceChildren();
   }
 
+  setText(elements.mySideLabel, isSpectator ? '観戦中・♠側' : 'あなた');
+  setText(elements.opponentSideLabel, isSpectator ? '観戦中・♥側' : '対戦相手');
+  elements.myZone.setAttribute('aria-label', isSpectator ? '♠側プレイヤーの手札' : 'あなたの手札');
+  elements.opponentZone.setAttribute('aria-label', isSpectator ? '♥側プレイヤーの手札' : '対戦相手の手札');
+
   const spectatorLabel = roomView.spectatorCount ? `観戦 ${roomView.spectatorCount}` : '';
   setText(elements.spectatorCount, spectatorLabel);
   elements.spectatorCount.classList.toggle('hidden', !spectatorLabel);
-  elements.confirmButton.classList.toggle('hidden', roomView.gameState === 'finished' || roomView.viewer.isSpectator);
-  elements.restartButton.classList.toggle('hidden', roomView.gameState !== 'finished' || roomView.viewer.isSpectator);
-  elements.restartButton.disabled = Boolean(opponent && opponent.connected === false);
-  elements.homeButton.classList.toggle('hidden', !['waiting', 'finished'].includes(roomView.gameState));
+  const playerCanAct = !isSpectator && Boolean(me);
+  const canSurrender = playerCanAct && ['playing', 'reconnecting'].includes(roomView.gameState);
+  const bothPlayersReady = roomView.players.length === 2 && roomView.players.every((player) => player.connected);
+  const canAgreeToStart = playerCanAct
+    && ['waiting', 'finished'].includes(roomView.gameState)
+    && bothPlayersReady;
+  elements.confirmButton.classList.toggle('hidden', !playerCanAct || roomView.gameState !== 'playing');
+  elements.surrenderButton.classList.toggle('hidden', !canSurrender);
+  elements.restartButton.classList.toggle('hidden', !canAgreeToStart);
+  elements.switchSpectatorButton.classList.toggle('hidden', !playerCanAct);
+  elements.playerControls.classList.toggle('hidden', !playerCanAct);
+  setText(elements.restartButton, roomView.gameState === 'finished' ? '再戦に同意する' : '対戦開始に同意する');
+  elements.restartButton.disabled = !socket?.connected || roomView.viewer.hasAgreedToStart;
+  elements.surrenderButton.disabled = !socket?.connected;
+  elements.switchSpectatorButton.disabled = !socket?.connected;
+  elements.spectatorModeBadge.classList.toggle('hidden', !isSpectator);
+  elements.homeButton.classList.toggle('hidden', !isSpectator && !['waiting', 'finished'].includes(roomView.gameState));
+  setText(elements.homeButtonLabel, isSpectator ? '観戦をやめる' : 'ホームへ戻る');
 
   renderTimer(roomView);
-  renderReveal(roomView.lastRound || roomView.history?.[roomView.history.length - 1]);
+  renderReveal(roomView.lastRound || roomView.history?.[roomView.history.length - 1], roomView.finishReason, roomView.winner);
   renderHistory(roomView.history);
   renderStatus(roomView, me, opponent);
   updateConfirmButton();
@@ -642,6 +805,8 @@ elements.joinForm.addEventListener('submit', (event) => {
   event.preventDefault();
   currentRoomId = elements.roomIdInput.value.trim();
   myPlayerName = elements.playerNameInput.value.trim() || 'プレイヤー';
+  joinAsSpectator = elements.spectateModeInput.checked;
+  autoJoinWhenSeatAvailable = joinAsSpectator && elements.autoJoinSeatInput.checked;
   mySelectedCardId = null;
 
   if (!currentRoomId) {
@@ -677,13 +842,46 @@ elements.confirmButton.addEventListener('click', () => {
 });
 
 elements.restartButton.addEventListener('click', () => {
-  if (socket && currentRoomId) socket.emit('restart_game', { roomId: currentRoomId });
+  if (socket && currentRoomId) socket.emit('agree_to_start', { roomId: currentRoomId });
+});
+
+elements.surrenderButton.addEventListener('click', () => {
+  if (!socket?.connected || !currentRoomId || !currentRoom || currentRoom.viewer.isSpectator) return;
+  if (!window.confirm('降参するとこのゲームは終了し、相手の勝ちになります。降参しますか？')) return;
+  socket.emit('forfeit_game', { roomId: currentRoomId });
+});
+
+elements.switchSpectatorButton.addEventListener('click', () => {
+  if (!socket?.connected || !currentRoomId || !currentRoom || currentRoom.viewer.isSpectator) return;
+  const activeGame = ['playing', 'reconnecting'].includes(currentRoom.gameState);
+  const message = activeGame
+    ? '観戦者に切り替えると、現在の対局は中断されます。観戦者に切り替えますか？'
+    : '観戦者に切り替えますか？';
+  if (!window.confirm(message)) return;
+  socket.emit('switch_to_spectator', { roomId: currentRoomId });
+});
+
+elements.spectateModeInput.addEventListener('change', syncSpectatorJoinOptions);
+elements.autoJoinSeatInput.addEventListener('change', () => {
+  if (elements.autoJoinSeatInput.disabled) elements.autoJoinSeatInput.checked = false;
 });
 
 elements.chatInput.addEventListener('input', () => {
   const normalized = normalizeChatInput(elements.chatInput.value);
   if (elements.chatInput.value !== normalized) elements.chatInput.value = normalized;
   updateChatControls();
+});
+
+elements.chatSoundToggle.addEventListener('click', () => {
+  chatSoundEnabled = !chatSoundEnabled;
+  try {
+    window.sessionStorage.setItem('overthinking-chat-sound', chatSoundEnabled ? 'on' : 'off');
+  } catch {
+    // Sound preference is a convenience only; private-mode storage must not
+    // affect gameplay or chat availability.
+  }
+  if (chatSoundEnabled) primeChatSound();
+  updateChatSoundToggle();
 });
 
 elements.chatForm.addEventListener('submit', (event) => {
@@ -742,6 +940,12 @@ elements.chatForm.addEventListener('submit', (event) => {
 elements.fullscreenButton.addEventListener('click', toggleFullscreen);
 document.addEventListener('fullscreenchange', updateFullscreenButton);
 updateFullscreenButton();
+elements.spectateModeInput.checked = joinAsSpectator;
+elements.autoJoinSeatInput.checked = autoJoinWhenSeatAvailable;
+syncSpectatorJoinOptions();
+updateChatSoundToggle();
+window.addEventListener('pointerdown', primeChatSound, { once: true, passive: true });
+window.addEventListener('keydown', primeChatSound, { once: true });
 
 elements.homeButton.addEventListener('click', () => {
   const roomIdToLeave = currentRoomId;

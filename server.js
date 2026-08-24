@@ -149,7 +149,7 @@ app.use((request, response, next) => {
   response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   response.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
   );
   if (process.env.NODE_ENV === 'production') {
     response.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
@@ -163,7 +163,7 @@ app.use((request, response, next) => {
 });
 
 app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'index.html')));
-app.get(['/index.html', '/main.js', '/oauth-recovery.js', '/style.css'], (request, response) => {
+app.get(['/index.html', '/main.js', '/oauth-recovery.js', '/socket-loader.js', '/style.css'], (request, response) => {
   response.sendFile(path.join(__dirname, request.path));
 });
 // Ranked/Auth lives on the backend origin so the opaque session cookie is never
@@ -185,6 +185,45 @@ function normalizeText(value, maxLength, fallback = '') {
   return value.trim().replace(/[\u0000-\u001F\u007F]/g, '').replace(/\p{Cf}/gu, '').slice(0, maxLength) || fallback;
 }
 
+function normalizeJoinPreferences(payload) {
+  // Spectating and automatic seat-taking are explicit opt-ins.  Do not treat
+  // truthy strings from an untrusted client as consent to change roles.
+  const joinAsSpectator = payload?.joinAsSpectator === true;
+  return {
+    joinAsSpectator,
+    autoJoinWhenSeatAvailable: joinAsSpectator && payload?.autoJoinWhenSeatAvailable === true
+  };
+}
+
+function createPlayer({ id, clientId, name }, seatIndex) {
+  return {
+    id,
+    clientId,
+    name,
+    suit: seatIndex === 0 ? '♠' : '♥',
+    hand: createInitialHand(),
+    score: 0,
+    connected: true
+  };
+}
+
+function promoteVolunteerSpectators(room, getSocketById = (socketId) => io.sockets.sockets.get(socketId)) {
+  let promoted = 0;
+  while (room.players.length < 2) {
+    const spectatorIndex = room.spectators.findIndex((spectator) => spectator.autoJoinWhenSeatAvailable === true);
+    if (spectatorIndex < 0) break;
+    const spectator = room.spectators[spectatorIndex];
+    const spectatorSocket = getSocketById(spectator.id);
+    // A disconnected spectator should have been removed by the socket handler,
+    // but discard a stale entry rather than blocking volunteers behind it.
+    room.spectators.splice(spectatorIndex, 1);
+    if (!spectatorSocket) continue;
+    room.players.push(createPlayer(spectator, room.players.length));
+    promoted += 1;
+  }
+  return promoted;
+}
+
 function createRoom(id) {
   return {
     id,
@@ -199,6 +238,10 @@ function createRoom(id) {
     deadline: 0,
     pausedRemainingMs: TURN_TIME_LIMIT_MS,
     winner: null,
+    finishReason: null,
+    // A match starts only after both occupied player seats opt in. Client ids
+    // survive reconnects, unlike Socket.IO ids.
+    startAgreements: new Set(),
     needsFreshGame: false,
     chat: [],
     chatUsage: new Map(),
@@ -238,6 +281,8 @@ function resetGame(room) {
   room.deadline = 0;
   room.pausedRemainingMs = TURN_TIME_LIMIT_MS;
   room.winner = null;
+  room.finishReason = null;
+  room.startAgreements = new Set();
   room.players.forEach((player) => {
     player.hand = createInitialHand();
     player.score = 0;
@@ -287,7 +332,9 @@ function pauseForReconnect(room) {
 
 function createRoomView(room, socketId) {
   const player = room.players.find((candidate) => candidate.id === socketId);
-  const isSpectator = !player;
+  const spectator = room.spectators.find((candidate) => candidate.id === socketId);
+  const isSpectator = Boolean(spectator);
+  const startAgreements = room.startAgreements || new Set();
 
   return {
     id: room.id,
@@ -307,11 +354,23 @@ function createRoomView(room, socketId) {
     gameState: room.gameState,
     deadline: room.deadline,
     winner: room.winner,
+    finishReason: room.finishReason,
+    startReadyCount: room.players.filter((candidate) => startAgreements.has(candidate.clientId)).length,
     viewer: {
       isSpectator,
-      hasConfirmedSelection: Boolean(player && room.selections[player.id])
+      hasConfirmedSelection: Boolean(player && room.selections[player.id]),
+      hasAgreedToStart: Boolean(player && startAgreements.has(player.clientId)),
+      autoJoinWhenSeatAvailable: Boolean(spectator?.autoJoinWhenSeatAvailable)
     }
   };
+}
+
+function startWhenBothPlayersAgree(room) {
+  if (!room || room.players.length !== 2 || !room.players.every((player) => player.connected)) return false;
+  const agreements = room.startAgreements || new Set();
+  if (!room.players.every((player) => agreements.has(player.clientId))) return false;
+  startNewGame(room);
+  return room.gameState === 'playing';
 }
 
 function broadcastRoom(room) {
@@ -398,7 +457,7 @@ function emitChatState(socket, room, clientId) {
   pruneChatUsage(room);
   const usage = room.chatUsage.get(clientId);
   socket.emit('chat_state', {
-    messages: room.chat,
+    messages: room.chat.map(({ authorClientId, ...message }) => ({ ...message, isOwn: clientId === authorClientId })),
     sent: usage?.count || 0,
     limit: MAX_CHAT_MESSAGES_PER_SESSION
   });
@@ -470,34 +529,51 @@ function processTurn(room) {
   broadcastRoom(room);
 }
 
-function resetAfterPlayerDeparture(room, playerIndex) {
-  room.players.splice(playerIndex, 1);
+function finishGameByForfeit(room, player) {
+  if (!room || !player || !['playing', 'reconnecting'].includes(room.gameState)) return false;
+  const winner = room.players.find((candidate) => candidate.id !== player.id);
+  if (!winner) return false;
+
+  clearTurnTimer(room.id);
+  room.selections = {};
+  room.deadline = 0;
+  room.gameState = 'finished';
+  room.winner = winner.name;
+  room.finishReason = {
+    id: `forfeit-${Date.now()}`,
+    type: 'forfeit',
+    forfeitedBy: player.name
+  };
+  return true;
+}
+
+function resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators = false } = {}) {
+  const [departingPlayer] = room.players.splice(playerIndex, 1);
   room.needsFreshGame = true;
   resetGame(room);
   room.gameState = 'waiting';
 
-  // 空いた席にすでに観戦者がいれば、先着順で次の対戦者にする。
-  // 中断された対局の手札・得点は resetGame で必ず初期化済み。
-  while (room.players.length < 2 && room.spectators.length > 0) {
-    const spectator = room.spectators.shift();
-    const spectatorSocket = io.sockets.sockets.get(spectator.id);
-    if (!spectatorSocket) continue;
-    room.players.push({
-      id: spectator.id,
-      clientId: spectator.clientId,
-      name: spectator.name,
-      suit: room.players.length === 0 ? '♠' : '♥',
-      hand: createInitialHand(),
-      score: 0,
-      connected: true
+  // Switching voluntarily to spectating must not immediately put the same
+  // person back in a player seat. Their optional future seat-taking consent
+  // is deliberately reset to false here.
+  if (moveToSpectators && departingPlayer) {
+    room.spectators.push({
+      id: departingPlayer.id,
+      clientId: departingPlayer.clientId,
+      name: departingPlayer.name,
+      autoJoinWhenSeatAvailable: false
     });
   }
 
-  if (room.players.length === 0) {
+  // Only spectators who explicitly opted in may take an empty player seat.
+  // Everyone else remains a spectator after a player departs or a game ends.
+  // resetGame already clears every interrupted hand and score before promotion.
+  promoteVolunteerSpectators(room);
+
+  if (room.players.length === 0 && room.spectators.length === 0) {
     rooms.delete(room.id);
     return false;
   }
-  if (room.players.length === 2) startNewGame(room);
   broadcastRoom(room);
   return true;
 }
@@ -541,6 +617,7 @@ io.on('connection', (socket) => {
     const roomId = normalizeText(payload.roomId, MAX_ROOM_ID_LENGTH);
     const playerName = normalizeText(payload.playerName, MAX_PLAYER_NAME_LENGTH, 'プレイヤー');
     const clientId = normalizeText(payload.clientId, 80);
+    const joinPreferences = normalizeJoinPreferences(payload);
 
     if (!roomId || !clientId) {
       emitError(socket, '部屋キーを確認してから、もう一度入室してください。');
@@ -574,9 +651,15 @@ io.on('connection', (socket) => {
 
     const returningPlayer = room.players.find((player) => player.clientId === clientId);
     const returningSpectator = room.spectators.find((spectator) => spectator.clientId === clientId);
-    if (!returningPlayer && !returningSpectator && room.players.length >= 2 && room.spectators.length >= MAX_SPECTATORS_PER_ROOM) {
-      emitError(socket, 'この部屋の観戦者数は上限に達しています。');
-      return;
+    if (!returningPlayer && !returningSpectator) {
+      if (joinPreferences.joinAsSpectator && room.spectators.length >= MAX_SPECTATORS_PER_ROOM) {
+        emitError(socket, 'この部屋の観戦者数は上限に達しています。');
+        return;
+      }
+      if (!joinPreferences.joinAsSpectator && room.players.length >= 2) {
+        emitError(socket, 'この部屋は対戦中です。観戦者として入室する場合は、観戦者として参加にチェックを入れてください。');
+        return;
+      }
     }
 
     socket.join(room.id);
@@ -604,22 +687,20 @@ io.on('connection', (socket) => {
       const previousSocketId = returningSpectator.id;
       returningSpectator.id = socket.id;
       returningSpectator.name = playerName;
+      if (joinPreferences.joinAsSpectator) {
+        returningSpectator.autoJoinWhenSeatAvailable = joinPreferences.autoJoinWhenSeatAvailable;
+      }
       const previousSocket = io.sockets.sockets.get(previousSocketId);
       if (previousSocket && previousSocketId !== socket.id) previousSocket.disconnect(true);
-    } else if (room.players.length < 2) {
-      room.players.push({
+    } else if (!joinPreferences.joinAsSpectator) {
+      room.players.push(createPlayer({ id: socket.id, clientId, name: playerName }, room.players.length));
+    } else {
+      room.spectators.push({
         id: socket.id,
         clientId,
         name: playerName,
-        suit: room.players.length === 0 ? '♠' : '♥',
-        hand: createInitialHand(),
-        score: 0,
-        connected: true
+        autoJoinWhenSeatAvailable: joinPreferences.autoJoinWhenSeatAvailable
       });
-
-      if (room.players.length === 2) startNewGame(room);
-    } else {
-      room.spectators.push({ id: socket.id, clientId, name: playerName });
     }
 
     broadcastRoom(room);
@@ -658,7 +739,14 @@ io.on('connection', (socket) => {
       return;
     }
 
-    io.to(room.id).emit('chat_message', result.message);
+    const members = io.sockets.adapter.rooms.get(room.id);
+    members?.forEach((memberId) => {
+      const member = io.sockets.sockets.get(memberId);
+      if (member) {
+        const { authorClientId, ...message } = result.message;
+        member.emit('chat_message', { ...message, isOwn: member.data.clientId === authorClientId });
+      }
+    });
     replyToChat(acknowledge, { ok: true, sent: result.sent, limit: result.limit });
   });
 
@@ -682,13 +770,41 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('restart_game', (payload = {}) => {
+  const agreeToStart = (payload = {}) => {
     const room = getBoundRoom(socket, payload.roomId);
-    if (!room || room.gameState !== 'finished') return;
-    if (!room.players.some((player) => player.id === socket.id)) return;
+    if (!room || !['waiting', 'finished'].includes(room.gameState)) return;
+    const player = room.players.find((candidate) => candidate.id === socket.id);
+    if (!player || !player.connected) return;
     if (!room.players.every((player) => player.connected)) return;
-    startNewGame(room);
+    if (!room.startAgreements) room.startAgreements = new Set();
+    room.startAgreements.add(player.clientId);
+    startWhenBothPlayersAgree(room);
     broadcastRoom(room);
+  };
+  socket.on('agree_to_start', agreeToStart);
+  // Older cached pages used restart_game. Preserve it as a safe alias while
+  // requiring the same two-player consent as the current client.
+  socket.on('restart_game', agreeToStart);
+
+  socket.on('forfeit_game', (payload = {}) => {
+    const room = getBoundRoom(socket, payload.roomId);
+    if (!room) return;
+    const player = room.players.find((candidate) => candidate.id === socket.id);
+    // Spectators never obtain a player object, so a forged event cannot end a
+    // game. A player may forfeit while the opponent is reconnecting too.
+    if (!player || !player.connected) return;
+    if (!finishGameByForfeit(room, player)) return;
+    broadcastRoom(room);
+  });
+
+  socket.on('switch_to_spectator', (payload = {}) => {
+    const room = getBoundRoom(socket, payload.roomId);
+    if (!room) return;
+    const playerIndex = room.players.findIndex((candidate) => candidate.id === socket.id);
+    if (playerIndex < 0) return;
+    const player = room.players[playerIndex];
+    clearDisconnectTimer(room.id, player.clientId);
+    resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators: true });
   });
 
   socket.on('leave_room', (payload = {}) => {
@@ -706,7 +822,8 @@ io.on('connection', (socket) => {
       const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
       if (spectatorIndex >= 0) {
         room.spectators.splice(spectatorIndex, 1);
-        broadcastRoom(room);
+        if (room.players.length === 0 && room.spectators.length === 0) rooms.delete(room.id);
+        else broadcastRoom(room);
       }
     }
   });
@@ -728,7 +845,8 @@ io.on('connection', (socket) => {
     const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
     if (spectatorIndex >= 0) {
       room.spectators.splice(spectatorIndex, 1);
-      broadcastRoom(room);
+      if (room.players.length === 0 && room.spectators.length === 0) rooms.delete(room.id);
+      else broadcastRoom(room);
     }
   });
 });
@@ -742,9 +860,14 @@ module.exports = {
   MAX_CHAT_IPS_PER_ROOM,
   app,
   buildDefaultAllowedOrigins,
+  createRoomView,
   consumeChatIpQuota,
   createRoom,
+  finishGameByForfeit,
   io,
+  normalizeJoinPreferences,
+  promoteVolunteerSpectators,
+  startWhenBothPlayersAgree,
   rankedDeadlineSweeper,
   rankedRuntime
 };

@@ -114,6 +114,16 @@ button:focus-visible, input:focus-visible, a:focus-visible, .card:focus-visible 
 .input-wrap > span { color: var(--gold); font-family: var(--mono); font-size: 18px; }
 input { width: 100%; padding: 14px 0; border: 0; outline: 0; color: var(--ink); background: transparent; }
 input::placeholder { color: #65708b; }
+.join-options { display: grid; gap: 7px; margin: 12px 0 1px; padding: 11px 12px; border: 1px solid var(--line); background: rgba(5, 9, 20, .25); }
+.join-options legend { padding: 0 5px; color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .13em; }
+.check-option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: start; margin: 0 !important; color: inherit !important; font-family: var(--sans) !important; font-size: inherit !important; font-weight: 400 !important; letter-spacing: normal !important; cursor: pointer; }
+.check-option input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--gold); cursor: pointer; }
+.check-option input:disabled { cursor: not-allowed; opacity: .45; }
+.check-option span { display: grid; gap: 2px; min-width: 0; }
+.check-option strong { color: #dce7fb; font-size: 12px; line-height: 1.4; }
+.check-option small { color: var(--muted); font-size: 10px; font-weight: 400; line-height: 1.55; }
+.check-option-sub { padding-top: 7px; border-top: 1px solid var(--line); }
+.check-option:has(input:disabled) { cursor: not-allowed; opacity: .56; }
 
 .primary-button, .secondary-button {
   display: inline-flex;
@@ -168,7 +178,9 @@ input::placeholder { color: #65708b; }
 .fullscreen-button:hover { border-color: var(--blue); color: var(--blue-bright); background: rgba(141, 183, 255, .1); transform: translateY(-1px); }
 .home-button { display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border: 1px solid var(--line-strong); color: var(--blue-bright); background: rgba(6, 11, 25, .5); cursor: pointer; font-size: 10px; font-weight: 700; letter-spacing: .04em; transition: border-color .2s, color .2s, transform .2s; }
 .home-button span { color: var(--gold); font-size: 14px; line-height: .8; }
+.home-button span:last-child { color: inherit; font-size: inherit; line-height: inherit; }
 .home-button:hover { border-color: var(--gold); color: #fff3cf; transform: translateY(-1px); }
+.spectator-mode-badge { padding: 5px 7px; border: 1px solid rgba(141, 183, 255, .56); color: var(--blue-bright); background: rgba(68, 103, 182, .16); font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .08em; }
 .connection-state { display: inline-flex; align-items: center; gap: 7px; color: #b9c7dd; font-size: 11px; }
 .connection-state i { width: 7px; height: 7px; border-radius: 50%; background: #71e3ab; box-shadow: 0 0 10px #71e3ab; }
 .connection-state.offline i { background: var(--heart); box-shadow: 0 0 10px var(--heart); }
@@ -268,6 +280,10 @@ input::placeholder { color: #65708b; }
 .reveal-area.reveal-new .round-outcome { animation: outcome-enter .44s cubic-bezier(.16,.9,.29,1.18) both; }
 .reveal-area.reveal-new .reveal-card.left { animation: reveal-card-left .58s cubic-bezier(.2,.86,.33,1.04) both; }
 .reveal-area.reveal-new .reveal-card.right { animation: reveal-card-right .58s cubic-bezier(.2,.86,.33,1.04) .05s both; }
+.forfeit-result { position: relative; z-index: 1; display: grid; justify-items: center; gap: 4px; max-width: min(100%, 560px); padding: 20px; text-align: center; }
+.forfeit-result > span { color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .17em; }
+.forfeit-result strong { color: currentColor; font-family: var(--serif); font-size: clamp(29px, 4vw, 43px); font-weight: 400; letter-spacing: .07em; line-height: 1; text-shadow: 0 0 22px currentColor; }
+.forfeit-result p { margin: 2px 0 0; color: #d0daee; font-size: 12px; line-height: 1.6; }
 .status-msg { min-height: 18px; margin: 10px 0 0; color: #c8d4ec; font-size: 12px; text-align: center; }
 
 #game-screen.impact-win .game-shell { animation: board-impact-win .68s ease-out both; }
@@ -276,6 +292,12 @@ input::placeholder { color: #65708b; }
 
 .controls { display: flex; justify-content: center; gap: 10px; margin-top: 17px; }
 .confirm-button { min-width: min(100%, 300px); margin-top: 0; }
+.surrender-button, .spectator-switch-button { min-height: 42px; padding: 10px 13px; border: 1px solid var(--line-strong); background: rgba(6, 11, 25, .46); cursor: pointer; font-size: 10px; font-weight: 700; letter-spacing: .04em; transition: border-color .2s, color .2s, background .2s, transform .2s; }
+.surrender-button { border-color: rgba(255, 119, 143, .46); color: #ffabbc; }
+.surrender-button:hover:not(:disabled) { border-color: var(--heart); color: #ffe4ea; background: rgba(126, 39, 63, .32); transform: translateY(-1px); }
+.spectator-switch-button { color: var(--blue-bright); }
+.spectator-switch-button:hover:not(:disabled) { border-color: var(--blue); background: rgba(89, 132, 224, .14); transform: translateY(-1px); }
+.surrender-button:disabled, .spectator-switch-button:disabled { cursor: not-allowed; opacity: .48; }
 
 .sidebar { align-self: stretch; padding: 20px 16px; }
 .sidebar-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
@@ -293,7 +315,11 @@ input::placeholder { color: #65708b; }
 .chat-panel { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
 .chat-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .chat-heading h3 { margin: 4px 0 0; color: var(--ink); font-family: var(--serif); font-size: 17px; font-weight: 400; }
+.chat-heading-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
 .chat-count { flex: 0 0 auto; padding: 5px 7px; border: 1px solid var(--line); color: var(--gold); font-family: var(--mono); font-size: 9px; }
+.chat-sound-toggle { min-height: 27px; padding: 5px 7px; border: 1px solid var(--line); color: var(--muted); background: rgba(5, 9, 20, .36); cursor: pointer; font-family: var(--mono); font-size: 8px; letter-spacing: .02em; }
+.chat-sound-toggle[aria-pressed="true"] { border-color: rgba(141, 183, 255, .5); color: var(--blue-bright); }
+.chat-sound-toggle:hover { border-color: var(--blue); color: #fff; }
 .chat-list { display: grid; gap: 0; max-height: 205px; margin-top: 10px; padding-right: 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--line-strong) transparent; }
 .chat-empty { margin: 10px 0; color: var(--faint); font-size: 11px; line-height: 1.55; }
 .chat-message { min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line); }
@@ -352,6 +378,9 @@ input::placeholder { color: #65708b; }
   .mode-option { min-height: 56px; padding: 8px 5px; }
   .mode-option b { font-size: 8px; letter-spacing: 0; }
   .mode-option small { font-size: 8px; }
+  .join-options { padding: 10px; }
+  .check-option strong { font-size: 11px; }
+  .check-option small { font-size: 9px; }
   .rule-grid { grid-template-columns: 1fr; }
   .strategy-note { padding: 12px; font-size: 11px; }
   #game-screen { width: calc(100% - 16px); gap: 10px; margin: 8px auto calc(62px + env(safe-area-inset-bottom)); }
@@ -360,6 +389,7 @@ input::placeholder { color: #65708b; }
   .game-brand { font-size: 15px; }
   .connection-state { display: none; }
   .fullscreen-button { display: none; }
+  .spectator-mode-badge { display: none; }
   .header-actions { gap: 0; }
   .room-chip { padding: 6px 8px; }
   .room-chip span { font-size: 8px; }
@@ -382,8 +412,9 @@ input::placeholder { color: #65708b; }
   .round-outcome p { font-size: 10px; }
   .reveal-card strong { font-size: 16px; }
   .reveal-versus span { font-size: 8px; letter-spacing: .04em; }
-  .controls { position: sticky; bottom: 7px; z-index: 4; display: flex; justify-content: center; gap: 10px; margin: 5px -4px 0; padding: 10px 4px calc(4px + env(safe-area-inset-bottom)); background: linear-gradient(to top, rgba(16, 22, 42, .98) 70%, rgba(16, 22, 42, 0)); }
-  .confirm-button, .secondary-button { width: 100%; min-height: 48px; }
+  .controls { position: sticky; bottom: 7px; z-index: 4; display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; margin: 5px -4px 0; padding: 10px 4px calc(4px + env(safe-area-inset-bottom)); background: linear-gradient(to top, rgba(16, 22, 42, .98) 70%, rgba(16, 22, 42, 0)); }
+  .confirm-button, .secondary-button { flex: 1 1 100%; width: 100%; min-height: 48px; }
+  .surrender-button, .spectator-switch-button { flex: 1 1 calc(50% - 4px); min-height: 39px; padding-inline: 8px; }
   .sidebar { padding: 15px 13px; }
   .history-list { display: flex; gap: 10px; overflow-x: auto; margin-inline: -2px; padding: 0 2px 3px; -webkit-overflow-scrolling: touch; }
   .history-item { flex: 0 0 175px; min-height: 66px; }

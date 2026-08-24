@@ -194,6 +194,11 @@ normal two-player play:
   that limits reconnect-id rotation abuse. The room's tracked IP entries are
   capped as well, so reconnecting through many addresses cannot grow its
   in-memory bookkeeping without bound.
+- Spectating is an explicit server-side role. Observers may use the bounded
+  room chat and see the public PvP board, but cannot submit cards, surrender,
+  start/restart a match, or obtain a player seat unless they explicitly opted
+  in before a vacancy occurs. A player who switches to spectating is not
+  silently promoted back into a seat.
 
 `ALLOW_ORIGINLESS_SOCKET_CONNECTIONS=true` is for narrow local testing only;
 do not enable it publicly. Do not set `TRUST_PROXY=true` on a directly exposed
