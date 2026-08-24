@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#090d1a">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
-  <link rel="stylesheet" href="style.css?v=pvp-v6">
+  <link rel="stylesheet" href="style.css?v=pvp-v9">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v7"></script>
+  <script src="socket-loader.js?v=pvp-v9"></script>
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true">
@@ -28,16 +28,19 @@
         <nav class="mode-selector" aria-label="ゲームモード">
           <span class="mode-selector-label">ゲームモード</span>
           <div class="mode-selector-options">
-            <span class="mode-option mode-option-active" aria-current="page"><b>プライベート対戦</b><small>ルームキーで対戦</small></span>
+            <button id="private-mode-btn" class="mode-option mode-option-active" type="button" aria-pressed="true"><b>プライベート対戦</b><small>ルームキーで対戦</small></button>
+            <button id="random-mode-btn" class="mode-option" type="button" aria-pressed="false"><b>ランダム対戦</b><small>すぐに相手を探す</small></button>
             <a id="ranked-mode-link" class="mode-option" href="https://overthinking-ebs.onrender.com/ranked"><b>ランク戦・ランダム対戦</b><small>プレイ · ランキング</small></a>
           </div>
         </nav>
 
         <form id="join-form" class="join-form" novalidate>
-          <label for="roomIdInput">ルームキー</label>
-          <div class="input-wrap">
-            <span aria-hidden="true">⌘</span>
-            <input type="text" id="roomIdInput" maxlength="24" autocomplete="off" placeholder="共有する部屋キー" required>
+          <div id="private-join-fields" class="private-join-fields">
+            <label for="roomIdInput">ルームキー</label>
+            <div class="input-wrap">
+              <span aria-hidden="true">⌘</span>
+              <input type="text" id="roomIdInput" maxlength="24" autocomplete="off" placeholder="共有する部屋キー" required>
+            </div>
           </div>
 
           <label for="playerNameInput">プレイヤー名 <small>任意</small></label>
@@ -46,7 +49,15 @@
             <input type="text" id="playerNameInput" maxlength="20" autocomplete="nickname" placeholder="あなたの名前">
           </div>
 
-          <fieldset class="join-options">
+          <section id="random-match-panel" class="random-match-panel hidden" aria-live="polite">
+            <span class="section-label">ランダム対戦</span>
+            <strong><span id="random-online-count">—</span><small>人</small></strong>
+            <p>現在オンライン</p>
+            <span id="random-queue-count" class="random-queue-count">対戦相手を探し中 — 人</span>
+            <small>同じ相手との再戦も、対局後に選べます。</small>
+          </section>
+
+          <fieldset id="join-options" class="join-options">
             <legend>入室方法</legend>
             <label class="check-option" for="spectate-mode-input">
               <input id="spectate-mode-input" type="checkbox">
@@ -59,22 +70,47 @@
           </fieldset>
 
           <button id="joinBtn" class="primary-button" type="submit">
-            <span>入室する</span><b aria-hidden="true">→</b>
+            <span id="join-button-label">入室する</span><b aria-hidden="true">→</b>
           </button>
+          <button id="cancel-random-search-btn" class="cancel-random-search hidden" type="button">検索をやめる</button>
           <p id="login-message" class="form-message" role="status"></p>
         </form>
 
         <section class="rulebook" aria-labelledby="rulebook-title">
           <div class="section-label" id="rulebook-title">ゲームルール</div>
-          <p class="rule-lead">全7ラウンド、同じ7枚の手札で戦う完全情報の心理戦。</p>
-          <div class="rule-grid">
-            <article><strong>01</strong><span>数字が大きい方が、場のカードを獲得</span></article>
-            <article><strong>02</strong><span>2 は A に、3 は Joker に勝利</span></article>
-            <article><strong>03</strong><span>Joker は相手の強さをコピー</span></article>
-            <article><strong>04</strong><span>引き分けたカードは次の勝負へ持ち越し</span></article>
-          </div>
+          <p class="rule-lead">7枚のカードを一度ずつ使い、相手の一手を読み合う二人用カードゲームです。</p>
+          <ol class="rule-steps">
+            <li><strong>準備</strong><span>二人とも <b>A / K / Q / J / Joker / 3 / 2</b> の7枚を持って始めます。</span></li>
+            <li><strong>勝負</strong><span>毎ラウンド、互いに残り手札から1枚を選んで同時に公開します。</span></li>
+            <li><strong>獲得</strong><span>勝った人は、そのラウンドの2枚と持ち越し札をすべて獲得します。</span></li>
+            <li><strong>終了</strong><span>獲得が9枚以上になった時点、または7ラウンド後に獲得枚数が多い人の勝ちです。</span></li>
+          </ol>
+          <section class="rule-strength" aria-labelledby="strength-title">
+            <h2 id="strength-title">まずは通常の強さ</h2>
+            <p><b>A</b> が最も強く、通常は <b>A ＞ K ＞ Q ＞ J ＞ 3 ＞ 2</b> です。<b>Joker</b> は相手と同じ強さになり、通常は引き分けます。</p>
+            <div class="rule-exceptions"><span><b>2</b> は <b>A</b> に勝つ</span><span><b>3</b> は <b>Joker</b> に勝つ</span></div>
+          </section>
+          <section class="matchup-guide" aria-labelledby="matchup-title">
+            <div class="matchup-heading">
+              <div><h2 id="matchup-title">カードの組み合わせ早見表</h2><p>行があなた、列が相手です。<b class="legend-win">勝</b>＝あなたの勝ち、<b class="legend-loss">負</b>＝あなたの負け、<b class="legend-draw">分</b>＝引き分け。</p></div>
+            </div>
+            <div class="matchup-table-wrap" tabindex="0" aria-label="カードの組み合わせ早見表。横にスクロールできます。">
+              <table class="matchup-table">
+                <thead><tr><th scope="col">自分＼相手</th><th scope="col">A</th><th scope="col">K</th><th scope="col">Q</th><th scope="col">J</th><th scope="col">Joker</th><th scope="col">3</th><th scope="col">2</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row">A</th><td class="outcome-draw">分</td><td class="outcome-win">勝</td><td class="outcome-win">勝</td><td class="outcome-win">勝</td><td class="outcome-draw">分</td><td class="outcome-win">勝</td><td class="outcome-loss">負</td></tr>
+                  <tr><th scope="row">K</th><td class="outcome-loss">負</td><td class="outcome-draw">分</td><td class="outcome-win">勝</td><td class="outcome-win">勝</td><td class="outcome-draw">分</td><td class="outcome-win">勝</td><td class="outcome-win">勝</td></tr>
+                  <tr><th scope="row">Q</th><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-draw">分</td><td class="outcome-win">勝</td><td class="outcome-draw">分</td><td class="outcome-win">勝</td><td class="outcome-win">勝</td></tr>
+                  <tr><th scope="row">J</th><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-draw">分</td><td class="outcome-draw">分</td><td class="outcome-win">勝</td><td class="outcome-win">勝</td></tr>
+                  <tr><th scope="row">Joker</th><td class="outcome-draw">分</td><td class="outcome-draw">分</td><td class="outcome-draw">分</td><td class="outcome-draw">分</td><td class="outcome-draw">分</td><td class="outcome-loss">負</td><td class="outcome-draw">分</td></tr>
+                  <tr><th scope="row">3</th><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-win">勝</td><td class="outcome-draw">分</td><td class="outcome-win">勝</td></tr>
+                  <tr><th scope="row">2</th><td class="outcome-win">勝</td><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-draw">分</td><td class="outcome-loss">負</td><td class="outcome-draw">分</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <p class="draw-note"><strong>引き分けの場合</strong><span>出した2枚は誰にも入らず「持ち越し札」になります。次に勝った人が、持ち越し札もまとめて獲得します。</span></p>
           <p class="strategy-note"><strong>ポイント</strong><span>これは単なる運任せのゲームではありません。残り札・スタック・相手の選択から局面を読み、より有効な一手を選ぶことが勝利への鍵です。</span></p>
-          <p class="rule-note">カードの強さ：2 ＜ 3 ＜ … ＜ K ＜ A</p>
         </section>
       </section>
     </main>
@@ -83,10 +119,11 @@
       <main class="game-shell" aria-label="対戦ボード">
         <header class="game-header">
           <a class="game-brand" href="./" aria-label="OVERTHINKING のトップへ">OVER<span>THINKING</span></a>
-          <div class="room-chip"><span>ルーム</span><strong id="display-room-id">—</strong></div>
+          <div class="room-chip"><span id="room-chip-label">ルーム</span><strong id="display-room-id">—</strong></div>
           <div class="header-actions">
             <button id="fullscreenBtn" class="fullscreen-button" type="button" aria-pressed="false" title="ゲーム画面を全画面で表示"><span aria-hidden="true">⛶</span><span>全画面</span></button>
             <span id="spectator-mode-badge" class="spectator-mode-badge hidden">観戦中</span>
+            <span id="random-match-badge" class="random-match-badge hidden">ランダム対戦</span>
             <button id="homeBtn" class="home-button hidden" type="button"><span aria-hidden="true">⌂</span><span id="home-btn-label">ホームへ戻る</span></button>
             <div id="connection-state" class="connection-state"><i></i><span>接続中</span></div>
           </div>
@@ -126,6 +163,7 @@
             <button id="confirmBtn" class="primary-button confirm-button" type="button" disabled><span>この一枚で勝負する</span><b aria-hidden="true">↗</b></button>
             <button id="surrenderBtn" class="surrender-button hidden" type="button">降参する</button>
             <button id="restartBtn" class="secondary-button hidden" type="button">対戦開始に同意する</button>
+            <button id="nextRandomBtn" class="next-random-button hidden" type="button">別の相手を探す</button>
             <button id="switchSpectatorBtn" class="spectator-switch-button hidden" type="button">観戦者に切り替える</button>
           </div>
         </section>

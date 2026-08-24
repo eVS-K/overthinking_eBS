@@ -20,6 +20,10 @@ let currentRoomId = savedSession?.roomId || '';
 let myPlayerName = savedSession?.playerName || '';
 let joinAsSpectator = Boolean(savedSession?.joinAsSpectator);
 let autoJoinWhenSeatAvailable = Boolean(savedSession?.autoJoinWhenSeatAvailable);
+let entryMode = 'private';
+let randomSearchActive = false;
+let onlineCount = null;
+let randomQueueCount = null;
 let mySelectedCardId = null;
 let committedCardId = null;
 let joinedRoom = Boolean(savedSession);
@@ -43,17 +47,28 @@ const elements = {
   loginScreen: document.getElementById('login-screen'),
   gameScreen: document.getElementById('game-screen'),
   joinForm: document.getElementById('join-form'),
+  privateModeButton: document.getElementById('private-mode-btn'),
+  randomModeButton: document.getElementById('random-mode-btn'),
+  privateJoinFields: document.getElementById('private-join-fields'),
+  randomMatchPanel: document.getElementById('random-match-panel'),
+  joinOptions: document.getElementById('join-options'),
   roomIdInput: document.getElementById('roomIdInput'),
   playerNameInput: document.getElementById('playerNameInput'),
   spectateModeInput: document.getElementById('spectate-mode-input'),
   autoJoinSeatInput: document.getElementById('auto-join-seat-input'),
   joinButton: document.getElementById('joinBtn'),
+  joinButtonLabel: document.getElementById('join-button-label'),
+  cancelRandomSearchButton: document.getElementById('cancel-random-search-btn'),
+  randomOnlineCount: document.getElementById('random-online-count'),
+  randomQueueCount: document.getElementById('random-queue-count'),
   loginMessage: document.getElementById('login-message'),
   roomId: document.getElementById('display-room-id'),
+  roomChipLabel: document.getElementById('room-chip-label'),
   fullscreenButton: document.getElementById('fullscreenBtn'),
   homeButton: document.getElementById('homeBtn'),
   homeButtonLabel: document.getElementById('home-btn-label'),
   spectatorModeBadge: document.getElementById('spectator-mode-badge'),
+  randomMatchBadge: document.getElementById('random-match-badge'),
   connectionState: document.getElementById('connection-state'),
   round: document.getElementById('current-round'),
   timer: document.getElementById('timer-count'),
@@ -75,6 +90,7 @@ const elements = {
   confirmButton: document.getElementById('confirmBtn'),
   surrenderButton: document.getElementById('surrenderBtn'),
   restartButton: document.getElementById('restartBtn'),
+  nextRandomButton: document.getElementById('nextRandomBtn'),
   switchSpectatorButton: document.getElementById('switchSpectatorBtn'),
   history: document.getElementById('history-list'),
   spectatorCount: document.getElementById('spectator-count'),
@@ -210,6 +226,65 @@ function syncSpectatorJoinOptions() {
   const isSpectatorOption = elements.spectateModeInput.checked;
   elements.autoJoinSeatInput.disabled = !isSpectatorOption;
   if (!isSpectatorOption) elements.autoJoinSeatInput.checked = false;
+}
+
+function updatePresenceView(payload = {}) {
+  onlineCount = Number.isSafeInteger(payload.onlineCount) && payload.onlineCount >= 0
+    ? payload.onlineCount
+    : onlineCount;
+  randomQueueCount = Number.isSafeInteger(payload.queueCount) && payload.queueCount >= 0
+    ? payload.queueCount
+    : randomQueueCount;
+  setText(elements.randomOnlineCount, onlineCount ?? '—');
+  setText(
+    elements.randomQueueCount,
+    Number.isSafeInteger(randomQueueCount)
+      ? `対戦相手を探し中 ${randomQueueCount} 人`
+      : '対戦相手を探し中 — 人'
+  );
+}
+
+function renderEntryMode() {
+  const isRandomMode = entryMode === 'random';
+  elements.privateModeButton.classList.toggle('mode-option-active', !isRandomMode);
+  elements.randomModeButton.classList.toggle('mode-option-active', isRandomMode);
+  elements.privateModeButton.setAttribute('aria-pressed', String(!isRandomMode));
+  elements.randomModeButton.setAttribute('aria-pressed', String(isRandomMode));
+  elements.privateJoinFields.classList.toggle('hidden', isRandomMode);
+  elements.joinOptions.classList.toggle('hidden', isRandomMode);
+  elements.randomMatchPanel.classList.toggle('hidden', !isRandomMode);
+  elements.roomIdInput.required = !isRandomMode;
+  setText(elements.joinButtonLabel, isRandomMode ? '対戦相手を探す' : '入室する');
+  elements.cancelRandomSearchButton.classList.toggle('hidden', !isRandomMode || !randomSearchActive);
+  elements.joinButton.disabled = randomSearchActive;
+}
+
+function setEntryMode(mode) {
+  entryMode = mode === 'random' ? 'random' : 'private';
+  renderEntryMode();
+}
+
+function stopRandomSearch({ message = '' } = {}) {
+  if (randomSearchActive && socket?.connected) socket.emit('leave_random_queue');
+  randomSearchActive = false;
+  renderEntryMode();
+  if (message) setLoginMessage(message);
+}
+
+function beginRandomSearch() {
+  if (!socket) {
+    setLoginMessage('通信の準備に失敗しました。ページを再読み込みしてください。');
+    return;
+  }
+  myPlayerName = elements.playerNameInput.value.trim() || 'プレイヤー';
+  joinAsSpectator = false;
+  autoJoinWhenSeatAvailable = false;
+  currentRoomId = '';
+  joinedRoom = false;
+  randomSearchActive = true;
+  setEntryMode('random');
+  setLoginMessage(socket.connected ? '対戦相手を探しています…' : 'サーバーへ接続しています…');
+  if (socket.connected) socket.emit('join_random_match', { playerName: myPlayerName, clientId });
 }
 
 function resetTimer() {
@@ -662,7 +737,12 @@ function renderStatus(room, me, opponent) {
   if (room.gameState === 'waiting') {
     const bothPlayersReady = room.players.length === 2 && room.players.every((player) => player.connected);
     if (!bothPlayersReady) {
-      setText(elements.status, '対戦相手の入室を待っています…');
+      setText(
+        elements.status,
+        room.matchType === 'random'
+          ? '対戦相手を待っています。別の相手を探すこともできます。'
+          : '対戦相手の入室を待っています…'
+      );
     } else if (room.viewer.hasAgreedToStart) {
       setText(elements.status, '対戦開始に同意しました。相手の同意を待っています…');
     } else {
@@ -681,9 +761,13 @@ function renderStatus(room, me, opponent) {
     } else if (room.finishReason?.type === 'forfeit') {
       setText(elements.status, `ゲーム終了 — ${room.finishReason.forfeitedBy} の降参により ${room.winner} の勝ちです。`);
     } else if (room.players.length === 2 && room.players.every((player) => player.connected) && room.viewer.hasAgreedToStart) {
-      setText(elements.status, '再戦に同意しました。相手の同意を待っています…');
+      setText(elements.status, room.matchType === 'random'
+        ? 'この相手との再戦を希望しました。相手の同意を待っています…'
+        : '再戦に同意しました。相手の同意を待っています…');
     } else {
-      setText(elements.status, `ゲーム終了 — ${room.winner}。再戦する場合は「再戦に同意する」を押してください。`);
+      setText(elements.status, room.matchType === 'random'
+        ? `ゲーム終了 — ${room.winner}。この相手と続けるか、別の相手を探せます。`
+        : `ゲーム終了 — ${room.winner}。再戦する場合は「再戦に同意する」を押してください。`);
     }
   }
 }
@@ -704,6 +788,7 @@ function renderRoom(room) {
   // 新旧どちらのサーバーでも表示できるよう、段階的な公開時は旧形式も受け入れる。
   const roomView = {
     ...room,
+    matchType: room.matchType === 'random' ? 'random' : 'private',
     spectatorCount: room.spectatorCount ?? room.spectators?.length ?? 0,
     viewer: room.viewer || {
       isSpectator: !room.players.some((player) => player.id === socket?.id),
@@ -711,9 +796,21 @@ function renderRoom(room) {
       hasAgreedToStart: false
     }
   };
+  randomSearchActive = false;
+  renderEntryMode();
+  // A random-match id is server-generated. Persist it as soon as the room
+  // view arrives so start consent, card submission, and reconnect all target
+  // the same authoritative room just like Private PvP does.
+  currentRoomId = roomView.id;
+  joinedRoom = true;
+  joinAsSpectator = roomView.viewer.isSpectator;
+  autoJoinWhenSeatAvailable = Boolean(roomView.viewer.autoJoinWhenSeatAvailable);
+  saveSession();
   currentRoom = roomView;
   showGameScreen();
-  setText(elements.roomId, roomView.id);
+  const isRandomMatch = roomView.matchType === 'random';
+  setText(elements.roomChipLabel, isRandomMatch ? 'マッチ' : 'ルーム');
+  setText(elements.roomId, isRandomMatch ? 'ランダム' : roomView.id);
   setText(elements.round, roomView.round);
   setText(elements.stack, roomView.stack.length);
 
@@ -767,16 +864,27 @@ function renderRoom(room) {
   const canAgreeToStart = playerCanAct
     && ['waiting', 'finished'].includes(roomView.gameState)
     && bothPlayersReady;
+  const canFindNextRandom = playerCanAct
+    && isRandomMatch
+    && ['waiting', 'finished'].includes(roomView.gameState);
   elements.confirmButton.classList.toggle('hidden', !playerCanAct || roomView.gameState !== 'playing');
   elements.surrenderButton.classList.toggle('hidden', !canSurrender);
   elements.restartButton.classList.toggle('hidden', !canAgreeToStart);
+  elements.nextRandomButton.classList.toggle('hidden', !canFindNextRandom);
   elements.switchSpectatorButton.classList.toggle('hidden', !playerCanAct);
   elements.playerControls.classList.toggle('hidden', !playerCanAct);
-  setText(elements.restartButton, roomView.gameState === 'finished' ? '再戦に同意する' : '対戦開始に同意する');
+  setText(
+    elements.restartButton,
+    roomView.gameState === 'finished'
+      ? (isRandomMatch ? 'この相手と続ける' : '再戦に同意する')
+      : '対戦開始に同意する'
+  );
   elements.restartButton.disabled = !socket?.connected || roomView.viewer.hasAgreedToStart;
+  elements.nextRandomButton.disabled = !socket?.connected;
   elements.surrenderButton.disabled = !socket?.connected;
   elements.switchSpectatorButton.disabled = !socket?.connected;
   elements.spectatorModeBadge.classList.toggle('hidden', !isSpectator);
+  elements.randomMatchBadge.classList.toggle('hidden', !isRandomMatch);
   elements.homeButton.classList.toggle('hidden', !isSpectator && !['waiting', 'finished'].includes(roomView.gameState));
   setText(elements.homeButtonLabel, isSpectator ? '観戦をやめる' : 'ホームへ戻る');
 
@@ -803,8 +911,13 @@ function closeCreditModal() {
 
 elements.joinForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  currentRoomId = elements.roomIdInput.value.trim();
   myPlayerName = elements.playerNameInput.value.trim() || 'プレイヤー';
+  if (entryMode === 'random') {
+    beginRandomSearch();
+    return;
+  }
+
+  currentRoomId = elements.roomIdInput.value.trim();
   joinAsSpectator = elements.spectateModeInput.checked;
   autoJoinWhenSeatAvailable = joinAsSpectator && elements.autoJoinSeatInput.checked;
   mySelectedCardId = null;
@@ -845,6 +958,27 @@ elements.restartButton.addEventListener('click', () => {
   if (socket && currentRoomId) socket.emit('agree_to_start', { roomId: currentRoomId });
 });
 
+elements.nextRandomButton.addEventListener('click', () => {
+  if (!socket?.connected || !currentRoom || currentRoom.matchType !== 'random' || !currentRoomId) return;
+  if (!['waiting', 'finished'].includes(currentRoom.gameState)) return;
+  const previousRoomId = currentRoomId;
+  joinedRoom = false;
+  currentRoomId = '';
+  currentRoom = null;
+  mySelectedCardId = null;
+  committedCardId = null;
+  lastRoundId = null;
+  previousScores.clear();
+  resetChat();
+  clearSavedSession();
+  resetTimer();
+  randomSearchActive = true;
+  setEntryMode('random');
+  showLoginScreen();
+  setLoginMessage('別の対戦相手を探しています…');
+  socket.emit('find_next_random_match', { roomId: previousRoomId });
+});
+
 elements.surrenderButton.addEventListener('click', () => {
   if (!socket?.connected || !currentRoomId || !currentRoom || currentRoom.viewer.isSpectator) return;
   if (!window.confirm('降参するとこのゲームは終了し、相手の勝ちになります。降参しますか？')) return;
@@ -859,6 +993,23 @@ elements.switchSpectatorButton.addEventListener('click', () => {
     : '観戦者に切り替えますか？';
   if (!window.confirm(message)) return;
   socket.emit('switch_to_spectator', { roomId: currentRoomId });
+});
+
+elements.privateModeButton.addEventListener('click', () => {
+  if (randomSearchActive) stopRandomSearch();
+  setEntryMode('private');
+  setLoginMessage('');
+  elements.roomIdInput.focus();
+});
+
+elements.randomModeButton.addEventListener('click', () => {
+  setEntryMode('random');
+  setLoginMessage('');
+  elements.playerNameInput.focus();
+});
+
+elements.cancelRandomSearchButton.addEventListener('click', () => {
+  stopRandomSearch({ message: 'ランダム対戦の検索をやめました。' });
 });
 
 elements.spectateModeInput.addEventListener('change', syncSpectatorJoinOptions);
@@ -943,12 +1094,15 @@ updateFullscreenButton();
 elements.spectateModeInput.checked = joinAsSpectator;
 elements.autoJoinSeatInput.checked = autoJoinWhenSeatAvailable;
 syncSpectatorJoinOptions();
+updatePresenceView();
+renderEntryMode();
 updateChatSoundToggle();
 window.addEventListener('pointerdown', primeChatSound, { once: true, passive: true });
 window.addEventListener('keydown', primeChatSound, { once: true });
 
 elements.homeButton.addEventListener('click', () => {
   const roomIdToLeave = currentRoomId;
+  const returnToRandomEntry = currentRoom?.matchType === 'random';
   if (socket?.connected && roomIdToLeave) socket.emit('leave_room', { roomId: roomIdToLeave });
 
   joinedRoom = false;
@@ -956,6 +1110,7 @@ elements.homeButton.addEventListener('click', () => {
   mySelectedCardId = null;
   committedCardId = null;
   currentRoom = null;
+  randomSearchActive = false;
   lastRoundId = null;
   previousScores.clear();
   resetChat();
@@ -963,10 +1118,10 @@ elements.homeButton.addEventListener('click', () => {
   resetTimer();
   if (document.fullscreenElement === elements.gameScreen) document.exitFullscreen().catch(() => {});
   elements.homeButton.classList.add('hidden');
-  elements.joinButton.disabled = false;
+  setEntryMode(returnToRandomEntry ? 'random' : 'private');
   setLoginMessage('');
   showLoginScreen();
-  elements.roomIdInput.focus();
+  (returnToRandomEntry ? elements.playerNameInput : elements.roomIdInput).focus();
 });
 
 elements.creditButton.addEventListener('click', openCreditModal);
@@ -983,7 +1138,9 @@ if (socket) {
     setConnectionState(true);
     chatReady = false;
     updateChatControls();
+    socket.emit('get_presence');
     if (joinedRoom) emitJoinRequest();
+    else if (randomSearchActive) socket.emit('join_random_match', { playerName: myPlayerName, clientId });
   });
 
   socket.on('disconnect', () => {
@@ -1003,9 +1160,27 @@ if (socket) {
   });
 
   socket.on('room_updated', (room) => {
+    randomSearchActive = false;
+    entryMode = room.matchType === 'random' ? 'random' : 'private';
     elements.joinButton.disabled = false;
     setLoginMessage('');
     renderRoom(room);
+  });
+
+  socket.on('presence_updated', (presence) => {
+    updatePresenceView(presence);
+  });
+
+  socket.on('random_match_status', (status) => {
+    updatePresenceView(status);
+    if (status?.state === 'searching') {
+      randomSearchActive = true;
+      setEntryMode('random');
+      if (!currentRoom) setLoginMessage('対戦相手を探しています…');
+    } else if (status?.state === 'idle') {
+      randomSearchActive = false;
+      renderEntryMode();
+    }
   });
 
   socket.on('chat_state', ({ messages, sent, limit }) => {
@@ -1025,6 +1200,8 @@ if (socket) {
     elements.joinButton.disabled = false;
     if (!currentRoom) {
       joinedRoom = false;
+      randomSearchActive = false;
+      renderEntryMode();
       clearSavedSession();
       setLoginMessage(message || '入室できませんでした。');
     } else {

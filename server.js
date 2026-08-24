@@ -1,10 +1,12 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const crypto = require('crypto');
 const { Server } = require('socket.io');
 const { createInitialHand, resolveRound } = require('./game-rules');
 const { createFixedWindowLimiter, getClientIp, readPositiveInteger } = require('./security');
 const { MAX_CHAT_MESSAGES_PER_SESSION, appendChatMessage } = require('./chat');
+const { RandomMatchQueue } = require('./matchmaking');
 const { registerRankedRoutes } = require('./ranked-api');
 const { createRankedRuntime, startRankedDeadlineSweeper } = require('./ranked-runtime');
 
@@ -46,6 +48,11 @@ const CHAT_SESSION_RETENTION_MS = 30 * 60_000;
 const MAX_CHAT_MESSAGES_PER_IP_WINDOW = 120;
 const CHAT_IP_WINDOW_MS = 30 * 60_000;
 const MAX_CHAT_IPS_PER_ROOM = 256;
+const MAX_RANDOM_MATCH_QUEUE = readPositiveInteger(process.env.MAX_RANDOM_MATCH_QUEUE, 300, { max: 5_000 });
+const MAX_RANDOM_QUEUE_PER_IP = readPositiveInteger(process.env.MAX_RANDOM_QUEUE_PER_IP, 3, { max: 20 });
+const RANDOM_MATCH_REQUEST_LIMIT = readPositiveInteger(process.env.RANDOM_MATCH_REQUEST_LIMIT, 18, { max: 120 });
+const RANDOM_MATCH_REQUEST_WINDOW_MS = 60_000;
+const RANDOM_MATCH_ENTRY_MAX_AGE_MS = 10 * 60_000;
 const ALLOW_ORIGINLESS_SOCKET_CONNECTIONS = process.env.ALLOW_ORIGINLESS_SOCKET_CONNECTIONS === 'true'
   && process.env.NODE_ENV !== 'production';
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
@@ -92,11 +99,22 @@ const roomCreationLimiter = createFixedWindowLimiter({
   windowMs: 10 * 60_000,
   maxEntries: RATE_LIMIT_TRACKED_IPS
 });
+const randomMatchLimiter = createFixedWindowLimiter({
+  limit: RANDOM_MATCH_REQUEST_LIMIT,
+  windowMs: RANDOM_MATCH_REQUEST_WINDOW_MS,
+  maxEntries: RATE_LIMIT_TRACKED_IPS
+});
+const randomMatchQueue = new RandomMatchQueue({
+  maxEntries: MAX_RANDOM_MATCH_QUEUE,
+  maxAgeMs: RANDOM_MATCH_ENTRY_MAX_AGE_MS
+});
 
 const limiterCleanupTimer = setInterval(() => {
   httpRequestLimiter.prune();
   handshakeLimiter.prune();
   roomCreationLimiter.prune();
+  randomMatchLimiter.prune();
+  if (randomMatchQueue.prune() > 0) schedulePresenceBroadcast();
 }, 60_000);
 limiterCleanupTimer.unref();
 
@@ -224,9 +242,13 @@ function promoteVolunteerSpectators(room, getSocketById = (socketId) => io.socke
   return promoted;
 }
 
-function createRoom(id) {
+function createRoom(id, { matchType = 'private', allowedRandomClientIds = [] } = {}) {
   return {
     id,
+    matchType: matchType === 'random' ? 'random' : 'private',
+    // Random-room ids are unguessable, and this extra admission list prevents
+    // a copied id from becoming an accidental public spectator invitation.
+    allowedRandomClientIds: new Set(allowedRandomClientIds),
     players: [],
     spectators: [],
     round: 1,
@@ -338,6 +360,7 @@ function createRoomView(room, socketId) {
 
   return {
     id: room.id,
+    matchType: room.matchType,
     players: room.players.map(({ id, name, suit, hand, score, connected }) => ({
       id,
       name,
@@ -463,6 +486,177 @@ function emitChatState(socket, room, clientId) {
   });
 }
 
+let presenceBroadcastTimer = null;
+
+function getPresenceView() {
+  return {
+    // Guest PvP rooms are intentionally in-process today, so this is the
+    // currently connected population of this deployment instance only.
+    onlineCount: io.sockets.sockets.size,
+    queueCount: randomMatchQueue.size
+  };
+}
+
+function emitPresence(socket) {
+  socket.emit('presence_updated', getPresenceView());
+}
+
+function schedulePresenceBroadcast() {
+  if (presenceBroadcastTimer) return;
+  presenceBroadcastTimer = setTimeout(() => {
+    presenceBroadcastTimer = null;
+    io.emit('presence_updated', getPresenceView());
+  }, 250);
+  presenceBroadcastTimer.unref();
+}
+
+function emitRandomMatchStatus(socket, state = 'searching') {
+  socket.emit('random_match_status', {
+    state,
+    ...getPresenceView()
+  });
+}
+
+function createRandomRoomId() {
+  // 96 bits of CSPRNG output encoded as URL-safe text fits within the existing
+  // room id limit and is not intended to be discoverable.
+  return `m_${crypto.randomBytes(12).toString('base64url')}`;
+}
+
+function isRandomQueueEntryAvailable(entry) {
+  const socket = io.sockets.sockets.get(entry.socketId);
+  return Boolean(
+    socket
+      && socket.connected
+      && !socket.data.roomId
+      && socket.data.clientId === entry.clientId
+      && socket.data.randomQueueClientId === entry.clientId
+  );
+}
+
+function createRandomMatch(firstEntry, secondEntry) {
+  const firstSocket = io.sockets.sockets.get(firstEntry.socketId);
+  const secondSocket = io.sockets.sockets.get(secondEntry.socketId);
+  if (!firstSocket || !secondSocket || firstSocket === secondSocket) return false;
+
+  let roomId = '';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const candidate = createRandomRoomId();
+    if (!rooms.has(candidate)) {
+      roomId = candidate;
+      break;
+    }
+  }
+  if (!roomId) return false;
+
+  const room = createRoom(roomId, {
+    matchType: 'random',
+    allowedRandomClientIds: [firstEntry.clientId, secondEntry.clientId]
+  });
+  rooms.set(roomId, room);
+
+  const matchedPlayers = [
+    { entry: firstEntry, socket: firstSocket },
+    { entry: secondEntry, socket: secondSocket }
+  ];
+  matchedPlayers.forEach(({ entry, socket }, seatIndex) => {
+    socket.join(room.id);
+    socket.data.roomId = room.id;
+    socket.data.clientId = entry.clientId;
+    socket.data.randomQueueClientId = undefined;
+    room.players.push(createPlayer({
+      id: socket.id,
+      clientId: entry.clientId,
+      name: entry.name
+    }, seatIndex));
+  });
+
+  broadcastRoom(room);
+  matchedPlayers.forEach(({ entry, socket }) => emitChatState(socket, room, entry.clientId));
+  return true;
+}
+
+function startQueuedRandomMatches() {
+  while (rooms.size < MAX_ACTIVE_ROOMS) {
+    const firstEntry = randomMatchQueue.takeNext(isRandomQueueEntryAvailable);
+    if (!firstEntry) break;
+    const secondEntry = randomMatchQueue.takeNext(isRandomQueueEntryAvailable);
+    if (!secondEntry) {
+      randomMatchQueue.enqueue(firstEntry);
+      break;
+    }
+    if (!createRandomMatch(firstEntry, secondEntry)) {
+      if (isRandomQueueEntryAvailable(firstEntry)) randomMatchQueue.enqueue(firstEntry);
+      if (isRandomQueueEntryAvailable(secondEntry)) randomMatchQueue.enqueue(secondEntry);
+      break;
+    }
+  }
+  schedulePresenceBroadcast();
+}
+
+function removeEmptyRoom(room) {
+  if (!room || room.players.length > 0 || room.spectators.length > 0) return false;
+  rooms.delete(room.id);
+  startQueuedRandomMatches();
+  return true;
+}
+
+function leaveRandomMatchQueue(socket, { notify = true } = {}) {
+  const removed = randomMatchQueue.removeBySocket(socket.id);
+  if (!removed) return false;
+  if (socket.data.randomQueueClientId === removed.clientId) socket.data.randomQueueClientId = undefined;
+  if (notify) emitRandomMatchStatus(socket, 'idle');
+  schedulePresenceBroadcast();
+  return true;
+}
+
+function queueRandomMatch(socket, { clientId, playerName }) {
+  if (socket.data.roomId) {
+    emitError(socket, '対局中または観戦中は、ランダム対戦を検索できません。');
+    return false;
+  }
+  if (!randomMatchLimiter.consume(socket.data.clientIp)) {
+    emitError(socket, 'ランダム対戦の検索回数が多すぎます。少し待ってからお試しください。');
+    return false;
+  }
+
+  const safeClientId = normalizeText(clientId, 80);
+  const safePlayerName = normalizeText(playerName, MAX_PLAYER_NAME_LENGTH, 'プレイヤー');
+  if (!safeClientId) {
+    emitError(socket, '接続情報を確認できませんでした。ページを再読み込みしてお試しください。');
+    return false;
+  }
+
+  const previousEntry = randomMatchQueue.remove(safeClientId);
+  if (previousEntry && previousEntry.socketId !== socket.id) {
+    const previousSocket = io.sockets.sockets.get(previousEntry.socketId);
+    if (previousSocket) previousSocket.disconnect(true);
+  }
+  if (!previousEntry && randomMatchQueue.countByIp(socket.data.clientIp) >= MAX_RANDOM_QUEUE_PER_IP) {
+    emitError(socket, 'このネットワークからのランダム対戦待機が多すぎます。少し待ってからお試しください。');
+    return false;
+  }
+
+  socket.data.clientId = safeClientId;
+  socket.data.randomQueueClientId = safeClientId;
+  const queued = randomMatchQueue.enqueue({
+    clientId: safeClientId,
+    socketId: socket.id,
+    name: safePlayerName,
+    ip: socket.data.clientIp
+  });
+  if (!queued.ok) {
+    socket.data.randomQueueClientId = undefined;
+    emitError(socket, '現在ランダム対戦の待機が混み合っています。少し待ってからお試しください。');
+    return false;
+  }
+
+  startQueuedRandomMatches();
+  if (!socket.data.roomId) emitRandomMatchStatus(socket, 'searching');
+  schedulePresenceBroadcast();
+  return true;
+}
+
 function replyToChat(acknowledge, result) {
   if (typeof acknowledge === 'function') acknowledge(result);
 }
@@ -570,10 +764,7 @@ function resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators = false
   // resetGame already clears every interrupted hand and score before promotion.
   promoteVolunteerSpectators(room);
 
-  if (room.players.length === 0 && room.spectators.length === 0) {
-    rooms.delete(room.id);
-    return false;
-  }
+  if (removeEmptyRoom(room)) return false;
   broadcastRoom(room);
   return true;
 }
@@ -604,6 +795,8 @@ io.on('connection', (socket) => {
 
   trackSocket(clientIp);
   socket.data.clientIp = clientIp;
+  emitPresence(socket);
+  schedulePresenceBroadcast();
   socket.use((_event, next) => {
     if (consumeSocketEvent(socket)) {
       next();
@@ -618,6 +811,10 @@ io.on('connection', (socket) => {
     const playerName = normalizeText(payload.playerName, MAX_PLAYER_NAME_LENGTH, 'プレイヤー');
     const clientId = normalizeText(payload.clientId, 80);
     const joinPreferences = normalizeJoinPreferences(payload);
+
+    // Switching from the random-match entry screen to Private PvP must never
+    // leave a second, invisible queue entry behind.
+    leaveRandomMatchQueue(socket, { notify: false });
 
     if (!roomId || !clientId) {
       emitError(socket, '部屋キーを確認してから、もう一度入室してください。');
@@ -651,6 +848,10 @@ io.on('connection', (socket) => {
 
     const returningPlayer = room.players.find((player) => player.clientId === clientId);
     const returningSpectator = room.spectators.find((spectator) => spectator.clientId === clientId);
+    if (room.matchType === 'random' && !returningPlayer && !returningSpectator) {
+      emitError(socket, 'ランダム対戦の部屋へは、マッチした対戦者だけが入室できます。');
+      return;
+    }
     if (!returningPlayer && !returningSpectator) {
       if (joinPreferences.joinAsSpectator && room.spectators.length >= MAX_SPECTATORS_PER_ROOM) {
         emitError(socket, 'この部屋の観戦者数は上限に達しています。');
@@ -705,6 +906,42 @@ io.on('connection', (socket) => {
 
     broadcastRoom(room);
     emitChatState(socket, room, clientId);
+  });
+
+  socket.on('get_presence', () => {
+    emitPresence(socket);
+  });
+
+  socket.on('join_random_match', (payload = {}) => {
+    queueRandomMatch(socket, {
+      clientId: payload?.clientId,
+      playerName: payload?.playerName
+    });
+  });
+
+  socket.on('leave_random_queue', () => {
+    if (socket.data.roomId) return;
+    leaveRandomMatchQueue(socket);
+  });
+
+  socket.on('find_next_random_match', (payload = {}) => {
+    const room = getBoundRoom(socket, payload.roomId);
+    if (!room || room.matchType !== 'random') return;
+    if (!['waiting', 'finished'].includes(room.gameState)) {
+      emitError(socket, '対局中は別の対戦相手を検索できません。先に降参または対局終了をお待ちください。');
+      return;
+    }
+    const playerIndex = room.players.findIndex((player) => player.id === socket.id);
+    if (playerIndex < 0) return;
+    const player = room.players[playerIndex];
+    socket.leave(room.id);
+    socket.data.roomId = undefined;
+    clearDisconnectTimer(room.id, player.clientId);
+    resetAfterPlayerDeparture(room, playerIndex);
+    queueRandomMatch(socket, {
+      clientId: player.clientId,
+      playerName: player.name
+    });
   });
 
   socket.on('send_chat', (payload = {}, acknowledge) => {
@@ -822,14 +1059,15 @@ io.on('connection', (socket) => {
       const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
       if (spectatorIndex >= 0) {
         room.spectators.splice(spectatorIndex, 1);
-        if (room.players.length === 0 && room.spectators.length === 0) rooms.delete(room.id);
-        else broadcastRoom(room);
+        if (!removeEmptyRoom(room)) broadcastRoom(room);
       }
     }
   });
 
   socket.on('disconnect', () => {
     untrackSocket(socket.data.clientIp);
+    leaveRandomMatchQueue(socket, { notify: false });
+    schedulePresenceBroadcast();
     const room = getRoom(socket.data.roomId);
     if (!room) return;
 
@@ -845,8 +1083,7 @@ io.on('connection', (socket) => {
     const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
     if (spectatorIndex >= 0) {
       room.spectators.splice(spectatorIndex, 1);
-      if (room.players.length === 0 && room.spectators.length === 0) rooms.delete(room.id);
-      else broadcastRoom(room);
+      if (!removeEmptyRoom(room)) broadcastRoom(room);
     }
   });
 });

@@ -89,6 +89,7 @@ not commit a real `.env` file.
 | `ALLOWED_ORIGINS` | Legacy Socket.IO | Comma-separated approved frontend origins. Defaults include the current GitHub Pages and Render URLs; localhost is added only when `NODE_ENV` is explicitly `development` or `test`. |
 | `TRUST_PROXY` | Hosting | Set to `true` only when the hosting network is a known reverse proxy that sanitizes `X-Forwarded-For` (such as the configured Render deployment). |
 | `MAX_ACTIVE_ROOMS`, `MAX_SPECTATORS_PER_ROOM`, `MAX_SOCKETS_PER_IP`, `MAX_HTTP_CONNECTIONS`, `SOCKET_EVENT_LIMIT`, `RATE_LIMIT_TRACKED_IPS` | Legacy PvP | Resource limits described below. |
+| `MAX_RANDOM_MATCH_QUEUE`, `MAX_RANDOM_QUEUE_PER_IP`, `RANDOM_MATCH_REQUEST_LIMIT` | Guest random match | Bounded queue size, per-IP queued sessions, and random-match search requests per minute. |
 
 Never put `DATABASE_URL`, `RANKED_SEED_ENCRYPTION_KEY`, a Supabase
 service-role key, or an OAuth provider secret in frontend code, GitHub Pages,
@@ -199,6 +200,17 @@ normal two-player play:
   start/restart a match, or obtain a player seat unless they explicitly opted
   in before a vacancy occurs. A player who switches to spectating is not
   silently promoted back into a seat.
+- Random matching uses a bounded FIFO queue with a short per-IP queue cap,
+  dedicated per-IP request limiter, disconnect removal, and stale-entry
+  cleanup. It creates CSPRNG room ids and only the paired players may join a
+  random room; a copied room id does not become a public spectator link. The
+  client supplies only its transient reconnect id and bounded display name;
+  it cannot choose an opponent, room id, game state, or result.
+- The displayed online and queue counts intentionally contain only aggregate
+  counts, never IP addresses, client ids, or names. They represent the active
+  process. Guest PvP rooms and random matching are in-memory today, so a
+  multi-instance deployment must add a shared Socket.IO adapter and a shared
+  queue/presence store (for example Redis) before presenting a global count.
 
 `ALLOW_ORIGINLESS_SOCKET_CONNECTIONS=true` is for narrow local testing only;
 do not enable it publicly. Do not set `TRUST_PROXY=true` on a directly exposed
