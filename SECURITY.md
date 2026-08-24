@@ -49,8 +49,12 @@ an idempotency `requestId` UUID; the game id is in the path.
    bad/missing table disables Ranked only; Guest PvP still starts.
 
 5. Use the backend-origin `/ranked` link for Rank and leaderboard. The GitHub
-   Pages entry page links there automatically while preserving Private PvP as a
-   guest feature.
+   Pages entry page links there automatically; the Ranked header's Private PvP
+   and logo links deliberately return to the canonical GitHub Pages guest PvP
+   URL, rather than the backend root. If an OAuth provider falls back to that
+   Pages URL with a short-lived `code` and `state`, the Pages client immediately
+   forwards them to the backend callback; the backend still enforces its
+   HttpOnly state cookie, PKCE, and one-time transaction validation.
 
 An example configuration is included in [`.env.example`](.env.example). Do
 not commit a real `.env` file.

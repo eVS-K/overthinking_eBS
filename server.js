@@ -148,7 +148,7 @@ app.use((request, response, next) => {
 });
 
 app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'index.html')));
-app.get(['/index.html', '/main.js', '/style.css'], (request, response) => {
+app.get(['/index.html', '/main.js', '/oauth-recovery.js', '/style.css'], (request, response) => {
   response.sendFile(path.join(__dirname, request.path));
 });
 // Ranked/Auth lives on the backend origin so the opaque session cookie is never
