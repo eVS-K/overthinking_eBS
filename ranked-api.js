@@ -86,6 +86,7 @@ function registerRankedRoutes(app, { runtime, getClientIp }) {
   const authCallbackLimit = createRateLimit({ limit: 30, windowMs: 10 * 60_000, getKey: byIp });
   const gameCreateLimit = createRateLimit({ limit: 12, windowMs: 60 * 60_000, getKey: byUser });
   const gameReadLimit = createRateLimit({ limit: 120, windowMs: 60_000, getKey: byUser });
+  const gameSettleLimit = createRateLimit({ limit: 30, windowMs: 60_000, getKey: byUser });
   const moveLimit = createRateLimit({ limit: 90, windowMs: 60_000, getKey: byUser });
   const forfeitLimit = createRateLimit({ limit: 12, windowMs: 60 * 60_000, getKey: byUser });
   const profileLimit = createRateLimit({ limit: 12, windowMs: 60 * 60_000, getKey: byUser });
@@ -149,6 +150,18 @@ function registerRankedRoutes(app, { runtime, getClientIp }) {
     response.json({ game: await service.getActiveGame(request.auth.userId) });
   }));
 
+  // GET stays read-only. Deadline settlement is a state-changing operation
+  // and therefore receives the same CSRF / Origin protection as a move.
+  router.post('/api/ranked/games/active/settle', requireAuth, requireStateChange, requireEmptyObject, gameSettleLimit, asyncRoute(async (request, response) => {
+    noStore(response);
+    response.json({ game: await service.settleActiveGame(request.auth.userId) });
+  }));
+
+  router.get('/api/ranked/games/resume', requireAuth, gameReadLimit, asyncRoute(async (request, response) => {
+    noStore(response);
+    response.json({ game: await service.getResumeGame(request.auth.userId) });
+  }));
+
   router.post('/api/ranked/games/:id/moves', requireAuth, requireStateChange, moveLimit, asyncRoute(async (request, response) => {
     noStore(response);
     response.json(await service.submitMove(request.auth.userId, request.params.id, request.body));
@@ -166,7 +179,7 @@ function registerRankedRoutes(app, { runtime, getClientIp }) {
     response.json(await service.getLeaderboard({ limit, offset }));
   }));
 
-  router.get('/api/profile', requireAuth, asyncRoute(async (request, response) => {
+  router.get('/api/profile', requireAuth, authSessionLimit, asyncRoute(async (request, response) => {
     noStore(response);
     response.json({ profile: await service.getProfileSummary(request.auth.userId) });
   }));

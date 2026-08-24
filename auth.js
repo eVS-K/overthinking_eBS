@@ -9,6 +9,7 @@ const OAUTH_TRANSACTION_COOKIE_NAME = '__Host-overthinking-oauth-transaction';
 const OAUTH_TRANSACTION_TTL_MS = 10 * 60_000;
 const DEFAULT_SESSION_ABSOLUTE_MS = 30 * 24 * 60 * 60_000;
 const DEFAULT_SESSION_IDLE_MS = 7 * 24 * 60 * 60_000;
+const DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS = 8_000;
 
 function base64urlRandom(bytes = 32) {
   return crypto.randomBytes(bytes).toString('base64url');
@@ -48,6 +49,7 @@ function createAuthConfig(environment = process.env) {
     supabaseAnonKey: environment.SUPABASE_ANON_KEY || environment.SUPABASE_PUBLISHABLE_KEY || '',
     sessionAbsoluteMs: readDuration(environment.SESSION_ABSOLUTE_MS, DEFAULT_SESSION_ABSOLUTE_MS),
     sessionIdleMs: readDuration(environment.SESSION_IDLE_MS, DEFAULT_SESSION_IDLE_MS),
+    supabaseRequestTimeoutMs: readDuration(environment.SUPABASE_REQUEST_TIMEOUT_MS, DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS, { min: 1_000, max: 30_000 }),
     cookieSecure: production || configuredOrigin.startsWith('https://') || environment.COOKIE_SECURE === 'true',
     production
   };
@@ -117,27 +119,67 @@ function ensureUuid(value) {
   return value.toLowerCase();
 }
 
+async function fetchWithTimeout(fetchImpl, input, init, timeoutMs = DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS) {
+  if (typeof fetchImpl !== 'function') {
+    throw new RankedError(503, 'AUTH_RUNTIME_UNAVAILABLE', 'The authentication runtime is unavailable.');
+  }
+  if (typeof AbortController !== 'function') return fetchImpl(input, init);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+  try {
+    return await fetchImpl(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    // Do not allow a stalled identity-provider request to occupy a Node worker
+    // forever.  The provider token is never persisted, so a user can safely
+    // restart the OAuth flow after this bounded failure.
+    if (controller.signal.aborted || error?.name === 'AbortError') {
+      throw new RankedError(503, 'IDENTITY_PROVIDER_UNAVAILABLE', 'The identity provider did not respond in time.');
+    }
+    throw new RankedError(503, 'IDENTITY_PROVIDER_UNAVAILABLE', 'The identity provider could not be reached.');
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readProviderJson(response, message, timeoutMs = DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS) {
+  let timer;
+  try {
+    const body = response.json();
+    const timedOut = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new RankedError(503, 'IDENTITY_PROVIDER_UNAVAILABLE', 'The identity provider response timed out.')), timeoutMs);
+      timer.unref?.();
+    });
+    return await Promise.race([body, timedOut]);
+  } catch (error) {
+    if (error instanceof RankedError) throw error;
+    throw new RankedError(502, 'IDENTITY_PROVIDER_RESPONSE_INVALID', message);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function fetchSupabaseUser(config, { authCode, codeVerifier, fetchImpl = globalThis.fetch }) {
-  if (typeof fetchImpl !== 'function') throw new RankedError(503, 'AUTH_RUNTIME_UNAVAILABLE', 'The authentication runtime is unavailable.');
-  const tokenResponse = await fetchImpl(`${config.supabaseUrl}/auth/v1/token?grant_type=pkce`, {
+  const tokenResponse = await fetchWithTimeout(fetchImpl, `${config.supabaseUrl}/auth/v1/token?grant_type=pkce`, {
     method: 'POST',
     headers: {
       apikey: config.supabaseAnonKey,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ auth_code: authCode, code_verifier: codeVerifier })
-  });
+  }, config.supabaseRequestTimeoutMs);
   if (!tokenResponse.ok) throw new RankedError(401, 'OAUTH_EXCHANGE_FAILED', 'Sign-in could not be completed.');
-  const tokenPayload = await tokenResponse.json();
+  const tokenPayload = await readProviderJson(tokenResponse, 'Identity provider returned an invalid session.', config.supabaseRequestTimeoutMs);
   if (!tokenPayload || typeof tokenPayload.access_token !== 'string' || tokenPayload.access_token.length > 8_192) {
     throw new RankedError(502, 'IDENTITY_PROVIDER_RESPONSE_INVALID', 'Identity provider returned an invalid session.');
   }
-  const userResponse = await fetchImpl(`${config.supabaseUrl}/auth/v1/user`, {
+  const userResponse = await fetchWithTimeout(fetchImpl, `${config.supabaseUrl}/auth/v1/user`, {
     headers: { apikey: config.supabaseAnonKey, Authorization: `Bearer ${tokenPayload.access_token}` }
-  });
+  }, config.supabaseRequestTimeoutMs);
   // Provider tokens are intentionally discarded immediately after this request.
   if (!userResponse.ok) throw new RankedError(401, 'OAUTH_USER_LOOKUP_FAILED', 'Sign-in could not be completed.');
-  const user = await userResponse.json();
+  const user = await readProviderJson(userResponse, 'Identity provider returned an invalid user identity.', config.supabaseRequestTimeoutMs);
   return { userId: ensureUuid(user?.id) };
 }
 
@@ -350,18 +392,21 @@ module.exports = {
   CSRF_COOKIE_NAME,
   DEFAULT_SESSION_ABSOLUTE_MS,
   DEFAULT_SESSION_IDLE_MS,
+  DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS,
   OAUTH_TRANSACTION_TTL_MS,
   OAUTH_TRANSACTION_COOKIE_NAME,
   SESSION_COOKIE_NAME,
   base64urlRandom,
   createAuthConfig,
   createAuthMiddleware,
+  fetchWithTimeout,
   fetchSupabaseUser,
   generatePkce,
   isAuthConfigured,
   makeAuthorizationUrl,
   normalizeOrigin,
   parseCookies,
+  readProviderJson,
   serializeCookie,
   sha256,
   timingSafeEqualText

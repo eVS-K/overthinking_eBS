@@ -45,6 +45,18 @@ test('1 userにつきactive Ranked gameは1件だけで、active stateはseedを
   assert.equal(JSON.stringify(first).includes('encryptedSeed'), false);
 });
 
+test('新規game作成はseason rotationと同じlockを先に取得して競合を防ぐ', async () => {
+  const { service, repository } = makeService();
+  const order = [];
+  const originalLockSeason = repository.lockSeason.bind(repository);
+  const originalGetActiveSeason = repository.getActiveSeason.bind(repository);
+  repository.lockSeason = async (...args) => { order.push('lock'); return originalLockSeason(...args); };
+  repository.getActiveSeason = async (...args) => { order.push('get'); return originalGetActiveSeason(...args); };
+  await repository.transaction((tx) => service.ensureCurrentSeasonInTransaction(tx, { lockActive: true }));
+  assert.equal(order[0], 'lock');
+  assert.equal(order.includes('get'), true);
+});
+
 test('公開handleは20文字以内のASCII許可文字だけを受け入れ、空白と不可視文字を拒否する', async () => {
   const { service } = makeService();
   for (const invalid of ['ab', 'abcdefghijklmnopqrstu', 'valid handle', ' valid', 'valid ', 'valid\u200Bhandle', 'valid\nhandle', '全角Handle']) {
@@ -55,6 +67,8 @@ test('公開handleは20文字以内のASCII許可文字だけを受け入れ、�
   }
   const updated = await service.updateHandle(USER_A, 'Player-2026');
   assert.equal(updated.handle, 'Player-2026');
+  const repeated = await service.updateHandle(USER_A, 'Player-2026');
+  assert.equal(repeated.handle, 'Player-2026');
 });
 
 test('moveはserver authoritativeで、同一requestIdはidempotent、カードは一度しか消費されない', async () => {
@@ -118,15 +132,19 @@ test('異なるrequestIdのparallel moveも一枚だけ消費し、片方はstal
   assert.equal((await repository.findGameById(game.id)).currentRound, 2);
 });
 
-test('deadline後はserver-side deterministic timeout moveとなり、resume可能', async () => {
+test('deadline後も読み取りは状態を変えず、明示的なsettleだけがserver-side timeout moveを確定する', async () => {
   const runtime = makeService();
   const game = await runtime.service.createOrResumeGame(USER_A);
   runtime.advance(90_000);
-  const resumed = await runtime.service.getActiveGame(USER_A);
-  assert.equal(resumed.currentRound, 2);
-  assert.equal(resumed.history.length, 1);
-  assert.equal(resumed.history[0].timeout, true);
-  assert.equal(resumed.history[0].playerCardId.length > 0, true);
+  const readOnly = await runtime.service.getActiveGame(USER_A);
+  assert.equal(readOnly.currentRound, 1);
+  assert.equal(readOnly.history.length, 0);
+  assert.equal((await runtime.repository.listMoves(game.id)).length, 0);
+  const settled = await runtime.service.settleActiveGame(USER_A);
+  assert.equal(settled.currentRound, 2);
+  assert.equal(settled.history.length, 1);
+  assert.equal(settled.history[0].timeout, true);
+  assert.equal(settled.history[0].playerCardId.length > 0, true);
   const [move] = await runtime.repository.listMoves(game.id);
   assert.equal(move.timeout, true);
   assert.ok(move.regret >= 0n);
@@ -164,7 +182,7 @@ test('最終ラウンドはserver-sideで15秒締切になり、timeout記録も
   assert.equal(new Date(sixthRound.game.deadline).getTime() - now.getTime(), 15_000);
 
   runtime.advance(15_000);
-  const settled = await runtime.service.getActiveGame(USER_A);
+  const settled = await runtime.service.settleActiveGame(USER_A);
   assert.equal(settled.status, 'completed');
   const moves = await runtime.repository.listMoves(initial.id);
   assert.equal(moves.at(-1).timeout, true);
@@ -175,7 +193,7 @@ test('長時間放置されたdeadlineはforfeitとして一回だけratingへ�
   const runtime = makeService();
   const game = await runtime.service.createOrResumeGame(USER_A);
   runtime.advance(24 * 60 * 60_000 + 90_000);
-  const settled = await runtime.service.getActiveGame(USER_A);
+  const settled = await runtime.service.settleActiveGame(USER_A);
   assert.equal(settled.status, 'forfeited');
   assert.equal(settled.actualResult, 'forfeit');
   assert.equal((await runtime.repository.listMoves(game.id)).length, 0);
@@ -193,6 +211,44 @@ test('forfeitはDecision Performance 0でratingを一回だけfinalizeする', a
   assert.equal(second.ratingAfter, first.ratingAfter);
   const profile = await service.getProfileSummary(USER_A);
   assert.deepEqual({ games: profile.ratedGames, losses: profile.losses, forfeits: profile.forfeits }, { games: 1, losses: 1, forfeits: 1 });
+});
+
+test('計算表の互換性が失われたactive gameは操作を止めるが、安全に投了して解除できる', async () => {
+  const { service, repository } = makeService();
+  const game = await service.createOrResumeGame(USER_A);
+  const stored = await repository.findGameById(game.id);
+  await repository.transaction((tx) => tx.saveGame({ ...stored, valueTableChecksum: 'obsolete-checksum' }));
+
+  const view = await service.getActiveGame(USER_A);
+  assert.equal(view.versionMismatch, true);
+  assert.equal(view.status, 'active');
+  const resumed = await service.createOrResumeGame(USER_A);
+  assert.equal(resumed.id, game.id);
+  assert.equal(resumed.versionMismatch, true);
+  await assert.rejects(
+    service.submitMove(USER_A, game.id, { expectedRound: 1, cardId: 'ace', requestId: REQUEST_A }),
+    (error) => error instanceof RankedError && error.code === 'GAME_VERSION_MISMATCH'
+  );
+  assert.equal((await repository.findGameById(game.id)).currentRound, 1);
+
+  const forfeited = await service.forfeitGame(USER_A, game.id);
+  assert.equal(forfeited.status, 'forfeited');
+  assert.equal((await service.getProfileSummary(USER_A)).ratedGames, 1);
+});
+
+test('期限切れOAuth transactionとsessionは定期的に削除できる', async () => {
+  const runtime = makeService();
+  const now = new Date('2026-08-24T00:00:00.000Z');
+  await runtime.repository.createOAuthTransaction({
+    stateHash: 'expired-oauth', provider: 'github', codeVerifier: 'verifier', redirectUri: 'https://example.test/auth/callback', expiresAt: new Date(now.getTime() - 1)
+  });
+  await runtime.repository.createSession({
+    id: '30000000-0000-4000-8000-000000000099', userId: USER_A, sessionTokenHash: 'expired-session', csrfTokenHash: 'expired-csrf', expiresAt: new Date(now.getTime() - 1), idleExpiresAt: new Date(now.getTime() - 1)
+  });
+  const pruned = await runtime.service.pruneExpiredAuthArtifacts();
+  assert.deepEqual(pruned, { oauthTransactions: 1, sessions: 1 });
+  assert.equal(runtime.repository.oauthTransactions.size, 0);
+  assert.equal(runtime.repository.sessions.size, 0);
 });
 
 test('season rotationは古いgame/ratingを保持し、新seasonを分離する', async () => {
@@ -213,6 +269,7 @@ test('season rotationは古いgame/ratingを保持し、新seasonを分離する
 
 test('leaderboardは短時間cacheし、同時取得を一つのDB queryへまとめる', async () => {
   const { service, repository } = makeService();
+  await service.createOrResumeGame(USER_A);
   let queries = 0;
   const original = repository.getLeaderboard.bind(repository);
   repository.getLeaderboard = async (...args) => {
@@ -228,4 +285,38 @@ test('leaderboardは短時間cacheし、同時取得を一つのDB queryへま�
   assert.equal(queries, 1);
   assert.deepEqual(first, second);
   assert.deepEqual(second, third);
+});
+
+test('Rankedの読み取りはseason・rating profile・game stateを新規作成しない', async () => {
+  const { service, repository } = makeService();
+  await repository.ensureProfile(USER_A);
+
+  const profile = await service.getProfileSummary(USER_A);
+  const leaderboard = await service.getLeaderboard({ limit: 25, offset: 0 });
+
+  assert.equal(profile.ratedGames, 0);
+  assert.equal(profile.provisional, true);
+  assert.equal(leaderboard.season, null);
+  assert.deepEqual(leaderboard.entries, []);
+  assert.equal(repository.seasons.size, 0);
+  assert.equal(repository.rankedProfiles.size, 0);
+  assert.equal(repository.games.size, 0);
+});
+
+test('leaderboard cacheは期限切れを掃除し、ページキーが増えても上限を超えない', async () => {
+  const { repository } = makeService();
+  const service = new RankedService({
+    repository,
+    valueLookup: new RankedValueLookup(createSignedRankedValueTable()),
+    seedEncryptionKey: TEST_KEY,
+    leaderboardCacheMaxEntries: 2
+  });
+  await service.createOrResumeGame(USER_A);
+  await service.getLeaderboard({ limit: 1, offset: 0 });
+  await service.getLeaderboard({ limit: 1, offset: 1 });
+  await service.getLeaderboard({ limit: 1, offset: 2 });
+  assert.equal(service.leaderboardCache.size, 2);
+  for (const entry of service.leaderboardCache.values()) entry.expiresAt = 0;
+  await service.getLeaderboard({ limit: 1, offset: 3 });
+  assert.equal(service.leaderboardCache.size, 1);
 });

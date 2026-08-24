@@ -59,7 +59,7 @@
 .ranked-auth-actions .primary-button,
 .ranked-auth-actions .secondary-button { width: 100%; margin: 0; text-decoration: none; }
 .ranked-auth-notice { max-width: 510px; margin: 22px auto 0; padding: 12px 14px; border: 1px solid rgba(141, 183, 255, .36); color: var(--blue-bright); background: rgba(141, 183, 255, .08); font-size: 12px; line-height: 1.7; }
-.ranked-fine-print { margin-top: 20px !important; color: var(--faint) !important; font-size: 11px !important; }
+.ranked-fine-print { margin-top: 20px !important; color: #aab9d1 !important; font-size: 11px !important; line-height: 1.75 !important; }
 
 .ranked-dashboard { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 16px; align-items: start; }
 .ranked-profile { grid-column: 1 / -1; padding: clamp(20px, 3vw, 29px); }
@@ -80,12 +80,14 @@
 .ranked-record,
 .ranked-provisional-note { margin: 14px 0 0; color: #c9d5e9; font-family: var(--mono); font-size: 11px; letter-spacing: .04em; }
 .ranked-provisional-note { color: var(--muted); }
+.ranked-metric-guide { margin: 11px 0 0; color: #9eafca; font-size: 11px; line-height: 1.65; }
 .ranked-handle-form { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 13px; margin-top: 20px; padding-top: 17px; border-top: 1px solid var(--line); }
 .ranked-handle-form label { color: var(--muted); font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .1em; }
 .ranked-handle-form > div { display: flex; min-width: 0; gap: 10px; }
 .ranked-handle-form input { min-width: 0; padding: 9px 10px; border: 1px solid var(--line-strong); color: var(--ink); background: rgba(5, 9, 20, .45); font-family: var(--mono); font-size: 12px; }
 .ranked-handle-form .ranked-text-button { flex: 0 0 auto; border: 1px solid var(--line-strong); padding-inline: 11px; color: var(--blue-bright); }
 .ranked-handle-hint { margin: 8px 0 0; color: var(--faint); font-family: var(--mono); font-size: 9px; letter-spacing: .03em; line-height: 1.55; }
+.ranked-handle-feedback { margin: 9px 0 0; padding: 9px 10px; border: 1px solid rgba(255, 130, 152, .55); border-left: 3px solid #ff849c; color: #ffe4e9; background: rgba(83, 29, 47, .42); font-size: 11px; line-height: 1.6; }
 
 .ranked-empty-state { display: grid; justify-items: start; gap: 18px; max-width: 590px; padding: 36px 0 10px; }
 .ranked-empty-state p { margin: 0; color: #c0cce0; font-size: 13px; line-height: 1.85; }
@@ -190,8 +192,39 @@
 .leaderboard-row > span { min-width: 0; overflow: hidden; color: var(--ink); font-size: 15px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .leaderboard-row > span:nth-of-type(2) { color: var(--gold-bright); font-family: var(--serif); font-size: 24px; font-weight: 400; }
 .leaderboard-row small { grid-column: 2 / -1; color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: .04em; }
-.ranked-message { position: fixed; right: 18px; bottom: 18px; z-index: 20; max-width: min(calc(100% - 36px), 520px); margin: 0; color: var(--blue-bright); font-size: 12px; line-height: 1.55; opacity: 0; pointer-events: none; text-align: right; text-shadow: 0 2px 8px #000; transform: translateY(6px); transition: opacity .18s ease, transform .18s ease; }
-.ranked-message.has-message { opacity: 1; transform: translateY(0); }
+.ranked-list-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 15px; padding: 13px 14px; border: 1px solid rgba(255, 130, 152, .5); border-left: 4px solid #ff849c; color: #ffe9ee; background: rgba(83, 29, 47, .42); font-size: 12px; line-height: 1.6; }
+.ranked-list-error p { margin: 0; }
+.ranked-list-error .ranked-text-button { flex: 0 0 auto; min-height: 34px; padding-inline: 9px; border: 1px solid rgba(255, 190, 201, .38); color: #ffc5d0; }
+.ranked-message { position: fixed; right: 18px; bottom: 18px; z-index: 20; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; width: min(calc(100% - 36px), 520px); margin: 0; padding: 13px 13px 13px 15px; border: 1px solid rgba(141, 183, 255, .68); border-left: 4px solid var(--blue-bright); color: #e7f0ff; background: linear-gradient(135deg, rgba(23, 40, 77, .98), rgba(9, 15, 31, .98)); box-shadow: 0 16px 38px rgba(0, 0, 0, .42), 0 0 30px rgba(103, 160, 255, .15); font-size: 12px; line-height: 1.6; opacity: 0; pointer-events: none; text-align: left; transform: translateY(12px) scale(.98); transition: opacity .2s ease, transform .2s ease; }
+.ranked-message-icon::before { content: 'i'; display: grid; place-items: center; width: 18px; height: 18px; border: 1px solid currentColor; border-radius: 50%; color: var(--blue-bright); font-family: var(--serif); font-size: 13px; line-height: 1; }
+.ranked-message.has-message { opacity: 1; pointer-events: auto; transform: translateY(0) scale(1); }
+.ranked-message[data-kind="error"] { border-color: rgba(255, 130, 152, .78); border-left-color: #ff849c; color: #fff0f3; background: linear-gradient(135deg, rgba(83, 29, 47, .98), rgba(28, 11, 22, .98)); box-shadow: 0 16px 38px rgba(0, 0, 0, .42), 0 0 30px rgba(255, 100, 132, .17); }
+.ranked-message[data-kind="error"] .ranked-message-icon::before { content: '!'; color: #ff9aae; }
+.ranked-message[data-kind="warning"] { border-color: rgba(242, 189, 105, .76); border-left-color: var(--gold-bright); color: #fff6e4; background: linear-gradient(135deg, rgba(77, 58, 29, .98), rgba(28, 21, 11, .98)); }
+.ranked-message[data-kind="warning"] .ranked-message-icon::before { content: '!'; color: var(--gold-bright); }
+.ranked-message[data-kind="success"] { border-color: rgba(108, 230, 164, .7); border-left-color: #71e3ab; color: #e9fff3; background: linear-gradient(135deg, rgba(24, 70, 52, .98), rgba(8, 27, 20, .98)); }
+.ranked-message[data-kind="success"] .ranked-message-icon::before { content: '✓'; color: #81efb5; }
+.ranked-message > span { min-width: 0; }
+.ranked-message button { width: 24px; height: 24px; padding: 0; border: 1px solid rgba(232, 241, 255, .28); color: inherit; background: rgba(255, 255, 255, .06); cursor: pointer; font-size: 18px; line-height: 1; }
+.ranked-message button:hover { border-color: currentColor; background: rgba(255, 255, 255, .13); }
+
+@media (min-width: 761px) {
+  /* Keep all five post-game metrics visually balanced: the final score owns
+     the center of the first row, while the remaining four measurements form
+     two equal pairs instead of leaving a lonely final cell. */
+  .ranked-postgame-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .ranked-postgame-grid article:first-child,
+  .ranked-postgame-grid article:nth-child(4),
+  .ranked-postgame-grid article:nth-child(5) { grid-column: span 2; }
+}
+
+@media (min-width: 761px) and (max-width: 860px) {
+  /* Tablet widths have room for normal cards but not a comfortable game-plus-
+     history split.  Stack the panels before the compact mobile card layout
+     begins at 760px. */
+  .ranked-dashboard { grid-template-columns: minmax(0, 1fr); }
+  .ranked-profile { grid-column: auto; }
+}
 
 @keyframes ranked-round-reveal {
   from { opacity: 0; transform: scale(.86) translateY(8px); }
@@ -213,13 +246,13 @@
 @media (max-width: 760px) {
   .ranked-site-header,
   .ranked-layout { width: calc(100% - 24px); }
-  .ranked-site-header { min-height: 60px; }
-  .ranked-site-header .game-brand { font-size: 17px; }
-  .ranked-nav { gap: 10px; }
+  .ranked-site-header { flex-wrap: wrap; align-items: flex-start; min-height: 0; padding-block: 13px 7px; gap: 3px 12px; }
+  .ranked-site-header .game-brand { flex-basis: 100%; font-size: 17px; }
+  .ranked-nav { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-start; gap: 3px 13px; }
   .ranked-nav a,
-  .ranked-text-button { font-size: 8px; letter-spacing: .06em; }
-  .ranked-auth-status { font-size: 8px; letter-spacing: .04em; }
-  .ranked-auth-status span { max-width: 86px; }
+  .ranked-text-button { display: inline-flex; align-items: center; min-height: 36px; padding-block: 7px; font-size: 10px; letter-spacing: .03em; }
+  .ranked-auth-status { min-height: 36px; font-size: 9px; letter-spacing: .02em; }
+  .ranked-auth-status span { max-width: 132px; }
   .ranked-dashboard { grid-template-columns: minmax(0, 1fr); gap: 11px; }
   .ranked-profile { grid-column: auto; }
   .ranked-game,
@@ -233,8 +266,8 @@
   .ranked-scoreline > div > strong { font-size: 34px; }
   .ranked-round-meta > strong { font-size: 20px !important; }
   .ranked-ai-state { padding-block: 10px; }
-  .ranked-opponent-hand { gap: 5px; padding-top: 8px; }
-  .ranked-opponent-card { flex: 0 0 83px; padding-block: 9px; }
+  .ranked-opponent-hand { gap: 4px; padding-top: 8px; overflow: hidden; }
+  .ranked-opponent-card { flex: 1 1 0; min-width: 0; padding: 9px 2px; font-size: 10px; }
   .ranked-round-result { margin-top: 12px; padding: 12px 8px; }
   .ranked-round-result strong { font-size: clamp(21px, 7vw, 29px); }
   .ranked-duel { gap: 6px; }
@@ -251,7 +284,8 @@
   .ranked-postgame-grid { grid-template-columns: 1fr; }
   .leaderboard-row { grid-template-columns: 45px minmax(0, 1fr) auto; gap: 6px 9px; padding-inline: 2px; }
   .leaderboard-row > span:nth-of-type(2) { font-size: 21px; }
-  .ranked-message { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); }
+  .ranked-list-error { align-items: flex-start; }
+  .ranked-message { right: 12px; bottom: calc(82px + env(safe-area-inset-bottom)); width: min(calc(100% - 24px), 520px); }
 }
 
 @media (max-width: 440px) {
@@ -259,10 +293,11 @@
   .ranked-auth-actions { grid-template-columns: 1fr; }
   .ranked-auth-actions .primary-button,
   .ranked-auth-actions .secondary-button { min-height: 47px; }
-  .ranked-site-header { align-items: flex-start; padding-top: 14px; }
-  .ranked-nav { gap: 8px; }
-  .ranked-nav a { max-width: 76px; text-align: right; }
-  .ranked-auth-status { display: none; }
+  .ranked-site-header { padding-top: 14px; }
+  .ranked-nav { gap: 1px 10px; }
+  .ranked-nav a { max-width: none; text-align: left; }
+  .ranked-auth-status { display: inline-flex; }
+  .ranked-auth-status span { max-width: 118px; }
   .ranked-scoreline > div > span { font-size: 8px; letter-spacing: .06em; }
   .ranked-scoreline > div > strong { font-size: 29px; }
   .ranked-round-meta > span { white-space: nowrap; }
@@ -271,9 +306,10 @@
   .ranked-game-actions { gap: 7px; }
   .ranked-game-actions .primary-button { gap: 8px; }
   .ranked-game-actions .secondary-button { max-width: 77px; }
-  .ranked-history-list { display: flex; overflow-x: auto; margin-inline: -2px; padding-inline: 2px; }
-  .ranked-history .history-item { flex: 0 0 185px; }
+  .ranked-history-list { display: grid; grid-template-columns: 1fr; overflow: visible; margin-inline: 0; padding-inline: 0; }
+  .ranked-history .history-item { flex: none; }
   .ranked-postgame h3 { font-size: 31px; }
+  .ranked-list-error { flex-direction: column; }
 }
 
 @media (prefers-reduced-motion: reduce) {

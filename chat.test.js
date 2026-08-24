@@ -21,6 +21,8 @@ test('チャットは50文字以内の通常テキストだけを受け入れる
   assert.equal(sanitizeChatMessage('あ'.repeat(MAX_CHAT_MESSAGE_LENGTH + 1)).ok, false);
   assert.equal(sanitizeChatMessage('hello\nworld').ok, false);
   assert.equal(sanitizeChatMessage(' \t ').ok, false);
+  assert.equal(sanitizeChatMessage('見え\u200Bない文字').ok, false);
+  assert.equal(sanitizeChatMessage('右\u202E左').ok, false);
 });
 
 test('チャット送信はセッションごとに50回で止まり、短時間の連投を拒否する', () => {

@@ -30,7 +30,7 @@ an idempotency `requestId` UUID; the game id is in the path.
 3. Set `APP_ORIGIN` to that same HTTPS origin. It must not be the GitHub Pages
    URL, because browser app sessions are same-origin cookies.
 4. Generate the value table as part of a controlled release, then apply the
-   SQL migration before enabling Ranked:
+   SQL migrations **before** enabling Ranked:
 
    ```text
    npm ci
@@ -38,6 +38,15 @@ an idempotency `requestId` UUID; the game id is in the path.
    npm run migrate
    npm start
    ```
+
+   `npm run migrate` takes a PostgreSQL advisory lock and records each numbered
+   migration in the same transaction as its schema change. In particular,
+   `002_harden_ranked_database_access.sql` enables RLS and revokes the
+   Supabase `anon` / `authenticated` Data API roles from every Ranked table.
+   This is mandatory in production; do not expose these tables through the
+   Supabase Data API. The backend's direct database role must own the tables
+   or otherwise be explicitly authorized to bypass RLS—do not solve that by
+   granting public roles access.
 
    `data/ranked-values.v1.json` is a backend build artifact and is intentionally
    git-ignored so a root-published GitHub Pages deployment cannot expose it as
@@ -65,9 +74,11 @@ not commit a real `.env` file.
 | --- | --- | --- |
 | `DATABASE_URL` | Ranked | PostgreSQL connection URL. Keep it server-only. |
 | `DATABASE_SSL` | Ranked | Set `disable`/`false` only for an explicitly trusted local database; production defaults to certificate verification. |
+| `DATABASE_QUERY_TIMEOUT_MS` | Ranked | PostgreSQL statement/client query bound; defaults to 8 seconds (1–60 seconds allowed). Raise only temporarily for a reviewed migration. |
 | `APP_ORIGIN` | Ranked/Auth | Exact HTTPS origin of this backend application, for example `https://overthinking-ebs.onrender.com`. |
 | `SUPABASE_URL` | Ranked/Auth | Supabase project URL. |
 | `SUPABASE_ANON_KEY` | Ranked/Auth | Supabase publishable/anon key. It is not a service-role key. |
+| `SUPABASE_REQUEST_TIMEOUT_MS` | Ranked/Auth | Bound for a Supabase token/user request; defaults to 8 seconds (1–30 seconds allowed). |
 | `RANKED_SEED_ENCRYPTION_KEY` | Ranked | 32-byte AES-256 key as 64 hex characters or base64. This is a secret. |
 | `RANKED_VALUES_FILE` | Ranked | Optional absolute path to a reviewed generated value table. Defaults to the checked-in artifact. |
 | `RANKED_TURN_TIME_LIMIT_MS` | Ranked | Rounds 1–6 deadline; defaults to `90000`. The forced final round is always `15000` ms. |
@@ -75,13 +86,18 @@ not commit a real `.env` file.
 | `SESSION_ABSOLUTE_MS` | Ranked/Auth | Absolute app-session lifetime; defaults to 30 days. |
 | `SESSION_IDLE_MS` | Ranked/Auth | Idle app-session lifetime; defaults to 7 days. |
 | `COOKIE_SECURE` | Local development only | Use `true` when testing over HTTPS. Production always uses secure cookies. |
-| `ALLOWED_ORIGINS` | Legacy Socket.IO | Comma-separated approved frontend origins. Defaults include the current GitHub Pages and Render URLs. |
+| `ALLOWED_ORIGINS` | Legacy Socket.IO | Comma-separated approved frontend origins. Defaults include the current GitHub Pages and Render URLs; localhost is added only when `NODE_ENV` is explicitly `development` or `test`. |
 | `TRUST_PROXY` | Hosting | Set to `true` only when the hosting network is a known reverse proxy that sanitizes `X-Forwarded-For` (such as the configured Render deployment). |
 | `MAX_ACTIVE_ROOMS`, `MAX_SPECTATORS_PER_ROOM`, `MAX_SOCKETS_PER_IP`, `MAX_HTTP_CONNECTIONS`, `SOCKET_EVENT_LIMIT`, `RATE_LIMIT_TRACKED_IPS` | Legacy PvP | Resource limits described below. |
 
 Never put `DATABASE_URL`, `RANKED_SEED_ENCRYPTION_KEY`, a Supabase
 service-role key, or an OAuth provider secret in frontend code, GitHub Pages,
 or a committed configuration file.
+
+`RANKED_SEED_ENCRYPTION_KEY` has no key-version envelope in v1. Keep the same
+key for as long as active games or retained completed-game seed verification
+must be readable. Plan a data migration before rotating it; changing it in
+place makes those encrypted seeds unrecoverable.
 
 ## Authentication and sessions
 
@@ -100,6 +116,10 @@ or a committed configuration file.
   readable CSRF cookie is not an authentication credential.
 - Login rotates a prior application session. Logout revokes it server-side;
   expired, idle, banned, and deactivated sessions are rejected.
+- Supabase token/user calls have a short AbortController timeout and become a
+  recoverable 503 response when the identity provider is unavailable. The
+  deadline sweeper also prunes expired OAuth transactions and expired/revoked
+  sessions from the database.
 - Every cookie-authenticated state change requires exact `Origin` matching and
   the per-session `X-CSRF-Token` header. There is no wildcard REST CORS.
 
@@ -114,9 +134,10 @@ session hashes, or an unrevealed Ranked seed.
   explored on the request path and is not bundled to the browser.
 - A 256-bit CSPRNG seed is encrypted at rest. Its SHA-256 commitment is shown
   when a game starts. HMAC-SHA-256 plus rejection sampling chooses the uniform
-  Random AI card independently of the player's selected card.
+  random-opponent card independently of the player's selected card.
 - The seed is revealed only after completion/forfeit, making a completed game
-  replayable. An active game's seed and AI hand remain private.
+  replayable. The active seed remains private; the random opponent's remaining
+  hand is intentionally shown as tactical information.
 - PostgreSQL row locks, `(game_id, round)`, `(game_id, request_id)`, and a
   partial one-active-game-per-user index prevent duplicate moves, rerolls, and
   duplicate Rating finalization. Browser closure/restart resumes the persisted
@@ -140,6 +161,12 @@ uses the checked value table. It refuses to rotate while a Ranked game is
 active, so a deployment never evaluates an in-progress game with a different
 table. Existing games and Rating records are not rewritten.
 
+If an old active game is nevertheless encountered after an interrupted or
+incorrect deployment, its view is marked incompatible and all solver-backed
+moves/timeouts fail closed. The player can still explicitly forfeit it; a
+forfeit does not consult the value table and safely releases the one-active-
+game constraint. Do not alter persisted game versions manually as a shortcut.
+
 ## DoS and abuse controls
 
 The server applies the following application-layer controls while preserving
@@ -157,13 +184,25 @@ normal two-player play:
   in-process store when running more than one instance.
 - One account can have at most one active Ranked game, and solver work is done
   only in the reviewed generation step—not on a move request.
+- Ranked read endpoints (profile, leaderboard, active game, and resume) do
+  not create seasons, profiles, or game state (normal session last-seen
+  maintenance aside). Deadline settlement uses a separate Origin- and
+  CSRF-protected POST endpoint. The leaderboard cache has both a short TTL
+  and a bounded entry count.
 - Legacy room chat is limited to 50 characters, no newlines, 50 messages per
-  participant session, with cadence and history limits.
+  participant session, with cadence/history limits and a room/IP safety quota
+  that limits reconnect-id rotation abuse. The room's tracked IP entries are
+  capped as well, so reconnecting through many addresses cannot grow its
+  in-memory bookkeeping without bound.
 
 `ALLOW_ORIGINLESS_SOCKET_CONNECTIONS=true` is for narrow local testing only;
 do not enable it publicly. Do not set `TRUST_PROXY=true` on a directly exposed
 process, since that would let a client forge the rate-limit IP via
 `X-Forwarded-For`.
+
+Set `NODE_ENV=production` in the deployed service and configure
+`ALLOWED_ORIGINS` explicitly. If `NODE_ENV` is omitted, the safe production
+origin set is still used; localhost is never enabled by default.
 
 Application-level limits do **not** stop a volumetric DDoS attack that fills
 the network before the process is reached. Put production behind the host's

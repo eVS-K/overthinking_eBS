@@ -16,11 +16,11 @@ function cloneMap(map) {
   return new Map([...map].map(([key, value]) => [key, cloneValue(value)]));
 }
 
-function defaultHandleForUser(userId) {
-  // 13 hexadecimal characters plus "player-" fills the 20-character public
-  // handle limit while keeping collision probability negligible before a user
-  // chooses a real handle.
-  return `player-${String(userId).replace(/[^a-z0-9]/gi, '').slice(0, 13).toLowerCase()}`;
+function createDefaultHandle() {
+  // A public handle must never be derived from the internal auth UUID. Seven
+  // random bytes provide more than enough entropy; the 13th hex digit keeps
+  // the value within the 20-character handle limit after the "player-" prefix.
+  return `player-${crypto.randomBytes(7).toString('hex').slice(0, 13)}`;
 }
 
 function mapProfile(row) {
@@ -220,13 +220,25 @@ class PostgresRankedRepository {
   }
 
   async ensureProfile(userId) {
-    const handle = defaultHandleForUser(userId);
-    await this.query(
-      `INSERT INTO profiles (user_id, handle, normalized_handle)
-       VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING`,
-      [userId, handle, handle]
-    );
-    return this.getProfile(userId);
+    const existing = await this.getProfile(userId);
+    if (existing) return existing;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const handle = createDefaultHandle();
+      try {
+        await this.query(
+          `INSERT INTO profiles (user_id, handle, normalized_handle)
+           VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING`,
+          [userId, handle, handle]
+        );
+        const profile = await this.getProfile(userId);
+        if (profile) return profile;
+      } catch (error) {
+        // A collision on the independently generated public handle is safely
+        // retried. Other database errors must remain visible to the caller.
+        if (error?.code !== '23505') throw error;
+      }
+    }
+    throw new Error('could not allocate a unique public handle');
   }
 
   async updateHandle(userId, handle, normalizedHandle, changedAt = new Date()) {
@@ -293,6 +305,18 @@ class PostgresRankedRepository {
     } : null;
   }
 
+  async purgeExpiredAuthArtifacts(now = new Date(), revokedBefore = new Date(new Date(now).getTime() - 7 * 24 * 60 * 60_000)) {
+    const [oauth, sessions] = await Promise.all([
+      this.query(`DELETE FROM oauth_transactions WHERE expires_at <= $1`, [now]),
+      this.query(
+        `DELETE FROM app_sessions
+         WHERE expires_at <= $1 OR idle_expires_at <= $1 OR (revoked_at IS NOT NULL AND revoked_at <= $2)`,
+        [now, revokedBefore]
+      )
+    ]);
+    return { oauthTransactions: oauth.rowCount || 0, sessions: sessions.rowCount || 0 };
+  }
+
   async createGame(game) {
     const state = game.state;
     const result = await this.query(
@@ -313,6 +337,14 @@ class PostgresRankedRepository {
   async findActiveGameForUser(userId, { forUpdate = false } = {}) {
     const result = await this.query(
       `SELECT * FROM ranked_games WHERE user_id = $1 AND status = 'active'${forUpdate ? ' FOR UPDATE' : ''}`,
+      [userId]
+    );
+    return mapGame(result.rows[0]);
+  }
+
+  async findLatestGameForUser(userId) {
+    const result = await this.query(
+      `SELECT * FROM ranked_games WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
       [userId]
     );
     return mapGame(result.rows[0]);
@@ -386,6 +418,14 @@ class PostgresRankedRepository {
       `INSERT INTO ranked_profiles (user_id, season_id) VALUES ($1, $2) ON CONFLICT (user_id, season_id) DO NOTHING`,
       [userId, seasonId]
     );
+    const result = await this.query(
+      `SELECT * FROM ranked_profiles WHERE user_id = $1 AND season_id = $2${forUpdate ? ' FOR UPDATE' : ''}`,
+      [userId, seasonId]
+    );
+    return mapRankedProfile(result.rows[0]);
+  }
+
+  async getRankedProfile(userId, seasonId, { forUpdate = false } = {}) {
     const result = await this.query(
       `SELECT * FROM ranked_profiles WHERE user_id = $1 AND season_id = $2${forUpdate ? ' FOR UPDATE' : ''}`,
       [userId, seasonId]
@@ -524,14 +564,17 @@ class MemoryRankedRepository {
     this.activeSeasonId = null;
   }
 
-  async getProfile(userId) {
+  async getProfile(userId, _options = {}) {
     return cloneValue(this.profiles.get(userId) || null);
   }
 
   async ensureProfile(userId) {
     let profile = this.profiles.get(userId);
     if (!profile) {
-      const handle = defaultHandleForUser(userId);
+      let handle = createDefaultHandle();
+      for (let attempt = 0; attempt < 5 && [...this.profiles.values()].some((entry) => entry.normalizedHandle === handle); attempt += 1) {
+        handle = createDefaultHandle();
+      }
       profile = {
         userId, publicId: crypto.randomUUID(), handle, normalizedHandle: handle, status: 'active', handleChangedAt: null,
         createdAt: new Date(), updatedAt: new Date()
@@ -596,6 +639,27 @@ class MemoryRankedRepository {
     return cloneValue(transaction);
   }
 
+  async purgeExpiredAuthArtifacts(now = new Date(), revokedBefore = new Date(new Date(now).getTime() - 7 * 24 * 60 * 60_000)) {
+    let oauthTransactions = 0;
+    for (const [stateHash, transaction] of this.oauthTransactions) {
+      if (new Date(transaction.expiresAt) <= now) {
+        this.oauthTransactions.delete(stateHash);
+        oauthTransactions += 1;
+      }
+    }
+    let sessions = 0;
+    for (const [id, session] of this.sessions) {
+      if (new Date(session.expiresAt) <= now
+        || new Date(session.idleExpiresAt) <= now
+        || (session.revokedAt && new Date(session.revokedAt) <= revokedBefore)) {
+        this.sessions.delete(id);
+        this.sessionByHash.delete(session.sessionTokenHash);
+        sessions += 1;
+      }
+    }
+    return { oauthTransactions, sessions };
+  }
+
   async createGame(game) {
     if (this.activeGameByUser.has(game.userId)) {
       const error = new Error('active game exists');
@@ -616,6 +680,12 @@ class MemoryRankedRepository {
   async findActiveGameForUser(userId) {
     const id = this.activeGameByUser.get(userId);
     return cloneValue(id ? this.games.get(id) : null);
+  }
+
+  async findLatestGameForUser(userId) {
+    return cloneValue([...this.games.values()]
+      .filter((game) => game.userId === userId)
+      .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt))[0] || null);
   }
 
   async findGameById(gameId) {
@@ -680,6 +750,10 @@ class MemoryRankedRepository {
     return cloneValue(this.rankedProfiles.get(key));
   }
 
+  async getRankedProfile(userId, seasonId) {
+    return cloneValue(this.rankedProfiles.get(rankedProfileKey(userId, seasonId)) || null);
+  }
+
   async saveRankedProfile(profile) {
     const key = rankedProfileKey(profile.userId, profile.seasonId);
     const stored = { ...cloneValue(profile), updatedAt: new Date() };
@@ -707,7 +781,7 @@ class MemoryRankedRepository {
 module.exports = {
   MemoryRankedRepository,
   PostgresRankedRepository,
-  defaultHandleForUser,
+  createDefaultHandle,
   mapGame,
   mapMove,
   mapProfile,

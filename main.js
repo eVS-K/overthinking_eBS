@@ -98,7 +98,7 @@ function getSavedSession() {
   try {
     const roomId = window.sessionStorage.getItem('overthinking-room-id');
     const playerName = window.sessionStorage.getItem('overthinking-player-name');
-    return roomId ? { roomId, playerName: playerName || 'Player' } : null;
+    return roomId ? { roomId, playerName: playerName || 'プレイヤー' } : null;
   } catch {
     return null;
   }
@@ -202,6 +202,7 @@ function createCard(card, suitType, isInteractive) {
   const isSelected = isInteractive && card.id === mySelectedCardId;
   const isCommitting = isInteractive && card.id === committedCardId;
   cardElement.className = `card card-${suitType}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
+  cardElement.dataset.cardId = card.id;
   cardElement.setAttribute('aria-label', `${card.name}、${card.desc}${isSelected ? '、選択中' : ''}`);
 
   if (isInteractive) {
@@ -210,7 +211,13 @@ function createCard(card, suitType, isInteractive) {
     const selectCard = () => {
       mySelectedCardId = mySelectedCardId === card.id ? null : card.id;
       committedCardId = null;
-      renderHand(elements.myHand, currentRoom?.players.find((player) => player.id === socket?.id)?.hand || [], 'spade', true);
+      renderHand(
+        elements.myHand,
+        currentRoom?.players.find((player) => player.id === socket?.id)?.hand || [],
+        'spade',
+        true,
+        { focusCardId: card.id }
+      );
       updateConfirmButton();
     };
     cardElement.addEventListener('click', selectCard);
@@ -250,9 +257,18 @@ function createCard(card, suitType, isInteractive) {
   return cardElement;
 }
 
-function renderHand(container, hand, suitType, isInteractive) {
+function renderHand(container, hand, suitType, isInteractive, { focusCardId = null } = {}) {
   container.replaceChildren();
-  (hand || []).forEach((card) => container.append(createCard(card, suitType, isInteractive)));
+  let focusTarget = null;
+  (hand || []).forEach((card) => {
+    const cardElement = createCard(card, suitType, isInteractive);
+    container.append(cardElement);
+    if (isInteractive && card.id === focusCardId) focusTarget = cardElement;
+  });
+  // Card choice redraws the hand to update the selection mark. Preserve the
+  // keyboard user's position across that harmless redraw rather than losing
+  // focus from the card they just toggled.
+  focusTarget?.focus();
 }
 
 function updateScore(element, player) {
@@ -273,7 +289,7 @@ function showScoreAward(scoreElement, gainedCards) {
   if (!scoreBox) return;
   const award = document.createElement('span');
   award.className = 'score-award';
-  award.textContent = `+${gainedCards} CARDS`;
+  award.textContent = `+${gainedCards}枚`;
   scoreBox.append(award);
   window.setTimeout(() => award.remove(), 1_150);
 }
@@ -302,11 +318,11 @@ function renderReveal(lastRound) {
   const outcome = document.createElement('div');
   outcome.className = 'round-outcome';
   const outcomeLabel = document.createElement('span');
-  outcomeLabel.textContent = `ROUND ${lastRound.round} RESULT`;
+  outcomeLabel.textContent = `第${lastRound.round}ラウンドの結果`;
   const outcomeTitle = document.createElement('strong');
   outcomeTitle.textContent = isDraw
-    ? 'DRAW'
-    : me ? (isMyWin ? 'YOU WIN' : 'OPPONENT WINS') : `${lastRound.winner} WINS`;
+    ? '引き分け'
+    : me ? (isMyWin ? 'あなたの勝ち' : '相手の勝ち') : `${lastRound.winner} の勝ち`;
   const outcomeDetail = document.createElement('p');
   if (isDraw) {
     outcomeDetail.textContent = '引き分け — この2枚は次の勝負へ持ち越し';
@@ -317,22 +333,22 @@ function renderReveal(lastRound) {
   outcome.append(outcomeLabel, outcomeTitle, outcomeDetail);
 
   const firstOwner = currentRoom?.viewer?.isSpectator
-    ? 'PLAYER 1'
-    : firstPlayer?.id === socket?.id ? 'YOU' : 'OPPONENT';
+    ? 'プレイヤー1'
+    : firstPlayer?.id === socket?.id ? 'あなた' : '相手';
   const secondOwner = currentRoom?.viewer?.isSpectator
-    ? 'PLAYER 2'
-    : firstOwner === 'YOU' ? 'OPPONENT' : 'YOU';
+    ? 'プレイヤー2'
+    : firstOwner === 'あなた' ? '相手' : 'あなた';
   const first = createRevealCard(lastRound.p1Card, firstOwner);
   first.classList.add('left');
   const versus = document.createElement('div');
   versus.className = 'reveal-versus';
   const versusMark = document.createElement('b');
-  versusMark.textContent = 'VS';
+  versusMark.textContent = '対';
   const winner = document.createElement('span');
-  const awardText = Number.isFinite(lastRound.awardedCards) ? ` · +${lastRound.awardedCards}` : '';
+  const awardText = Number.isFinite(lastRound.awardedCards) ? `+${lastRound.awardedCards}枚` : '場のカード';
   winner.textContent = lastRound.winner === 'Draw'
-    ? 'DRAW · STACK +2'
-    : `AWARD${awardText}`;
+    ? '引き分け · 持ち越し +2'
+    : `獲得 ${awardText}`;
   versus.append(versusMark, winner);
   const second = createRevealCard(lastRound.p2Card, secondOwner);
   second.classList.add('right');
@@ -393,13 +409,13 @@ function renderHistory(history) {
     item.className = `history-item${round.winner === 'Draw' ? ' draw' : ''}`;
     const number = document.createElement('span');
     number.className = 'history-round';
-    number.textContent = `R${round.round}`;
+    number.textContent = `第${round.round}`;
     const detail = document.createElement('div');
     detail.className = 'history-detail';
     const winner = document.createElement('strong');
-    winner.textContent = round.winner === 'Draw' ? '引き分け · スタック' : `${round.winner} が獲得`;
+    winner.textContent = round.winner === 'Draw' ? '引き分け · 持ち越し' : `${round.winner} が獲得`;
     const cards = document.createElement('span');
-    cards.textContent = `${round.p1Card.name}  vs  ${round.p2Card.name}`;
+    cards.textContent = `${round.p1Card.name}  対  ${round.p2Card.name}`;
     detail.append(winner, cards);
     item.append(number, detail);
     elements.history.append(item);
@@ -625,7 +641,7 @@ function closeCreditModal() {
 elements.joinForm.addEventListener('submit', (event) => {
   event.preventDefault();
   currentRoomId = elements.roomIdInput.value.trim();
-  myPlayerName = elements.playerNameInput.value.trim() || 'Player';
+  myPlayerName = elements.playerNameInput.value.trim() || 'プレイヤー';
   mySelectedCardId = null;
 
   if (!currentRoomId) {

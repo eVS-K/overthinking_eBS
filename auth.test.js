@@ -6,11 +6,14 @@ const { RankedError } = require('./ranked-service');
 const { MemoryRankedRepository } = require('./ranked-repository');
 const {
   AuthService,
+  DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS,
   OAUTH_TRANSACTION_COOKIE_NAME,
   SESSION_COOKIE_NAME,
   createAuthConfig,
+  fetchWithTimeout,
   isAuthConfigured,
   parseCookies,
+  readProviderJson,
   sha256
 } = require('./auth');
 
@@ -57,7 +60,9 @@ test('OAuth PKCE callbackはprovider tokenを保持せずhash化したapp sessio
   assert.equal(persisted.sessionTokenHash, sha256(result.sessionToken));
   assert.notEqual(persisted.sessionTokenHash, result.sessionToken);
   assert.equal(JSON.stringify(persisted).includes('provider-token'), false);
-  assert.equal((await repository.getProfile(USER_ID)).handle.includes('player-'), true);
+  const profile = await repository.getProfile(USER_ID);
+  assert.equal(profile.handle.includes('player-'), true);
+  assert.equal(profile.handle.includes(USER_ID.replace(/-/g, '').slice(0, 13)), false);
 });
 
 test('OAuth transactionは一回限りで、session rotationは古いsessionを失効させる', async () => {
@@ -124,4 +129,31 @@ test('production AuthはHTTPS originなしではfail closedする', () => {
   });
   assert.equal(config.cookieSecure, true);
   assert.equal(isAuthConfigured(config), false);
+});
+
+test('identity provider呼び出しには短い上限時間を設け、停止時は503扱いにする', async () => {
+  const config = createAuthConfig({
+    NODE_ENV: 'test', APP_ORIGIN: 'http://localhost:3000', SUPABASE_URL: 'https://example.supabase.co', SUPABASE_ANON_KEY: 'public', SUPABASE_REQUEST_TIMEOUT_MS: '3000'
+  });
+  assert.equal(config.supabaseRequestTimeoutMs, 3000);
+  assert.equal(createAuthConfig({}).supabaseRequestTimeoutMs, DEFAULT_SUPABASE_REQUEST_TIMEOUT_MS);
+
+  let aborted = false;
+  await assert.rejects(
+    fetchWithTimeout(async (_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        aborted = true;
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+    }), 'https://example.supabase.co/auth/v1/user', {}, 20),
+    (error) => error instanceof RankedError && error.code === 'IDENTITY_PROVIDER_UNAVAILABLE'
+  );
+  assert.equal(aborted, true);
+
+  await assert.rejects(
+    readProviderJson({ json: async () => new Promise(() => {}) }, 'invalid response', 20),
+    (error) => error instanceof RankedError && error.code === 'IDENTITY_PROVIDER_UNAVAILABLE'
+  );
 });

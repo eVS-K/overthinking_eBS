@@ -9,10 +9,12 @@ exclude:
   - chat.js
   - chat.test.js
   - database.js
+  - database.test.js
   - data
   - game-rules.js
   - game-rules.test.js
   - migrations
+  - migration.test.js
   - node_modules
   - package-lock.json
   - package.json
@@ -26,6 +28,8 @@ exclude:
   - ranked-rng.test.js
   - ranked-runtime.js
   - ranked-runtime.test.js
+  - ranked-ui.js
+  - ranked-ui.test.js
   - ranked-service.js
   - ranked-service.test.js
   - ranked-solver.js

@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS profiles (
@@ -138,5 +136,3 @@ CREATE TABLE IF NOT EXISTS ranked_moves (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ranked_moves_game_request_idx
   ON ranked_moves(game_id, request_id) WHERE request_id IS NOT NULL;
-
-COMMIT;

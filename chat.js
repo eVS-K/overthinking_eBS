@@ -13,6 +13,7 @@ function sanitizeChatMessage(value) {
   if (typeof value !== 'string') return { ok: false, error: 'メッセージを入力してください。' };
   if (/[\r\n]/.test(value)) return { ok: false, error: '改行を含むメッセージは送信できません。' };
   if (/[\u0000-\u001F\u007F-\u009F]/.test(value)) return { ok: false, error: '使用できない文字が含まれています。' };
+  if (/\p{Cf}/u.test(value)) return { ok: false, error: '見えない制御文字を含むメッセージは送信できません。' };
 
   const text = value.trim();
   if (!text) return { ok: false, error: 'メッセージを入力してください。' };

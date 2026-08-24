@@ -2,7 +2,16 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createRankedRuntime } = require('./ranked-runtime');
+const { EventEmitter } = require('node:events');
+const { attachPoolErrorHandler, createRankedRuntime } = require('./ranked-runtime');
+
+test('idle PostgreSQL pool errorは記録してGuest PvPのNode processを落とさない', () => {
+  const pool = new EventEmitter();
+  const notices = [];
+  attachPoolErrorHandler(pool, { warn: (message) => notices.push(message) });
+  assert.doesNotThrow(() => pool.emit('error', new Error('connection reset')));
+  assert.match(notices[0], /Ranked database pool error: connection reset/);
+});
 
 test('Ranked設定がない場合はruntimeだけfail closedし、PvP起動を妨げない', () => {
   const notices = [];

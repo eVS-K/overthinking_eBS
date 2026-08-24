@@ -150,3 +150,47 @@ test('leaderboard responseはprivate session/auth identityを返さない', asyn
   assert.equal(serialized.includes('userId'), false);
   assert.equal(serialized.includes('email'), false);
 });
+
+test('期限の確認はGETでは状態を変更せず、CSRF保護されたPOSTだけがtimeoutを確定する', async (t) => {
+  const runtime = await startApi();
+  t.after(runtime.close);
+  const created = await json(await fetch(`${runtime.baseUrl}/api/ranked/games`, { method: 'POST', headers: headers(), body: '{}' }));
+  const gameId = created.body.game.id;
+  const stored = await runtime.repository.findGameById(gameId);
+  await runtime.repository.transaction((tx) => tx.saveGame({
+    ...stored,
+    deadline: new Date(Date.now() - 1_000),
+    turnStartedAt: new Date(Date.now() - 91_000)
+  }));
+
+  const readOnly = await json(await fetch(`${runtime.baseUrl}/api/ranked/games/active`, {
+    headers: { Cookie: headers().Cookie }
+  }));
+  assert.equal(readOnly.status, 200);
+  assert.equal(readOnly.body.game.currentRound, 1);
+  assert.equal(readOnly.body.game.history.length, 0);
+  assert.equal((await runtime.repository.listMoves(gameId)).length, 0);
+
+  const noCsrf = await fetch(`${runtime.baseUrl}/api/ranked/games/active/settle`, {
+    method: 'POST',
+    headers: { Cookie: headers().Cookie, Origin: 'http://ranked.test', 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(noCsrf.status, 403);
+  assert.equal((await runtime.repository.listMoves(gameId)).length, 0);
+
+  const settled = await json(await fetch(`${runtime.baseUrl}/api/ranked/games/active/settle`, {
+    method: 'POST', headers: headers(), body: '{}'
+  }));
+  assert.equal(settled.status, 200);
+  assert.equal(settled.body.game.currentRound, 2);
+  assert.equal(settled.body.game.history.length, 1);
+  assert.equal(settled.body.game.history[0].timeout, true);
+  assert.equal((await runtime.repository.listMoves(gameId)).length, 1);
+
+  const foreignResume = await json(await fetch(`${runtime.baseUrl}/api/ranked/games/resume`, {
+    headers: { Cookie: headers(TOKEN_B, CSRF_B).Cookie }
+  }));
+  assert.equal(foreignResume.status, 200);
+  assert.equal(foreignResume.body.game, null);
+});

@@ -109,7 +109,8 @@ class RankedService {
     turnTimeLimitMs = TURN_TIME_LIMIT_MS,
     finalRoundTimeLimitMs = FINAL_ROUND_TIME_LIMIT_MS,
     abandonAfterMs = DEFAULT_ABANDON_AFTER_MS,
-    leaderboardCacheTtlMs = 15_000
+    leaderboardCacheTtlMs = 15_000,
+    leaderboardCacheMaxEntries = 128
   }) {
     if (!repository) throw new TypeError('ranked repository is required');
     if (!valueLookup) throw new TypeError('ranked value lookup is required');
@@ -122,6 +123,9 @@ class RankedService {
     this.finalRoundTimeLimitMs = finalRoundTimeLimitMs;
     this.abandonAfterMs = abandonAfterMs;
     this.leaderboardCacheTtlMs = leaderboardCacheTtlMs;
+    this.leaderboardCacheMaxEntries = Number.isSafeInteger(leaderboardCacheMaxEntries)
+      ? Math.max(1, Math.min(leaderboardCacheMaxEntries, 1_000))
+      : 128;
     this.leaderboardCache = new Map();
     this.leaderboardInFlight = new Map();
     this.leaderboardCacheVersion = 0;
@@ -139,11 +143,32 @@ class RankedService {
     return round === INITIAL_HAND_SIZE ? this.finalRoundTimeLimitMs : this.turnTimeLimitMs;
   }
 
+  isGameEvaluationCompatible(game) {
+    const expected = this.seasonSpec();
+    return Boolean(game
+      && game.rulesVersion === expected.rulesVersion
+      && game.aiPolicyVersion === expected.aiPolicyVersion
+      && game.evaluationVersion === expected.evaluationVersion
+      && game.ratingVersion === expected.ratingVersion
+      && game.valueTableChecksum === expected.valueTableChecksum);
+  }
+
+  assertGameEvaluationCompatibility(game) {
+    if (!this.isGameEvaluationCompatible(game)) {
+      throw new RankedError(503, 'GAME_VERSION_MISMATCH', 'This active game is not compatible with the current Ranked evaluation.');
+    }
+  }
+
   async ensureCurrentSeasonInTransaction(tx, { lockActive = false } = {}) {
     const expected = this.seasonSpec();
+    // Creating a game must use the same transaction-scoped advisory lock as
+    // season rotation. Locking only the active-season row leaves a window
+    // where rotation can count zero games, then close the season after a
+    // concurrent creation has committed against it.
+    if (lockActive) await tx.lockSeason?.();
     let active = await tx.getActiveSeason({ forUpdate: lockActive });
     if (!active) {
-      await tx.lockSeason?.();
+      if (!lockActive) await tx.lockSeason?.();
       active = await tx.getActiveSeason({ forUpdate: true });
     }
     if (!active) return tx.createSeason(expected);
@@ -168,6 +193,14 @@ class RankedService {
     return profile;
   }
 
+  async assertExistingActiveProfile(tx, userId) {
+    const profile = await tx.getProfile(userId);
+    if (!profile || profile.status !== 'active') {
+      throw new RankedError(403, 'PROFILE_UNAVAILABLE', 'This account cannot use Ranked mode.');
+    }
+    return profile;
+  }
+
   assertGameOwner(game, userId) {
     if (!game || game.userId !== userId) throw new RankedError(404, 'GAME_NOT_FOUND', 'Ranked game was not found.');
   }
@@ -177,6 +210,13 @@ class RankedService {
       await this.assertActiveProfile(tx, userId);
       const existing = await tx.findActiveGameForUser(userId, { forUpdate: true });
       if (existing) {
+        // Never evaluate an old active game with a new value table. The
+        // client receives a read-only view and can explicitly forfeit it,
+        // so a version upgrade cannot strand the account behind the
+        // one-active-game invariant.
+        if (!this.isGameEvaluationCompatible(existing)) {
+          return this.getGameView(existing, await tx.listMoves(existing.id));
+        }
         const settled = await this.settleDueGameInTransaction(tx, existing);
         return this.getGameView(settled, await tx.listMoves(settled.id));
       }
@@ -215,6 +255,9 @@ class RankedService {
       return this.repository.transaction(async (tx) => {
         const existing = await tx.findActiveGameForUser(userId, { forUpdate: true });
         if (!existing) throw error;
+        if (!this.isGameEvaluationCompatible(existing)) {
+          return this.getGameView(existing, await tx.listMoves(existing.id));
+        }
         const settled = await this.settleDueGameInTransaction(tx, existing);
         return this.getGameView(settled, await tx.listMoves(settled.id));
       });
@@ -223,11 +266,32 @@ class RankedService {
 
   async getActiveGame(userId) {
     return this.repository.transaction(async (tx) => {
+      await this.assertExistingActiveProfile(tx, userId);
+      const game = await tx.findActiveGameForUser(userId);
+      if (!game) return null;
+      return this.getGameView(game, await tx.listMoves(game.id));
+    });
+  }
+
+  async settleActiveGame(userId) {
+    return this.repository.transaction(async (tx) => {
       await this.assertActiveProfile(tx, userId);
       const game = await tx.findActiveGameForUser(userId, { forUpdate: true });
       if (!game) return null;
+      if (!this.isGameEvaluationCompatible(game)) {
+        return this.getGameView(game, await tx.listMoves(game.id));
+      }
       const settled = await this.settleDueGameInTransaction(tx, game);
       return this.getGameView(settled, await tx.listMoves(settled.id));
+    });
+  }
+
+  async getResumeGame(userId) {
+    return this.repository.transaction(async (tx) => {
+      await this.assertExistingActiveProfile(tx, userId);
+      const active = await tx.findActiveGameForUser(userId);
+      const game = active || await tx.findLatestGameForUser(userId);
+      return game ? this.getGameView(game, await tx.listMoves(game.id)) : null;
     });
   }
 
@@ -255,6 +319,7 @@ class RankedService {
       await this.assertActiveProfile(tx, userId);
       let game = await tx.findGameById(safeGameId, { forUpdate: true });
       this.assertGameOwner(game, userId);
+      this.assertGameEvaluationCompatibility(game);
 
       const duplicate = await tx.findMoveByRequestId(game.id, move.requestId);
       if (duplicate) return { ...duplicate.response, idempotent: true };
@@ -286,7 +351,9 @@ class RankedService {
   }
 
   async settleDueGameInTransaction(tx, game, now = this.nowDate()) {
-    if (game.status !== 'active' || asDate(game.deadline).getTime() > now.getTime()) return game;
+    if (game.status !== 'active') return game;
+    this.assertGameEvaluationCompatibility(game);
+    if (asDate(game.deadline).getTime() > now.getTime()) return game;
     if (now.getTime() - asDate(game.deadline).getTime() >= this.abandonAfterMs) {
       return this.finalizeForfeitInTransaction(tx, game, now);
     }
@@ -308,6 +375,7 @@ class RankedService {
   }
 
   async executeRoundInTransaction(tx, game, { playerCardId, requestId, timeout, thinkingTimeMs, now, responseForTimeout = true }) {
+    this.assertGameEvaluationCompatibility(game);
     const decision = this.valueLookup.getDecision(game.state, playerCardId);
     const seed = decryptSeed(game.encryptedSeed, this.seedEncryptionKey);
     const aiCardId = deriveAiCardId(seed, { gameId: game.id, round: game.currentRound, state: game.state });
@@ -416,6 +484,9 @@ class RankedService {
       await this.assertActiveProfile(tx, userId);
       const game = await tx.findGameById(safeGameId, { forUpdate: true });
       this.assertGameOwner(game, userId);
+      // A forfeit needs no value-table lookup. Allow it to close an
+      // incompatible active game instead of leaving the account blocked by
+      // the one-active-game rule after a controlled version upgrade.
       const finalized = await this.finalizeForfeitInTransaction(tx, game, this.nowDate());
       return this.getGameView(finalized, await tx.listMoves(finalized.id));
     });
@@ -438,6 +509,7 @@ class RankedService {
       aiScore: game.state.aiScore,
       stackCount: game.state.stackCount,
       deadline: active ? asDate(game.deadline).toISOString() : null,
+      versionMismatch: active && !this.isGameEvaluationCompatible(game),
       seedCommitment: game.seedCommitment,
       history: moves.map(buildRoundHistory)
     };
@@ -458,10 +530,12 @@ class RankedService {
 
   async getProfileSummary(userId) {
     return this.repository.transaction(async (tx) => {
-      const profile = await this.assertActiveProfile(tx, userId);
-      const season = await this.ensureCurrentSeasonInTransaction(tx);
-      const rankedProfile = await tx.getOrCreateRankedProfile(userId, season.id, { forUpdate: true });
-      const rank = isEligibleForLeaderboard(rankedProfile)
+      const profile = await this.assertExistingActiveProfile(tx, userId);
+      const season = await tx.getActiveSeason();
+      const rankedProfile = season
+        ? (await tx.getRankedProfile(userId, season.id)) || createEmptyRatingProfile()
+        : createEmptyRatingProfile();
+      const rank = season && isEligibleForLeaderboard(rankedProfile)
         ? await tx.getLeaderboardRank(season.id, userId)
         : null;
       return this.publicProfileSummary(profile, rankedProfile, rank);
@@ -475,16 +549,27 @@ class RankedService {
     const normalizedHandle = handle.toLowerCase();
     return this.repository.transaction(async (tx) => {
       const profile = await this.assertActiveProfile(tx, userId);
-      const now = this.nowDate();
-      if (profile.handleChangedAt && now.getTime() - asDate(profile.handleChangedAt).getTime() < HANDLE_CHANGE_COOLDOWN_MS) {
-        throw new RankedError(429, 'HANDLE_COOLDOWN', 'Handle can only be changed once every 30 days.');
+      // The profile row lock makes the cooldown check and update one atomic
+      // operation even when two browser tabs submit different handles.
+      const lockedProfile = await tx.getProfile(userId, { forUpdate: true }) || profile;
+      if (lockedProfile.status !== 'active') {
+        throw new RankedError(403, 'PROFILE_UNAVAILABLE', 'This account cannot use Ranked mode.');
       }
-      let updated;
-      try {
-        updated = await tx.updateHandle(userId, handle, normalizedHandle, now);
-      } catch (error) {
-        if (error?.code === '23505') throw new RankedError(409, 'HANDLE_TAKEN', 'That handle is already in use.');
-        throw error;
+      const now = this.nowDate();
+      const unchanged = lockedProfile.normalizedHandle === normalizedHandle;
+      if (!unchanged && lockedProfile.handleChangedAt && now.getTime() - asDate(lockedProfile.handleChangedAt).getTime() < HANDLE_CHANGE_COOLDOWN_MS) {
+        throw new RankedError(429, 'HANDLE_COOLDOWN', 'Handle can only be changed once every 30 days.', {
+          nextChangeAt: dateAfter(lockedProfile.handleChangedAt, HANDLE_CHANGE_COOLDOWN_MS).toISOString()
+        });
+      }
+      let updated = lockedProfile;
+      if (!unchanged) {
+        try {
+          updated = await tx.updateHandle(userId, handle, normalizedHandle, now);
+        } catch (error) {
+          if (error?.code === '23505') throw new RankedError(409, 'HANDLE_TAKEN', 'That handle is already in use.');
+          throw error;
+        }
       }
       const season = await this.ensureCurrentSeasonInTransaction(tx);
       const rankedProfile = await tx.getOrCreateRankedProfile(userId, season.id, { forUpdate: true });
@@ -521,11 +606,23 @@ class RankedService {
     this.leaderboardCacheVersion += 1;
   }
 
+  pruneLeaderboardCache(now = this.nowDate().getTime(), { makeRoom = false } = {}) {
+    for (const [key, entry] of this.leaderboardCache) {
+      if (entry.expiresAt <= now) this.leaderboardCache.delete(key);
+    }
+    while (makeRoom && this.leaderboardCache.size >= this.leaderboardCacheMaxEntries) {
+      const oldestKey = this.leaderboardCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.leaderboardCache.delete(oldestKey);
+    }
+  }
+
   async getLeaderboard({ limit = 25, offset = 0 } = {}) {
     const safeLimit = Number.isSafeInteger(limit) ? Math.min(Math.max(limit, 1), 100) : 25;
     const safeOffset = Number.isSafeInteger(offset) ? Math.min(Math.max(offset, 0), 10_000) : 0;
     const key = `${safeLimit}:${safeOffset}`;
     const now = this.nowDate().getTime();
+    this.pruneLeaderboardCache(now);
     const cached = this.leaderboardCache.get(key);
     if (cached && cached.expiresAt > now) return cached.value;
     const inFlight = this.leaderboardInFlight.get(key);
@@ -533,16 +630,18 @@ class RankedService {
 
     const cacheVersion = this.leaderboardCacheVersion;
     const query = this.repository.transaction(async (tx) => {
-      const season = await this.ensureCurrentSeasonInTransaction(tx);
-      const leaderboard = await tx.getLeaderboard(season.id, { limit: safeLimit, offset: safeOffset });
+      const season = await tx.getActiveSeason();
+      const leaderboard = season
+        ? await tx.getLeaderboard(season.id, { limit: safeLimit, offset: safeOffset })
+        : { total: 0, entries: [] };
       const value = {
-        season: {
+        season: season ? {
           id: season.id,
           rulesVersion: season.rulesVersion,
           aiPolicyVersion: season.aiPolicyVersion,
           evaluationVersion: season.evaluationVersion,
           ratingVersion: season.ratingVersion
-        },
+        } : null,
         pagination: { limit: safeLimit, offset: safeOffset, total: leaderboard.total },
         entries: leaderboard.entries.map((entry) => ({
           rank: entry.rank,
@@ -560,6 +659,7 @@ class RankedService {
         }))
       };
       if (this.leaderboardCacheVersion === cacheVersion) {
+        this.pruneLeaderboardCache(this.nowDate().getTime(), { makeRoom: true });
         this.leaderboardCache.set(key, { value, expiresAt: this.nowDate().getTime() + this.leaderboardCacheTtlMs });
       }
       return value;
@@ -589,6 +689,10 @@ class RankedService {
       }
     }
     return settled;
+  }
+
+  async pruneExpiredAuthArtifacts() {
+    return this.repository.transaction((tx) => tx.purgeExpiredAuthArtifacts(this.nowDate()));
   }
 }
 

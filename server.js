@@ -15,12 +15,20 @@ const TURN_TIME_LIMIT_MS = 90_000;
 const RECONNECT_GRACE_MS = 30_000;
 const MAX_ROOM_ID_LENGTH = 24;
 const MAX_PLAYER_NAME_LENGTH = 20;
-const DEFAULT_ALLOWED_ORIGINS = [
-  'https://evs-k.github.io',
-  'https://overthinking-ebs.onrender.com',
-  'http://localhost:3000',
-  'http://127.0.0.1:3000'
-];
+function buildDefaultAllowedOrigins(environment = process.env) {
+  const origins = [
+    'https://evs-k.github.io',
+    'https://overthinking-ebs.onrender.com'
+  ];
+  // An omitted NODE_ENV must not quietly make a deployment accept localhost.
+  // Local origins are only a deliberate development/test convenience.
+  if (environment.NODE_ENV === 'development' || environment.NODE_ENV === 'test') {
+    origins.push('http://localhost:3000', 'http://127.0.0.1:3000');
+  }
+  return origins;
+}
+
+const DEFAULT_ALLOWED_ORIGINS = buildDefaultAllowedOrigins();
 
 const MAX_ACTIVE_ROOMS = readPositiveInteger(process.env.MAX_ACTIVE_ROOMS, 300, { max: 5_000 });
 const MAX_SPECTATORS_PER_ROOM = readPositiveInteger(process.env.MAX_SPECTATORS_PER_ROOM, 40, { max: 500 });
@@ -31,6 +39,13 @@ const SOCKET_EVENT_LIMIT = readPositiveInteger(process.env.SOCKET_EVENT_LIMIT, 2
 const SOCKET_EVENT_WINDOW_MS = 10_000;
 const MAX_CHAT_SESSIONS_PER_ROOM = 128;
 const CHAT_SESSION_RETENTION_MS = 30 * 60_000;
+// Guest PvP intentionally has no login.  A client-controlled reconnect id is
+// useful for reconnecting, but cannot be the only anti-abuse key; bound chat
+// volume per room/IP as a second line of defense without making two ordinary
+// players on the same network hit the 50-message per-session limit.
+const MAX_CHAT_MESSAGES_PER_IP_WINDOW = 120;
+const CHAT_IP_WINDOW_MS = 30 * 60_000;
+const MAX_CHAT_IPS_PER_ROOM = 256;
 const ALLOW_ORIGINLESS_SOCKET_CONNECTIONS = process.env.ALLOW_ORIGINLESS_SOCKET_CONNECTIONS === 'true'
   && process.env.NODE_ENV !== 'production';
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
@@ -134,7 +149,7 @@ app.use((request, response, next) => {
   response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   response.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://cdn.socket.io; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
   );
   if (process.env.NODE_ENV === 'production') {
     response.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
@@ -155,7 +170,7 @@ app.get(['/index.html', '/main.js', '/oauth-recovery.js', '/style.css'], (reques
 // exposed to the GitHub Pages legacy client.  The legacy PvP entry point above
 // remains deliberately unchanged and continues to work without an account.
 app.get('/ranked', (_request, response) => response.sendFile(path.join(__dirname, 'ranked.html')));
-app.get(['/ranked.html', '/ranked-client.js', '/ranked.css'], (request, response) => {
+app.get(['/ranked.html', '/ranked-client.js', '/ranked-ui.js', '/ranked.css'], (request, response) => {
   response.sendFile(path.join(__dirname, request.path));
 });
 app.use('/images', express.static(path.join(__dirname, 'images')));
@@ -167,7 +182,7 @@ app.get('/health', (_request, response) => response.json({ status: 'ok', ranked:
 
 function normalizeText(value, maxLength, fallback = '') {
   if (typeof value !== 'string') return fallback;
-  return value.trim().replace(/[\u0000-\u001F\u007F]/g, '').slice(0, maxLength) || fallback;
+  return value.trim().replace(/[\u0000-\u001F\u007F]/g, '').replace(/\p{Cf}/gu, '').slice(0, maxLength) || fallback;
 }
 
 function createRoom(id) {
@@ -187,6 +202,7 @@ function createRoom(id) {
     needsFreshGame: false,
     chat: [],
     chatUsage: new Map(),
+    chatIpUsage: new Map(),
     chatSequence: 0
   };
 }
@@ -346,6 +362,36 @@ function pruneChatUsage(room, now = Date.now()) {
       room.chatUsage.delete(clientId);
     }
   }
+  for (const [ip, usage] of room.chatIpUsage) {
+    if (now - usage.lastSeenAt >= CHAT_IP_WINDOW_MS) room.chatIpUsage.delete(ip);
+  }
+}
+
+function consumeChatIpQuota(room, ip, now = Date.now()) {
+  const key = typeof ip === 'string' && ip ? ip : 'unknown';
+  const current = room.chatIpUsage.get(key);
+  if (!current && room.chatIpUsage.size >= MAX_CHAT_IPS_PER_ROOM) {
+    return { ok: false, error: 'この部屋では新しいネットワークからのチャット送信を一時的に受け付けられません。' };
+  }
+  const usage = !current || now - current.windowStartedAt >= CHAT_IP_WINDOW_MS
+    ? { count: 0, windowStartedAt: now, lastSeenAt: now }
+    : current;
+  if (usage.count >= MAX_CHAT_MESSAGES_PER_IP_WINDOW) {
+    return { ok: false, error: 'このネットワークからのチャット送信が一時的に多すぎます。少し待ってからお試しください。' };
+  }
+  usage.count += 1;
+  usage.lastSeenAt = now;
+  room.chatIpUsage.set(key, usage);
+  return { ok: true };
+}
+
+function releaseChatIpQuota(room, ip) {
+  const key = typeof ip === 'string' && ip ? ip : 'unknown';
+  const usage = room.chatIpUsage.get(key);
+  if (!usage) return;
+  usage.count -= 1;
+  if (usage.count <= 0) room.chatIpUsage.delete(key);
+  else room.chatIpUsage.set(key, usage);
 }
 
 function emitChatState(socket, room, clientId) {
@@ -493,7 +539,7 @@ io.on('connection', (socket) => {
 
   socket.on('join_room', (payload = {}) => {
     const roomId = normalizeText(payload.roomId, MAX_ROOM_ID_LENGTH);
-    const playerName = normalizeText(payload.playerName, MAX_PLAYER_NAME_LENGTH, 'Player');
+    const playerName = normalizeText(payload.playerName, MAX_PLAYER_NAME_LENGTH, 'プレイヤー');
     const clientId = normalizeText(payload.clientId, 80);
 
     if (!roomId || !clientId) {
@@ -595,6 +641,11 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const ipQuota = consumeChatIpQuota(room, socket.data.clientIp, now);
+    if (!ipQuota.ok) {
+      replyToChat(acknowledge, { ok: false, message: ipQuota.error });
+      return;
+    }
     const result = appendChatMessage(room, {
       clientId: participant.clientId,
       author: participant.name,
@@ -602,6 +653,7 @@ io.on('connection', (socket) => {
       now
     });
     if (!result.ok) {
+      releaseChatIpQuota(room, socket.data.clientIp);
       replyToChat(acknowledge, { ok: false, message: result.error });
       return;
     }
@@ -686,4 +738,13 @@ if (require.main === module) {
   server.listen(port, () => console.log(`Server listening on http://localhost:${port}`));
 }
 
-module.exports = { app, server, io, rankedRuntime, rankedDeadlineSweeper };
+module.exports = {
+  MAX_CHAT_IPS_PER_ROOM,
+  app,
+  buildDefaultAllowedOrigins,
+  consumeChatIpQuota,
+  createRoom,
+  io,
+  rankedDeadlineSweeper,
+  rankedRuntime
+};

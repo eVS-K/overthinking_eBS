@@ -4,11 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#090d1a">
-  <title>OVERTHINKING — 2 PLAYER CARD DUEL</title>
-  <link rel="stylesheet" href="style.css?v=ranked-entry-v3">
+  <title>OVERTHINKING — 2人対戦カードゲーム</title>
+  <link rel="stylesheet" href="style.css?v=ranked-entry-v4">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" defer></script>
-  <script src="main.js?v=ranked-entry-v4" defer></script>
+  <script src="https://overthinking-ebs.onrender.com/socket.io/socket.io.js" defer></script>
+  <script src="main.js?v=ranked-entry-v5" defer></script>
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true">
@@ -21,27 +21,27 @@
     <main id="login-screen" class="screen entry-screen">
       <section class="entry-panel" aria-labelledby="game-title">
         <div class="brand-lockup">
-          <span class="brand-kicker">TWO PLAYER · CARD DUEL</span>
+          <span class="brand-kicker">2人対戦 · カードゲーム</span>
           <h1 id="game-title">OVER<span>THINKING</span></h1>
           <p>読み合いの、その先へ。</p>
         </div>
 
         <nav class="mode-selector" aria-label="ゲームモード">
-          <span class="mode-selector-label">GAME MODE</span>
+          <span class="mode-selector-label">ゲームモード</span>
           <div class="mode-selector-options">
-            <span class="mode-option mode-option-active" aria-current="page"><b>PRIVATE PvP</b><small>ルームキーで対戦</small></span>
-            <a id="ranked-mode-link" class="mode-option" href="https://overthinking-ebs.onrender.com/ranked"><b>RANKED vs RANDOM</b><small>PLAY · LEADERBOARD</small></a>
+            <span class="mode-option mode-option-active" aria-current="page"><b>プライベート対戦</b><small>ルームキーで対戦</small></span>
+            <a id="ranked-mode-link" class="mode-option" href="https://overthinking-ebs.onrender.com/ranked"><b>ランク戦・ランダム対戦</b><small>プレイ · ランキング</small></a>
           </div>
         </nav>
 
         <form id="join-form" class="join-form" novalidate>
-          <label for="roomIdInput">ROOM KEY</label>
+          <label for="roomIdInput">ルームキー</label>
           <div class="input-wrap">
             <span aria-hidden="true">⌘</span>
             <input type="text" id="roomIdInput" maxlength="24" autocomplete="off" placeholder="共有する部屋キー" required>
           </div>
 
-          <label for="playerNameInput">PLAYER NAME <small>任意</small></label>
+          <label for="playerNameInput">プレイヤー名 <small>任意</small></label>
           <div class="input-wrap">
             <span aria-hidden="true">♠</span>
             <input type="text" id="playerNameInput" maxlength="20" autocomplete="nickname" placeholder="あなたの名前">
@@ -54,16 +54,16 @@
         </form>
 
         <section class="rulebook" aria-labelledby="rulebook-title">
-          <div class="section-label" id="rulebook-title">GAME RULES</div>
+          <div class="section-label" id="rulebook-title">ゲームルール</div>
           <p class="rule-lead">全7ラウンド、同じ7枚の手札で戦う完全情報の心理戦。</p>
           <div class="rule-grid">
             <article><strong>01</strong><span>数字が大きい方が、場のカードを獲得</span></article>
-            <article><strong>02</strong><span>Two は Ace に、Three は Joker に勝利</span></article>
+            <article><strong>02</strong><span>2 は A に、3 は Joker に勝利</span></article>
             <article><strong>03</strong><span>Joker は相手の強さをコピー</span></article>
             <article><strong>04</strong><span>引き分けたカードは次の勝負へ持ち越し</span></article>
           </div>
-          <p class="strategy-note"><strong>POINT</strong><span>これは単なる運任せのゲームではありません。残り札・スタック・相手の選択から局面を読み、より有効な一手を選ぶことが勝利への鍵です。</span></p>
-          <p class="rule-note">カードの強さ：Two ＜ Three ＜ … ＜ King ＜ Ace</p>
+          <p class="strategy-note"><strong>ポイント</strong><span>これは単なる運任せのゲームではありません。残り札・スタック・相手の選択から局面を読み、より有効な一手を選ぶことが勝利への鍵です。</span></p>
+          <p class="rule-note">カードの強さ：2 ＜ 3 ＜ … ＜ K ＜ A</p>
         </section>
       </section>
     </main>
@@ -72,7 +72,7 @@
       <main class="game-shell" aria-label="対戦ボード">
         <header class="game-header">
           <a class="game-brand" href="./" aria-label="OVERTHINKING のトップへ">OVER<span>THINKING</span></a>
-          <div class="room-chip"><span>ROOM</span><strong id="display-room-id">—</strong></div>
+          <div class="room-chip"><span>ルーム</span><strong id="display-room-id">—</strong></div>
           <div class="header-actions">
             <button id="fullscreenBtn" class="fullscreen-button" type="button" aria-pressed="false" title="ゲーム画面を全画面で表示"><span aria-hidden="true">⛶</span><span>全画面</span></button>
             <button id="homeBtn" class="home-button hidden" type="button"><span aria-hidden="true">⌂</span> ホームへ戻る</button>
@@ -82,20 +82,20 @@
 
         <section class="player-zone opponent-zone" aria-label="対戦相手の手札">
           <div class="player-header">
-            <div class="identity"><span class="suit-icon suit-heart" aria-hidden="true">♥</span><div><span class="side-label">OPPONENT</span><strong id="opp-name">対戦相手を待機中</strong></div></div>
-            <div class="score-box"><span>獲得</span><strong id="opp-score">0</strong><small>CARDS</small></div>
+            <div class="identity"><span class="suit-icon suit-heart" aria-hidden="true">♥</span><div><span class="side-label">対戦相手</span><strong id="opp-name">対戦相手を待機中</strong></div></div>
+            <div class="score-box"><span>獲得</span><strong id="opp-score">0</strong><small>枚</small></div>
           </div>
           <div id="opp-hand" class="card-row opponent-hand" aria-label="相手の手札"></div>
         </section>
 
         <section class="table-center" aria-label="ラウンド情報">
           <div class="round-dashboard">
-            <div class="round-count"><span>ROUND</span><strong id="current-round">1</strong><em>/ 7</em></div>
+            <div class="round-count"><span>ラウンド</span><strong id="current-round">1</strong><em>/ 7</em></div>
             <div class="timer-block">
-              <div class="timer-text"><span>TURN TIMER</span><strong><span id="timer-count">--</span><small>s</small></strong></div>
+              <div class="timer-text"><span>残り時間</span><strong><span id="timer-count">--</span><small>秒</small></strong></div>
               <div class="timer-track" aria-hidden="true"><i id="timer-progress"></i></div>
             </div>
-            <div class="stack-box"><span>STACK</span><strong id="stack-count">0</strong><small>CARDS</small></div>
+            <div class="stack-box"><span>持ち越し札</span><strong id="stack-count">0</strong><small>枚</small></div>
           </div>
 
           <div id="reveal-area" class="reveal-area empty" aria-live="polite">
@@ -106,8 +106,8 @@
 
         <section class="player-zone my-zone" aria-label="あなたの手札">
           <div class="player-header">
-            <div class="identity"><span class="suit-icon suit-spade" aria-hidden="true">♠</span><div><span class="side-label">YOU</span><strong id="my-name">あなた</strong></div></div>
-            <div class="score-box"><span>獲得</span><strong id="my-score">0</strong><small>CARDS</small></div>
+            <div class="identity"><span class="suit-icon suit-spade" aria-hidden="true">♠</span><div><span class="side-label">あなた</span><strong id="my-name">あなた</strong></div></div>
+            <div class="score-box"><span>獲得</span><strong id="my-score">0</strong><small>枚</small></div>
           </div>
           <div id="my-hand" class="card-row my-hand" aria-label="あなたの手札"></div>
           <div class="controls">
@@ -118,13 +118,13 @@
       </main>
 
       <aside class="sidebar" aria-label="対戦履歴">
-        <div class="sidebar-heading"><div><span class="side-label">MATCH LOG</span><h2>対戦履歴</h2></div><span id="spectator-count" class="spectator-count hidden"></span></div>
+        <div class="sidebar-heading"><div><span class="side-label">対戦記録</span><h2>対戦履歴</h2></div><span id="spectator-count" class="spectator-count hidden"></span></div>
         <div id="history-list" class="history-list" aria-live="polite">
           <p class="history-empty">最初の勝負を待っています。</p>
         </div>
         <section class="chat-panel" aria-labelledby="chat-title">
           <div class="chat-heading">
-            <div><span class="side-label">ROOM CHAT</span><h3 id="chat-title">ルームチャット</h3></div>
+            <div><span class="side-label">ルームチャット</span><h3 id="chat-title">ルームチャット</h3></div>
             <span id="chat-count" class="chat-count">0 / 50</span>
           </div>
           <div id="chat-list" class="chat-list" role="log" aria-live="polite" aria-relevant="additions text">
@@ -133,7 +133,7 @@
           <form id="chat-form" class="chat-form" novalidate>
             <label class="sr-only" for="chat-input">メッセージ</label>
             <div class="chat-input-row">
-              <input id="chat-input" type="text" maxlength="100" autocomplete="off" placeholder="50文字まで・改行不可" aria-describedby="chat-count chat-feedback">
+              <input id="chat-input" type="text" maxlength="50" autocomplete="off" placeholder="50文字まで・改行不可" aria-describedby="chat-count chat-feedback">
               <button id="chat-send-btn" class="chat-send-button" type="submit" disabled>送信</button>
             </div>
             <p id="chat-feedback" class="chat-feedback" role="status">送信は1参加セッションにつき50回までです。</p>
@@ -148,7 +148,7 @@
     <div class="modal-content">
       <button id="close-credit-btn" class="modal-close" type="button" aria-label="閉じる">×</button>
       <img src="images/demo.png" alt="Overthinking demo版の紹介画像" class="main-image">
-      <p class="section-label">CREDITS</p>
+      <p class="section-label">クレジット</p>
       <h2 id="credit-title">OVERTHINKING eBS</h2>
       <p>本作は <strong>dub-227</strong> さんが開発したカードゲーム
         <a class="inline-link" href="https://github.com/dub-227/overthinking_demo" target="_blank" rel="noopener noreferrer">overthinking_demo</a> を基に、eVS-K が編集・再構成したバージョンです。</p>
