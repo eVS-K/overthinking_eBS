@@ -1,7 +1,9 @@
 /* Ranked is served by the application origin.  Keep its additions scoped so the
    legacy GitHub Pages / Socket.IO board retains its established layout. */
 .ranked-page {
-  min-width: 320px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   padding: 0 0 max(42px, env(safe-area-inset-bottom));
 }
 
@@ -58,7 +60,8 @@
 .ranked-auth-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-width: 510px; margin: 29px auto 0; }
 .ranked-auth-actions .primary-button,
 .ranked-auth-actions .secondary-button { width: 100%; margin: 0; text-decoration: none; }
-.ranked-auth-notice { max-width: 510px; margin: 22px auto 0; padding: 12px 14px; border: 1px solid rgba(141, 183, 255, .36); color: var(--blue-bright); background: rgba(141, 183, 255, .08); font-size: 12px; line-height: 1.7; }
+.ranked-auth > .ranked-auth-notice { max-width: 510px; margin: 32px auto 0; padding: 12px 14px; border: 1px solid rgba(141, 183, 255, .36); color: var(--blue-bright); background: rgba(141, 183, 255, .08); font-size: 12px; line-height: 1.7; }
+.ranked-auth-notice[data-kind="error"] { border-color: rgba(255, 130, 152, .62); border-left: 4px solid #ff849c; color: #ffe8ed; background: rgba(83, 29, 47, .48); box-shadow: 0 10px 26px rgba(61, 13, 29, .18); text-align: left; }
 .ranked-fine-print { margin-top: 20px !important; color: #aab9d1 !important; font-size: 11px !important; line-height: 1.75 !important; }
 
 .ranked-dashboard { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 16px; align-items: start; }
@@ -302,6 +305,7 @@
 
 @media (max-width: 440px) {
   .ranked-auth { padding: 28px 18px; }
+  .ranked-auth > .ranked-auth-notice { margin-top: 28px; }
   .ranked-auth-actions { grid-template-columns: 1fr; }
   .ranked-auth-actions .primary-button,
   .ranked-auth-actions .secondary-button { min-height: 47px; }

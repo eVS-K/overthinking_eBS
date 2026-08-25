@@ -5,6 +5,14 @@ const { CSRF_COOKIE_NAME, OAUTH_TRANSACTION_COOKIE_NAME, SESSION_COOKIE_NAME, cr
 const { createFixedWindowLimiter } = require('./security');
 const { RankedError } = require('./ranked-service');
 
+const RETRYABLE_OAUTH_FAILURE_CODES = new Set([
+  'INVALID_OAUTH_CALLBACK',
+  'OAUTH_TRANSACTION_INVALID',
+  'OAUTH_EXCHANGE_FAILED',
+  'OAUTH_USER_LOOKUP_FAILED',
+  'IDENTITY_PROVIDER_RESPONSE_INVALID'
+]);
+
 function asyncRoute(handler) {
   return (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next);
 }
@@ -14,7 +22,14 @@ function noStore(response) {
   response.setHeader('Pragma', 'no-cache');
 }
 
+function isRetryableOAuthFailure(error) {
+  return error instanceof RankedError && RETRYABLE_OAUTH_FAILURE_CODES.has(error.code);
+}
+
 function sendError(response, error) {
+  // A public leaderboard route normally permits a short cache lifetime, but
+  // never allow an outage/schema error to be cached and shown after recovery.
+  noStore(response);
   if (error instanceof RankedError) {
     response.status(error.status).json({ error: { code: error.code, message: error.message, details: error.details } });
     return;
@@ -71,7 +86,7 @@ function registerUnavailableRankedRoutes(app) {
   app.get('/auth/callback', unavailable);
 }
 
-function registerRankedRoutes(app, { runtime, getClientIp }) {
+function registerRankedRoutes(app, { runtime, getClientIp, logger = console }) {
   if (!runtime?.available) {
     registerUnavailableRankedRoutes(app);
     return;
@@ -93,9 +108,30 @@ function registerRankedRoutes(app, { runtime, getClientIp }) {
   const leaderboardLimit = createRateLimit({ limit: 120, windowMs: 60_000, getKey: byIp });
   const authSessionLimit = createRateLimit({ limit: 120, windowMs: 60_000, getKey: byUser });
 
+  const redirectOAuthFailure = (response, error) => {
+    // Only validation/exchange failures are actionable by immediately trying
+    // OAuth again. Database/provider outages need a distinct path so users do
+    // not mistake a server incident for a bad Google/GitHub account.
+    const retryableSignInFailure = isRetryableOAuthFailure(error);
+    logger.warn?.(`Ranked OAuth request failed: ${error?.code || error?.name || 'unknown'}`);
+    // If an earlier sign-in transaction cookie exists, do not leave it usable
+    // after a new sign-in attempt could not even start.  The database record
+    // remains short lived and hashed, but the browser can no longer present
+    // an accidental stale transaction on a later callback.
+    response.append('Set-Cookie', auth.clearOAuthTransactionCookie());
+    response.redirect(303, `/ranked?login=${retryableSignInFailure ? 'failed' : 'unavailable'}`);
+  };
+
   router.get('/auth/login/:provider', authLoginLimit, asyncRoute(async (request, response) => {
     noStore(response);
-    const result = await auth.beginOAuth(request.params.provider);
+    let result;
+    try {
+      result = await auth.beginOAuth(request.params.provider);
+    } catch (error) {
+      if (error instanceof RankedError && error.code === 'UNSUPPORTED_PROVIDER') throw error;
+      redirectOAuthFailure(response, error);
+      return;
+    }
     response.setHeader('Set-Cookie', auth.oauthTransactionCookie(result.transactionToken));
     response.redirect(303, result.authorizationUrl);
   }));
@@ -112,10 +148,15 @@ function registerRankedRoutes(app, { runtime, getClientIp }) {
         previousSessionToken: cookies[SESSION_COOKIE_NAME]
       });
     } catch (error) {
+      // Keep the browser response intentionally generic, but retain a safe
+      // classification in operator logs. This distinguishes provider, schema,
+      // and callback failures without exposing implementation details.
+      logger.warn?.(`Ranked OAuth callback failed: ${error?.code || error?.name || 'unknown'}`);
       response.append('Set-Cookie', auth.clearOAuthTransactionCookie());
       // OAuth failures should return the user to the sign-in UI, not leave a
       // raw provider error or a Private PvP-looking backend root page.
-      response.redirect(303, '/ranked?login=failed');
+      const retryableSignInFailure = isRetryableOAuthFailure(error);
+      response.redirect(303, `/ranked?login=${retryableSignInFailure ? 'failed' : 'unavailable'}`);
       return;
     }
     response.append('Set-Cookie', auth.sessionCookie(result.sessionToken));
@@ -128,8 +169,23 @@ function registerRankedRoutes(app, { runtime, getClientIp }) {
 
   router.get('/api/auth/me', requireAuth, authSessionLimit, asyncRoute(async (request, response) => {
     noStore(response);
-    const profile = await service.getProfileSummary(request.auth.userId);
-    response.json({ authenticated: true, profile, csrfCookieName: CSRF_COOKIE_NAME });
+    try {
+      const profile = await service.getProfileSummary(request.auth.userId);
+      response.json({ authenticated: true, profile, csrfCookieName: CSRF_COOKIE_NAME });
+    } catch (error) {
+      // Authentication has already succeeded. Preserve that fact for the
+      // browser while withholding database details, so a schema outage is not
+      // misrepresented as a failed Google/GitHub login.
+      if (error instanceof RankedError) throw error;
+      logger.warn?.(`Ranked authenticated profile read failed: ${error?.code || error?.name || 'unknown'}`);
+      response.status(503).json({
+        authenticated: true,
+        error: {
+          code: 'RANKED_PROFILE_UNAVAILABLE',
+          message: 'Ranked profile is temporarily unavailable.'
+        }
+      });
+    }
   }));
 
   router.post('/api/auth/logout', requireAuth, requireStateChange, requireEmptyObject, authSessionLimit, asyncRoute(async (request, response) => {

@@ -38,7 +38,8 @@ async function startApi() {
   const app = express();
   registerRankedRoutes(app, {
     runtime: { available: true, service, auth },
-    getClientIp: () => '127.0.0.1'
+    getClientIp: () => '127.0.0.1',
+    logger: { warn() {} }
   });
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -46,6 +47,7 @@ async function startApi() {
   return {
     repository,
     service,
+    auth,
     baseUrl: `http://127.0.0.1:${port}`,
     close: () => new Promise((resolve) => server.close(resolve))
   };
@@ -70,6 +72,7 @@ test('Ranked REST APIはauth/CSRF/Origin/ownership/idempotency/payload境界を�
 
   const unauthenticated = await fetch(`${runtime.baseUrl}/api/ranked/games/active`);
   assert.equal(unauthenticated.status, 401);
+  assert.equal(unauthenticated.headers.get('cache-control'), 'no-store, max-age=0');
 
   const login = await fetch(`${runtime.baseUrl}/auth/login/github`, { redirect: 'manual' });
   assert.equal(login.status, 303);
@@ -149,6 +152,52 @@ test('leaderboard responseはprivate session/auth identityを返さない', asyn
   assert.equal(serialized.includes('sessionTokenHash'), false);
   assert.equal(serialized.includes('userId'), false);
   assert.equal(serialized.includes('email'), false);
+});
+
+test('ランキング基盤の障害はpublic cacheや内部DB情報を残さない', async (t) => {
+  const runtime = await startApi();
+  t.after(runtime.close);
+  runtime.service.getLeaderboard = async () => {
+    throw new Error('database column leaderboard_visible does not exist');
+  };
+
+  const response = await json(await fetch(`${runtime.baseUrl}/api/leaderboard?limit=10`));
+  assert.equal(response.status, 500);
+  assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0');
+  assert.equal(response.body.error.code, 'RANKED_REQUEST_FAILED');
+  assert.equal(JSON.stringify(response.body).includes('leaderboard_visible'), false);
+});
+
+test('OAuth開始基盤の障害は内部情報を返さず、古いtransaction cookieを破棄する', async (t) => {
+  const runtime = await startApi();
+  t.after(runtime.close);
+  runtime.auth.beginOAuth = async () => {
+    throw new Error('database password must never reach the browser');
+  };
+
+  const response = await fetch(`${runtime.baseUrl}/auth/login/google`, { redirect: 'manual' });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get('location'), '/ranked?login=unavailable');
+  assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0');
+  assert.match(response.headers.get('set-cookie'), /__Host-overthinking-oauth-transaction=.*Max-Age=0/);
+  assert.equal((await response.text()).includes('database password'), false);
+});
+
+test('認証済みでもプロフィール基盤が一時障害なら、ログアウト状態に見せず安全な503を返す', async (t) => {
+  const runtime = await startApi();
+  t.after(runtime.close);
+  runtime.service.getProfileSummary = async () => {
+    throw new Error('database column leaderboard_visible does not exist');
+  };
+
+  const response = await json(await fetch(`${runtime.baseUrl}/api/auth/me`, {
+    headers: { Cookie: headers().Cookie }
+  }));
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0');
+  assert.equal(response.body.authenticated, true);
+  assert.equal(response.body.error.code, 'RANKED_PROFILE_UNAVAILABLE');
+  assert.equal(JSON.stringify(response.body).includes('leaderboard_visible'), false);
 });
 
 test('ランキング公開設定は本人のCSRF保護された操作だけで変更でき、公開一覧から直ちに除外される', async (t) => {

@@ -13,7 +13,7 @@
     if (mainLoaded) return;
     mainLoaded = true;
     const mainScript = document.createElement('script');
-    mainScript.src = 'main.js?v=pvp-v9';
+    mainScript.src = 'main.js?v=pvp-v11';
     mainScript.defer = true;
     document.head.append(mainScript);
   }

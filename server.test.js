@@ -3,6 +3,7 @@
 const http = require('http');
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { createInitialHand } = require('./game-rules');
 const {
   MAX_CHAT_IPS_PER_ROOM,
   app,
@@ -12,6 +13,7 @@ const {
   createRoomView,
   finishGameByForfeit,
   normalizeJoinPreferences,
+  processTurn,
   promoteVolunteerSpectators,
   startWhenBothPlayersAgree
 } = require('./server');
@@ -78,9 +80,54 @@ test('降参は対局を一度だけ終了し、相手を勝者として確定�
   assert.equal(finishGameByForfeit(room, room.players[0]), true);
   assert.equal(room.gameState, 'finished');
   assert.equal(room.winner, '後手');
+  assert.equal(room.winnerSeat, 'p2');
   assert.deepEqual(room.finishReason.type, 'forfeit');
   assert.equal(room.finishReason.forfeitedBy, '先手');
+  assert.equal(room.finishReason.forfeitedBySeat, 'p1');
   assert.equal(finishGameByForfeit(room, room.players[0]), false);
+});
+
+test('勝敗は同名やDrawという表示名ではなくp1/p2席で確定し、終了理由も保存する', () => {
+  const scoreLimit = createRoom('score-limit');
+  scoreLimit.gameState = 'playing';
+  scoreLimit.players = [
+    { id: 'p1', clientId: 'p1-client', name: 'Draw', suit: '♠', hand: createInitialHand(), score: 8, connected: true },
+    { id: 'p2', clientId: 'p2-client', name: 'Draw', suit: '♥', hand: createInitialHand(), score: 0, connected: true }
+  ];
+  scoreLimit.selections = { p1: 'ace', p2: 'king' };
+  processTurn(scoreLimit);
+  assert.equal(scoreLimit.gameState, 'finished');
+  assert.equal(scoreLimit.winner, 'Draw');
+  assert.equal(scoreLimit.winnerSeat, 'p1');
+  assert.equal(scoreLimit.lastRound.winnerSeat, 'p1');
+  assert.equal(scoreLimit.finishReason.type, 'score-limit');
+
+  const roundLimit = createRoom('round-limit');
+  roundLimit.gameState = 'playing';
+  roundLimit.round = 7;
+  roundLimit.players = [
+    { id: 'p1', clientId: 'p1-client', name: '同名', suit: '♠', hand: createInitialHand(), score: 0, connected: true },
+    { id: 'p2', clientId: 'p2-client', name: '同名', suit: '♥', hand: createInitialHand(), score: 1, connected: true }
+  ];
+  roundLimit.selections = { p1: 'king', p2: 'ace' };
+  processTurn(roundLimit);
+  assert.equal(roundLimit.gameState, 'finished');
+  assert.equal(roundLimit.winnerSeat, 'p2');
+  assert.equal(roundLimit.lastRound.winnerSeat, 'p2');
+  assert.equal(roundLimit.finishReason.type, 'round-limit');
+
+  const drawLimit = createRoom('round-draw');
+  drawLimit.gameState = 'playing';
+  drawLimit.round = 7;
+  drawLimit.players = [
+    { id: 'p1', clientId: 'p1-client', name: 'Draw', suit: '♠', hand: createInitialHand(), score: 1, connected: true },
+    { id: 'p2', clientId: 'p2-client', name: 'Draw', suit: '♥', hand: createInitialHand(), score: 1, connected: true }
+  ];
+  drawLimit.selections = { p1: 'ace', p2: 'ace' };
+  processTurn(drawLimit);
+  assert.equal(drawLimit.winnerSeat, null);
+  assert.equal(drawLimit.lastRound.winnerSeat, null);
+  assert.equal(drawLimit.finishReason.type, 'round-limit');
 });
 
 test('二人の対戦者がそれぞれ同意するまで対局は始まらず、観戦者の同意は数えない', () => {

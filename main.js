@@ -23,6 +23,11 @@ let joinAsSpectator = Boolean(savedSession?.joinAsSpectator);
 let autoJoinWhenSeatAvailable = Boolean(savedSession?.autoJoinWhenSeatAvailable);
 let entryMode = 'private';
 let randomSearchActive = false;
+let randomSearchWanted = false;
+let randomSearchRequestId = '';
+let randomSearchSourceRoomId = '';
+let nextRandomMatchPending = false;
+let nextRandomMatchTimeout = null;
 let onlineCount = null;
 let randomQueueCount = null;
 let mySelectedCardId = null;
@@ -31,6 +36,8 @@ let joinedRoom = Boolean(savedSession);
 let currentRoom = null;
 let timerInterval = null;
 let lastRoundId = null;
+let lastFinaleId = null;
+let finalResultAnimationTimer = null;
 const previousScores = new Map();
 let chatMessages = [];
 let chatSentCount = 0;
@@ -77,6 +84,7 @@ const elements = {
   stack: document.getElementById('stack-count'),
   status: document.getElementById('status-message'),
   revealArea: document.getElementById('reveal-area'),
+  finalResultPanel: document.getElementById('final-result-panel'),
   myName: document.getElementById('my-name'),
   mySideLabel: document.getElementById('my-side-label'),
   myScore: document.getElementById('my-score'),
@@ -171,6 +179,148 @@ function setText(element, value) {
   element.textContent = String(value);
 }
 
+function createRandomSearchRequestId() {
+  return window.crypto?.randomUUID?.()
+    || `search-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function clearNextRandomMatchPending() {
+  if (nextRandomMatchTimeout) window.clearTimeout(nextRandomMatchTimeout);
+  nextRandomMatchTimeout = null;
+  nextRandomMatchPending = false;
+}
+
+function emitRandomSearchRequest() {
+  if (!socket?.connected || !randomSearchWanted || !randomSearchRequestId) return;
+  socket.emit('join_random_match', {
+    playerName: myPlayerName,
+    clientId,
+    requestId: randomSearchRequestId
+  }, (result) => {
+    if (result?.ok || randomSearchRequestId !== result?.requestId) return;
+    randomSearchWanted = false;
+    randomSearchRequestId = '';
+    randomSearchSourceRoomId = '';
+    randomSearchActive = false;
+    renderEntryMode();
+    setLoginMessage(result?.message || 'ランダムマッチの検索を開始できませんでした。もう一度お試しください。');
+  });
+}
+
+function isStaleRandomRoomUpdate(room) {
+  return Boolean(
+    randomSearchWanted
+    && randomSearchSourceRoomId
+    && room?.id === randomSearchSourceRoomId
+  );
+}
+
+function scheduleNextRandomMatchRetry(sourceRoomId, requestId) {
+  if (nextRandomMatchTimeout) window.clearTimeout(nextRandomMatchTimeout);
+  nextRandomMatchTimeout = window.setTimeout(() => {
+    if (!nextRandomMatchPending
+      || randomSearchRequestId !== requestId
+      || randomSearchSourceRoomId !== sourceRoomId) return;
+    setText(elements.status, socket?.connected
+      ? '検索開始を再確認しています…'
+      : '接続を回復後、検索開始を再確認します…');
+    requestNextRandomMatch(sourceRoomId, requestId);
+  }, 5_500);
+}
+
+function requestNextRandomMatch(sourceRoomId, requestId) {
+  if (!nextRandomMatchPending
+    || randomSearchRequestId !== requestId
+    || randomSearchSourceRoomId !== sourceRoomId) return;
+  scheduleNextRandomMatchRetry(sourceRoomId, requestId);
+  if (!socket?.connected) return;
+
+  socket.emit('find_next_random_match', { roomId: sourceRoomId, requestId }, (result) => {
+    if (randomSearchRequestId !== requestId || !nextRandomMatchPending) return;
+    if (!result?.ok) {
+      clearNextRandomMatchPending();
+      randomSearchWanted = false;
+      randomSearchRequestId = '';
+      randomSearchSourceRoomId = '';
+      if (currentRoom?.id === sourceRoomId) {
+        renderRoom(currentRoom);
+        setText(elements.status, result?.message || '別の相手を検索できませんでした。もう一度お試しください。');
+      }
+      return;
+    }
+    clearNextRandomMatchPending();
+    // A match can be found synchronously, in which case room_updated has
+    // already rendered the new room and cleared the request state. Otherwise
+    // move to the search screen only after the server acknowledged the
+    // transfer; stale updates from the source room remain ignored.
+    if (currentRoom?.id === sourceRoomId) {
+      resetLocalRoomForRandomSearch('別の対戦相手を探しています…');
+    }
+  });
+}
+
+function resetLocalRoomForRandomSearch(message) {
+  joinedRoom = false;
+  currentRoomId = '';
+  currentRoom = null;
+  mySelectedCardId = null;
+  committedCardId = null;
+  lastRoundId = null;
+  lastFinaleId = null;
+  previousScores.clear();
+  resetChat();
+  clearSavedSession();
+  resetTimer();
+  randomSearchActive = true;
+  setEntryMode('random');
+  showLoginScreen();
+  setLoginMessage(message);
+}
+
+// Guest names are deliberately not unique.  Outcome UI must therefore use
+// the server-authoritative p1/p2 seat, never a display-name comparison.  The
+// small unique-name fallback keeps a rolling deployment readable when an old
+// server is briefly paired with a newer static client, without guessing when
+// two names are identical.
+function getPlayerForSeat(room, seat) {
+  if (!room?.players || (seat !== 'p1' && seat !== 'p2')) return null;
+  return room.players[seat === 'p1' ? 0 : 1] || null;
+}
+
+function getSeatForPlayer(room, player) {
+  if (!room?.players || !player) return null;
+  const index = room.players.findIndex((candidate) => candidate.id === player.id);
+  return index === 0 ? 'p1' : index === 1 ? 'p2' : null;
+}
+
+function getViewerSeat(room) {
+  if (!socket?.id) return null;
+  const index = room?.players?.findIndex((player) => player.id === socket.id) ?? -1;
+  return index === 0 ? 'p1' : index === 1 ? 'p2' : null;
+}
+
+function getUniqueNameSeat(room, name) {
+  if (!name || name === 'Draw' || name === '引き分け') return null;
+  const matches = (room?.players || [])
+    .map((player, index) => ({ player, seat: index === 0 ? 'p1' : 'p2' }))
+    .filter(({ player }) => player.name === name);
+  return matches.length === 1 ? matches[0].seat : null;
+}
+
+function getWinnerSeat(room) {
+  if (room?.winnerSeat === 'p1' || room?.winnerSeat === 'p2') return room.winnerSeat;
+  return getUniqueNameSeat(room, room?.winner);
+}
+
+function getRoundWinnerSeat(room, round) {
+  if (round?.winnerSeat === 'p1' || round?.winnerSeat === 'p2') return round.winnerSeat;
+  return getUniqueNameSeat(room, round?.winner);
+}
+
+function getSeatDisplayName(room, seat, fallback = '対戦相手') {
+  return getPlayerForSeat(room, seat)?.name || fallback;
+}
+
 function setLoginMessage(message = '') {
   setText(elements.loginMessage, message);
 }
@@ -240,8 +390,8 @@ function updatePresenceView(payload = {}) {
   setText(
     elements.randomQueueCount,
     Number.isSafeInteger(randomQueueCount)
-      ? `対戦相手を探し中 ${randomQueueCount} 人`
-      : '対戦相手を探し中 — 人'
+      ? `対戦相手を探し中 ${randomQueueCount} 接続`
+      : '対戦相手を探し中 — 接続'
   );
 }
 
@@ -266,7 +416,14 @@ function setEntryMode(mode) {
 }
 
 function stopRandomSearch({ message = '' } = {}) {
-  if (randomSearchActive && socket?.connected) socket.emit('leave_random_queue');
+  const requestId = randomSearchRequestId;
+  randomSearchWanted = false;
+  randomSearchRequestId = '';
+  randomSearchSourceRoomId = '';
+  clearNextRandomMatchPending();
+  if ((randomSearchActive || requestId) && socket?.connected) {
+    socket.emit('leave_random_queue', { requestId });
+  }
   randomSearchActive = false;
   renderEntryMode();
   if (message) setLoginMessage(message);
@@ -282,10 +439,14 @@ function beginRandomSearch() {
   autoJoinWhenSeatAvailable = false;
   currentRoomId = '';
   joinedRoom = false;
+  randomSearchWanted = true;
+  randomSearchRequestId = createRandomSearchRequestId();
+  randomSearchSourceRoomId = '';
+  clearNextRandomMatchPending();
   randomSearchActive = true;
   setEntryMode('random');
   setLoginMessage(socket.connected ? '対戦相手を探しています…' : 'サーバーへ接続しています…');
-  if (socket.connected) socket.emit('join_random_match', { playerName: myPlayerName, clientId });
+  emitRandomSearchRequest();
 }
 
 function resetTimer() {
@@ -431,11 +592,16 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     const resultId = `forfeit:${finishReason.id || `${finishReason.forfeitedBy}:${winnerName}`}`;
     const isNewResult = resultId !== lastRoundId;
     lastRoundId = resultId;
-    const me = currentRoom?.players.find((player) => player.id === socket?.id);
     const isSpectator = Boolean(currentRoom?.viewer?.isSpectator);
+    const viewerSeat = getViewerSeat(currentRoom);
+    const forfeitedSeat = finishReason.forfeitedBySeat === 'p1' || finishReason.forfeitedBySeat === 'p2'
+      ? finishReason.forfeitedBySeat
+      : getUniqueNameSeat(currentRoom, finishReason.forfeitedBy);
+    const winnerSeat = getWinnerSeat(currentRoom);
     const outcomeClass = isSpectator
       ? 'draw'
-      : finishReason.forfeitedBy === me?.name ? 'loss' : 'win';
+      : forfeitedSeat && forfeitedSeat === viewerSeat ? 'loss'
+        : winnerSeat && winnerSeat === viewerSeat ? 'win' : 'draw';
     elements.revealArea.className = `reveal-area outcome-${outcomeClass} reveal-forfeit${isNewResult ? ' reveal-new' : ''}`;
 
     const result = document.createElement('div');
@@ -445,7 +611,9 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     const title = document.createElement('strong');
     title.textContent = '降参により決着';
     const detail = document.createElement('p');
-    detail.textContent = `${finishReason.forfeitedBy} が降参しました。${winnerName || '対戦相手'} の勝ちです。`;
+    const forfeitedName = getSeatDisplayName(currentRoom, forfeitedSeat, finishReason.forfeitedBy || '対戦者');
+    const finalWinnerName = getSeatDisplayName(currentRoom, winnerSeat, winnerName || '対戦相手');
+    detail.textContent = `${forfeitedName} が降参しました。${finalWinnerName} の勝ちです。`;
     result.append(label, title, detail);
     elements.revealArea.replaceChildren(result);
     if (isNewResult) {
@@ -466,10 +634,13 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
 
   const isNewRound = lastRound.id !== lastRoundId;
   lastRoundId = lastRound.id;
-  const isDraw = lastRound.winner === 'Draw';
+  const roundWinnerSeat = getRoundWinnerSeat(currentRoom, lastRound);
+  const isDraw = !roundWinnerSeat;
   const me = currentRoom?.players.find((player) => player.id === socket?.id);
   const firstPlayer = currentRoom?.players[0];
-  const isMyWin = Boolean(me && !isDraw && lastRound.winner === me.name);
+  const viewerSeat = getViewerSeat(currentRoom);
+  const roundWinnerName = getSeatDisplayName(currentRoom, roundWinnerSeat, lastRound.winner || '対戦者');
+  const isMyWin = Boolean(me && !isDraw && viewerSeat === roundWinnerSeat);
   const outcomeClass = isDraw ? 'draw' : isMyWin ? 'win' : me ? 'loss' : 'win';
   elements.revealArea.className = `reveal-area outcome-${outcomeClass}${isNewRound ? ' reveal-new' : ''}`;
 
@@ -482,13 +653,13 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   const outcomeTitle = document.createElement('strong');
   outcomeTitle.textContent = isDraw
     ? '引き分け'
-    : me ? (isMyWin ? 'あなたの勝ち' : '相手の勝ち') : `${lastRound.winner} の勝ち`;
+    : me ? (isMyWin ? 'あなたの勝ち' : '相手の勝ち') : `${roundWinnerName} の勝ち`;
   const outcomeDetail = document.createElement('p');
   if (isDraw) {
     outcomeDetail.textContent = '引き分け — この2枚は次の勝負へ持ち越し';
   } else {
     const awardText = Number.isFinite(lastRound.awardedCards) ? `${lastRound.awardedCards}枚` : '場のカード';
-    outcomeDetail.textContent = `${lastRound.winner} が ${awardText} を獲得`;
+    outcomeDetail.textContent = `${roundWinnerName} が ${awardText} を獲得`;
   }
   outcome.append(outcomeLabel, outcomeTitle, outcomeDetail);
 
@@ -506,7 +677,7 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   versusMark.textContent = '対';
   const winner = document.createElement('span');
   const awardText = Number.isFinite(lastRound.awardedCards) ? `+${lastRound.awardedCards}枚` : '場のカード';
-  winner.textContent = lastRound.winner === 'Draw'
+  winner.textContent = isDraw
     ? '引き分け · 持ち越し +2'
     : `獲得 ${awardText}`;
   versus.append(versusMark, winner);
@@ -519,6 +690,84 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     playResultEffects(outcomeClass);
     window.setTimeout(() => elements.revealArea.classList.remove('reveal-new'), 600);
   }
+}
+
+function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
+  const panel = elements.finalResultPanel;
+  // A stale cached HTML document must not be able to take the legacy PvP
+  // renderer down while a newer main.js is rolling out.
+  if (!panel) return;
+  const finished = room?.gameState === 'finished';
+  panel.classList.toggle('hidden', !finished);
+  elements.myHand.classList.toggle('hidden', finished);
+  if (!finished) {
+    if (finalResultAnimationTimer) window.clearTimeout(finalResultAnimationTimer);
+    finalResultAnimationTimer = null;
+    panel.replaceChildren();
+    lastFinaleId = null;
+    return;
+  }
+
+  const winnerSeat = getWinnerSeat(room);
+  const bottomSeat = getSeatForPlayer(room, bottomPlayer);
+  const isDraw = !winnerSeat;
+  const won = !isDraw && !isSpectator && winnerSeat === bottomSeat;
+  const outcome = isDraw ? 'draw' : isSpectator ? 'spectate' : won ? 'win' : 'loss';
+  const finaleId = room.finishReason?.id
+    || `completed:${room.round}:${room.winner}:${bottomPlayer?.score ?? ''}:${topPlayer?.score ?? ''}:${room.lastRound?.id ?? ''}`;
+  const isNewFinale = finaleId !== lastFinaleId;
+  lastFinaleId = finaleId;
+  panel.className = `final-result-panel final-${outcome}${isNewFinale ? ' final-result-new' : ''}`;
+
+  // Room updates continue after a game (reconnects, start consent, chat
+  // state). Do not recreate an aria-live result for every one of those
+  // updates: announce it once, then retain the stable final result panel.
+  if (!isNewFinale) return;
+
+  const kicker = document.createElement('span');
+  kicker.className = 'final-result-kicker';
+  kicker.textContent = '対局の最終結果';
+  const title = document.createElement('strong');
+  title.className = 'final-result-title';
+  const winnerName = getSeatDisplayName(room, winnerSeat, room.winner || '対戦者');
+  title.textContent = isDraw
+    ? '引き分け'
+    : isSpectator ? `${winnerName} の勝利`
+      : won ? 'あなたの勝利' : 'あなたの敗北';
+  const score = document.createElement('div');
+  score.className = 'final-scoreline';
+  const bottomScore = document.createElement('strong');
+  bottomScore.textContent = String(bottomPlayer?.score ?? '—');
+  const divider = document.createElement('span');
+  divider.textContent = '—';
+  const topScore = document.createElement('strong');
+  topScore.textContent = String(topPlayer?.score ?? '—');
+  score.append(bottomScore, divider, topScore);
+  const scoreCaption = document.createElement('p');
+  scoreCaption.className = 'final-score-caption';
+  scoreCaption.textContent = `${bottomPlayer?.name || 'あなた'} ${bottomPlayer?.score ?? '—'}枚  —  ${topPlayer?.name || '相手'} ${topPlayer?.score ?? '—'}枚`;
+  const detail = document.createElement('p');
+  detail.className = 'final-result-detail';
+  if (room.finishReason?.type === 'forfeit') {
+    const forfeitedSeat = room.finishReason.forfeitedBySeat === 'p1' || room.finishReason.forfeitedBySeat === 'p2'
+      ? room.finishReason.forfeitedBySeat
+      : getUniqueNameSeat(room, room.finishReason.forfeitedBy);
+    const forfeitedName = getSeatDisplayName(room, forfeitedSeat, room.finishReason.forfeitedBy || '対戦者');
+    detail.textContent = `${forfeitedName} の降参により決着しました。`;
+  } else if (room.finishReason?.type === 'score-limit') {
+    detail.textContent = '9枚以上を先取して決着しました。';
+  } else if (isDraw) {
+    detail.textContent = '7ラウンド終了。獲得枚数は同じです。';
+  } else {
+    detail.textContent = `第7ラウンド終了。${winnerName} が最終勝者です。`;
+  }
+  panel.replaceChildren(kicker, title, score, scoreCaption, detail);
+
+  if (finalResultAnimationTimer) window.clearTimeout(finalResultAnimationTimer);
+  finalResultAnimationTimer = window.setTimeout(() => {
+    if (lastFinaleId === finaleId) panel.classList.remove('final-result-new');
+    finalResultAnimationTimer = null;
+  }, 1_350);
 }
 
 function playResultEffects(outcomeClass) {
@@ -565,15 +814,18 @@ function renderHistory(history) {
   }
 
   [...history].reverse().forEach((round) => {
+    const winnerSeat = getRoundWinnerSeat(currentRoom, round);
+    const isDraw = !winnerSeat;
+    const winnerName = getSeatDisplayName(currentRoom, winnerSeat, round.winner || '対戦者');
     const item = document.createElement('article');
-    item.className = `history-item${round.winner === 'Draw' ? ' draw' : ''}`;
+    item.className = `history-item${isDraw ? ' draw' : ''}`;
     const number = document.createElement('span');
     number.className = 'history-round';
     number.textContent = `第${round.round}`;
     const detail = document.createElement('div');
     detail.className = 'history-detail';
     const winner = document.createElement('strong');
-    winner.textContent = round.winner === 'Draw' ? '引き分け · 持ち越し' : `${round.winner} が獲得`;
+    winner.textContent = isDraw ? '引き分け · 持ち越し' : `${winnerName} が獲得`;
     const cards = document.createElement('span');
     cards.textContent = `${round.p1Card.name}  対  ${round.p2Card.name}`;
     detail.append(winner, cards);
@@ -777,18 +1029,30 @@ function renderStatus(room, me, opponent) {
       : '一枚を選び、相手の思考を読んでください。');
   } else if (room.gameState === 'finished') {
     const opponentDisconnected = opponent?.connected === false;
+    const winnerSeat = getWinnerSeat(room);
+    const mySeat = getSeatForPlayer(room, me);
+    // `winner` is a display name retained for old room payloads.  Use the
+    // stable seat whenever it is available so duplicate guest names (and a
+    // guest literally named "Draw") cannot make the status lie.
+    const finalOutcome = winnerSeat
+      ? winnerSeat === mySeat ? 'あなたの勝利' : 'あなたの敗北'
+      : ['引き分け', 'Draw'].includes(room.winner) ? '引き分け' : `${room.winner || '対戦者'} の勝利`;
     if (opponentDisconnected) {
       setText(elements.status, '対戦相手の再接続を待っています。');
     } else if (room.finishReason?.type === 'forfeit') {
-      setText(elements.status, `ゲーム終了 — ${room.finishReason.forfeitedBy} の降参により ${room.winner} の勝ちです。`);
+      const forfeitedSeat = room.finishReason.forfeitedBySeat === 'p1' || room.finishReason.forfeitedBySeat === 'p2'
+        ? room.finishReason.forfeitedBySeat
+        : getUniqueNameSeat(room, room.finishReason.forfeitedBy);
+      const forfeitedName = getSeatDisplayName(room, forfeitedSeat, room.finishReason.forfeitedBy || '対戦者');
+      setText(elements.status, `ゲーム終了 — ${finalOutcome}。${forfeitedName} が降参しました。`);
     } else if (room.players.length === 2 && room.players.every((player) => player.connected) && room.viewer.hasAgreedToStart) {
       setText(elements.status, room.matchType === 'random'
         ? 'この相手との再戦を希望しました。相手の同意を待っています…'
         : '再戦に同意しました。相手の同意を待っています…');
     } else {
       setText(elements.status, room.matchType === 'random'
-        ? `ゲーム終了 — ${room.winner}。この相手と続けるか、別の相手を探せます。`
-        : `ゲーム終了 — ${room.winner}。再戦する場合は「再戦に同意する」を押してください。`);
+        ? `ゲーム終了 — ${finalOutcome}。この相手と続けるか、別の相手を探せます。`
+        : `ゲーム終了 — ${finalOutcome}。再戦する場合は「再戦に同意する」を押してください。`);
     }
   }
 }
@@ -818,6 +1082,10 @@ function renderRoom(room) {
     }
   };
   randomSearchActive = false;
+  randomSearchWanted = false;
+  randomSearchRequestId = '';
+  randomSearchSourceRoomId = '';
+  clearNextRandomMatchPending();
   renderEntryMode();
   // A random-match id is server-generated. Persist it as soon as the room
   // view arrives so start consent, card submission, and reconnect all target
@@ -871,6 +1139,8 @@ function renderRoom(room) {
     elements.opponentHand.replaceChildren();
   }
 
+  renderFinalResult(roomView, displayedBottomPlayer, displayedTopPlayer, isSpectator);
+
   setText(elements.mySideLabel, isSpectator ? '観戦中・♠側' : 'あなた');
   setText(elements.opponentSideLabel, isSpectator ? '観戦中・♥側' : '対戦相手');
   elements.myZone.setAttribute('aria-label', isSpectator ? '♠側プレイヤーの手札' : 'あなたの手札');
@@ -901,12 +1171,13 @@ function renderRoom(room) {
       : '対戦開始に同意する'
   );
   elements.restartButton.disabled = !socket?.connected || roomView.viewer.hasAgreedToStart;
-  elements.nextRandomButton.disabled = !socket?.connected;
+  elements.nextRandomButton.disabled = !socket?.connected || nextRandomMatchPending;
   elements.surrenderButton.disabled = !socket?.connected;
   elements.switchSpectatorButton.disabled = !socket?.connected;
   elements.spectatorModeBadge.classList.toggle('hidden', !isSpectator);
   elements.randomMatchBadge.classList.toggle('hidden', !isRandomMatch);
   elements.homeButton.classList.toggle('hidden', !isSpectator && !['waiting', 'finished'].includes(roomView.gameState));
+  elements.homeButton.disabled = nextRandomMatchPending;
   setText(elements.homeButtonLabel, isSpectator ? '観戦をやめる' : 'ホームへ戻る');
 
   renderTimer(roomView);
@@ -976,28 +1247,33 @@ elements.confirmButton.addEventListener('click', () => {
 });
 
 elements.restartButton.addEventListener('click', () => {
+  if (nextRandomMatchPending) {
+    setText(elements.status, '別の相手の検索開始を確認しています。しばらくお待ちください。');
+    return;
+  }
   if (socket && currentRoomId) socket.emit('agree_to_start', { roomId: currentRoomId });
 });
 
 elements.nextRandomButton.addEventListener('click', () => {
   if (!socket?.connected || !currentRoom || currentRoom.matchType !== 'random' || !currentRoomId) return;
   if (!['waiting', 'finished'].includes(currentRoom.gameState)) return;
+  if (nextRandomMatchPending) return;
   const previousRoomId = currentRoomId;
-  joinedRoom = false;
-  currentRoomId = '';
-  currentRoom = null;
-  mySelectedCardId = null;
-  committedCardId = null;
-  lastRoundId = null;
-  previousScores.clear();
-  resetChat();
-  clearSavedSession();
-  resetTimer();
-  randomSearchActive = true;
-  setEntryMode('random');
-  showLoginScreen();
-  setLoginMessage('別の対戦相手を探しています…');
-  socket.emit('find_next_random_match', { roomId: previousRoomId });
+  const requestId = createRandomSearchRequestId();
+  randomSearchWanted = true;
+  randomSearchRequestId = requestId;
+  randomSearchSourceRoomId = previousRoomId;
+  nextRandomMatchPending = true;
+  elements.nextRandomButton.disabled = true;
+  elements.restartButton.disabled = true;
+  elements.switchSpectatorButton.disabled = true;
+  elements.homeButton.disabled = true;
+  setText(elements.status, '別の対戦相手を探しています…');
+  // Preserve the existing room/session until the server has atomically
+  // accepted the transfer. The same request id is retried safely if its
+  // acknowledgement is delayed, so a transient network loss cannot strand
+  // the player in the old room or create a duplicate search.
+  requestNextRandomMatch(previousRoomId, requestId);
 });
 
 elements.surrenderButton.addEventListener('click', () => {
@@ -1007,6 +1283,10 @@ elements.surrenderButton.addEventListener('click', () => {
 });
 
 elements.switchSpectatorButton.addEventListener('click', () => {
+  if (nextRandomMatchPending) {
+    setText(elements.status, '別の相手の検索開始を確認しています。しばらくお待ちください。');
+    return;
+  }
   if (!socket?.connected || !currentRoomId || !currentRoom || currentRoom.viewer.isSpectator) return;
   const activeGame = ['playing', 'reconnecting'].includes(currentRoom.gameState);
   const message = activeGame
@@ -1017,7 +1297,7 @@ elements.switchSpectatorButton.addEventListener('click', () => {
 });
 
 elements.privateModeButton.addEventListener('click', () => {
-  if (randomSearchActive) stopRandomSearch();
+  if (randomSearchActive || randomSearchWanted) stopRandomSearch();
   setEntryMode('private');
   setLoginMessage('');
   elements.roomIdInput.focus();
@@ -1122,6 +1402,10 @@ window.addEventListener('pointerdown', primeChatSound, { once: true, passive: tr
 window.addEventListener('keydown', primeChatSound, { once: true });
 
 elements.homeButton.addEventListener('click', () => {
+  if (nextRandomMatchPending) {
+    setText(elements.status, '別の相手の検索開始を確認しています。しばらくお待ちください。');
+    return;
+  }
   const roomIdToLeave = currentRoomId;
   const returnToRandomEntry = currentRoom?.matchType === 'random';
   if (socket?.connected && roomIdToLeave) socket.emit('leave_room', { roomId: roomIdToLeave });
@@ -1132,7 +1416,12 @@ elements.homeButton.addEventListener('click', () => {
   committedCardId = null;
   currentRoom = null;
   randomSearchActive = false;
+  randomSearchWanted = false;
+  randomSearchRequestId = '';
+  randomSearchSourceRoomId = '';
+  clearNextRandomMatchPending();
   lastRoundId = null;
+  lastFinaleId = null;
   previousScores.clear();
   resetChat();
   clearSavedSession();
@@ -1161,7 +1450,7 @@ if (socket) {
     updateChatControls();
     socket.emit('get_presence');
     if (joinedRoom) emitJoinRequest();
-    else if (randomSearchActive) socket.emit('join_random_match', { playerName: myPlayerName, clientId });
+    else if (randomSearchWanted) emitRandomSearchRequest();
   });
 
   socket.on('disconnect', () => {
@@ -1181,7 +1470,19 @@ if (socket) {
   });
 
   socket.on('room_updated', (room) => {
+    // An update emitted just before a successful "find next" transfer can
+    // arrive after the click. It describes the old room, not a cancellation.
+    // Ignore it until the server sends a different random room (or rejects
+    // the request explicitly through its acknowledgement).
+    if (isStaleRandomRoomUpdate(room)) {
+      if (nextRandomMatchPending) requestNextRandomMatch(randomSearchSourceRoomId, randomSearchRequestId);
+      return;
+    }
     randomSearchActive = false;
+    randomSearchWanted = false;
+    randomSearchRequestId = '';
+    randomSearchSourceRoomId = '';
+    clearNextRandomMatchPending();
     entryMode = room.matchType === 'random' ? 'random' : 'private';
     elements.joinButton.disabled = false;
     setLoginMessage('');
@@ -1194,6 +1495,8 @@ if (socket) {
 
   socket.on('random_match_status', (status) => {
     updatePresenceView(status);
+    const statusRequestId = typeof status?.requestId === 'string' ? status.requestId : '';
+    if (!randomSearchWanted || !randomSearchRequestId || statusRequestId !== randomSearchRequestId) return;
     if (status?.state === 'searching') {
       randomSearchActive = true;
       setEntryMode('random');
@@ -1201,6 +1504,14 @@ if (socket) {
     } else if (status?.state === 'idle') {
       randomSearchActive = false;
       renderEntryMode();
+    } else if (status?.state === 'expired') {
+      randomSearchActive = false;
+      randomSearchWanted = false;
+      randomSearchRequestId = '';
+      randomSearchSourceRoomId = '';
+      clearNextRandomMatchPending();
+      renderEntryMode();
+      if (!currentRoom) setLoginMessage('検索の有効時間（10分）が切れました。もう一度「対戦相手を探す」を押してください。');
     }
   });
 
@@ -1220,8 +1531,19 @@ if (socket) {
   socket.on('room_error', ({ message }) => {
     elements.joinButton.disabled = false;
     if (!currentRoom) {
+      // A rejected Private-room attempt must not erase a still-valid random
+      // queue entry. New servers acknowledge an actual queue failure, which
+      // clears this intent in emitRandomSearchRequest instead.
+      if (randomSearchWanted && randomSearchRequestId) {
+        setLoginMessage(message || '操作を完了できませんでした。');
+        return;
+      }
       joinedRoom = false;
       randomSearchActive = false;
+      randomSearchWanted = false;
+      randomSearchRequestId = '';
+      randomSearchSourceRoomId = '';
+      clearNextRandomMatchPending();
       renderEntryMode();
       clearSavedSession();
       setLoginMessage(message || '入室できませんでした。');

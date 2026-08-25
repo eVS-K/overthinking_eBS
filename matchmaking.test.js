@@ -35,3 +35,15 @@ test('ランダム対戦待機列は長時間残ったエントリを回収す�
   assert.equal(queue.size, 1);
   assert.equal(queue.takeNext().clientId, 'recent');
 });
+
+test('接続切れと待機lease切れを区別して回収できる', () => {
+  const queue = new RandomMatchQueue({ maxAgeMs: 100 });
+  queue.enqueue({ clientId: 'connected', socketId: 'socket-connected', ip: '203.0.113.9' }, 10);
+  queue.enqueue({ clientId: 'gone', socketId: 'socket-gone', ip: '203.0.113.10' }, 10);
+  const removed = [];
+  assert.equal(queue.prune((entry) => entry.socketId === 'socket-connected', 10_000, (entry, reason) => {
+    removed.push([entry.clientId, reason]);
+  }), 2);
+  assert.deepEqual(removed, [['connected', 'expired'], ['gone', 'unavailable']]);
+  assert.equal(queue.size, 0);
+});

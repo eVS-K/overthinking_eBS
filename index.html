@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#090d1a">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
-  <link rel="stylesheet" href="style.css?v=pvp-v10">
+  <link rel="stylesheet" href="style.css?v=pvp-v11">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v10"></script>
+  <script src="socket-loader.js?v=pvp-v11"></script>
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true">
@@ -51,9 +51,9 @@
 
           <section id="random-match-panel" class="random-match-panel hidden" aria-live="polite">
             <span class="section-label">ランダムマッチ</span>
-            <strong><span id="random-online-count">—</span><small>人</small></strong>
-            <p>現在オンライン</p>
-            <span id="random-queue-count" class="random-queue-count">対戦相手を探し中 — 人</span>
+            <strong><span id="random-online-count">—</span><small>接続</small></strong>
+            <p>現在このサーバーに接続中</p>
+            <span id="random-queue-count" class="random-queue-count">対戦相手を探し中 — 接続</span>
             <small>同じ相手との再戦も、対局後に選べます。</small>
           </section>
 
@@ -159,6 +159,7 @@
             <div class="score-box"><span>獲得</span><strong id="my-score">0</strong><small>枚</small></div>
           </div>
           <div id="my-hand" class="card-row my-hand" aria-label="あなたの手札"></div>
+          <section id="final-result-panel" class="final-result-panel hidden" role="status" aria-live="polite" aria-atomic="true"></section>
           <div id="player-controls" class="controls">
             <button id="confirmBtn" class="primary-button confirm-button" type="button" disabled><span>この一枚で勝負する</span><b aria-hidden="true">↗</b></button>
             <button id="surrenderBtn" class="surrender-button hidden" type="button">降参する</button>

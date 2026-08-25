@@ -70,11 +70,21 @@ class RandomMatchQueue {
     return count;
   }
 
-  prune(now = Date.now()) {
+  // A queue entry is a short-lived lease, not a permanent reservation.  An
+  // optional availability predicate additionally reclaims disconnected or
+  // superseded sockets.  Callers can notify a still-connected user when an
+  // otherwise valid lease expires instead of leaving their UI stuck.
+  prune(isAvailableOrNow = Date.now(), suppliedNow = Date.now(), onRemove = null) {
+    const hasAvailabilityCheck = typeof isAvailableOrNow === 'function';
+    const isAvailable = hasAvailabilityCheck ? isAvailableOrNow : null;
+    const now = hasAvailabilityCheck ? suppliedNow : isAvailableOrNow;
     let removed = 0;
     for (const [clientId, entry] of this.entries) {
-      if (now - entry.lastSeenAt <= this.maxAgeMs) continue;
+      const unavailable = hasAvailabilityCheck && !isAvailable(entry);
+      const expired = now - entry.lastSeenAt > this.maxAgeMs;
+      if (!unavailable && !expired) continue;
       this.entries.delete(clientId);
+      if (typeof onRemove === 'function') onRemove(entry, unavailable ? 'unavailable' : 'expired');
       removed += 1;
     }
     return removed;

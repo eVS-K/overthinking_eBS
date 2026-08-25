@@ -68,8 +68,10 @@
     elements['ranked-handle-input'].setAttribute('aria-invalid', String(Boolean(message)));
   }
   function setHidden(element, hidden) { element.classList.toggle('hidden', hidden); }
-  function setAuthNotice(message = '', { blockSignIn = false } = {}) {
+  function setAuthNotice(message = '', { blockSignIn = false, kind = 'info' } = {}) {
     elements['ranked-auth-notice'].textContent = message;
+    elements['ranked-auth-notice'].dataset.kind = kind;
+    elements['ranked-auth-notice'].setAttribute('role', kind === 'error' ? 'alert' : 'status');
     setHidden(elements['ranked-auth-notice'], !message);
     setHidden(elements['ranked-auth-actions'], Boolean(message) && blockSignIn);
   }
@@ -109,6 +111,7 @@
       error.code = payload?.error?.code;
       error.details = payload?.error?.details;
       error.status = response.status;
+      error.authenticated = payload?.authenticated === true;
       throw error;
     }
     return payload;
@@ -375,7 +378,7 @@
   async function refreshProfile() {
     const result = await api('/api/profile'); renderProfile(result.profile);
   }
-  async function refreshLeaderboard() {
+  async function refreshLeaderboard({ showMessage = true } = {}) {
     try {
       const leaderboard = await api('/api/leaderboard?limit=25&offset=0');
       elements['leaderboard-season'].textContent = leaderboard.season?.id ? '現在のシーズン' : '準備中';
@@ -399,7 +402,7 @@
       const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'ranked-text-button'; retry.textContent = '再試行';
       retry.addEventListener('click', refreshLeaderboard, { once: true });
       notice.append(text, retry); list.replaceChildren(notice);
-      setErrorMessage(error);
+      if (showMessage) setErrorMessage(error);
     }
   }
 
@@ -487,16 +490,33 @@
       setHidden(elements['ranked-loading'], true);
       setHidden(elements['ranked-auth'], false);
       setHidden(elements['ranked-auth-status'], true);
-      const loginFailed = new URL(window.location.href).searchParams.get('login') === 'failed';
-      if (error.code === 'RANKED_UNAVAILABLE') {
-        setAuthNotice('ランク対戦は現在、準備中または一時停止中です。プライベート対戦は通常どおり利用できます。', { blockSignIn: true });
-      } else if (loginFailed) {
-        setAuthNotice('サインインを完了できませんでした。もう一度GoogleまたはGitHubでお試しください。');
-      } else if (error.status !== 401) {
-        setAuthNotice('認証状態を確認できませんでした。時間をおいて再試行してください。');
-        setErrorMessage(error);
+      const currentUrl = new URL(window.location.href);
+      const loginOutcome = currentUrl.searchParams.get('login');
+      const loginFailed = loginOutcome === 'failed';
+      const loginUnavailable = loginOutcome === 'unavailable';
+      // The callback status is a one-time explanation, not persistent app
+      // state.  Keeping it in the address bar would make a later reload hide
+      // the sign-in options even after a transient provider/database outage
+      // has recovered.
+      if ((loginFailed || loginUnavailable) && window.history?.replaceState) {
+        currentUrl.searchParams.delete('login');
+        window.history.replaceState(null, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`);
       }
-      await refreshLeaderboard();
+      if (error.authenticated) {
+        elements['ranked-auth-status-label'].textContent = 'サインイン済み · ランク情報を確認できません';
+        setHidden(elements['ranked-auth-status'], false);
+        setHidden(elements['ranked-logout'], false);
+        setAuthNotice('サインインは完了しています。ただしランク戦の情報を準備できませんでした。サーバー側の更新中または一時的な障害の可能性があります。時間をおいてページを再読み込みしてください。', { blockSignIn: true, kind: 'error' });
+      } else if (error.code === 'RANKED_UNAVAILABLE') {
+        setAuthNotice('ランク対戦は現在、準備中または一時停止中です。プライベート対戦は通常どおり利用できます。', { blockSignIn: true });
+      } else if (loginUnavailable) {
+        setAuthNotice('サインイン基盤またはランク戦のデータベースを準備できませんでした。サーバー側の更新中または一時的な障害の可能性があります。時間をおいて、下のサインイン操作から再試行してください。', { kind: 'error' });
+      } else if (loginFailed) {
+        setAuthNotice('サインインを完了できませんでした。もう一度GoogleまたはGitHubでお試しください。', { kind: 'error' });
+      } else if (error.status !== 401) {
+        setAuthNotice('ランク戦の認証・ランキング情報を準備できませんでした。サーバー側の更新中または一時的な障害の可能性があります。時間をおいて、下のサインイン操作から再試行してください。', { kind: 'error' });
+      }
+      await refreshLeaderboard({ showMessage: false });
     }
   }
   elements['ranked-start'].addEventListener('click', startGame);

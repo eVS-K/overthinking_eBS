@@ -114,7 +114,7 @@ const limiterCleanupTimer = setInterval(() => {
   handshakeLimiter.prune();
   roomCreationLimiter.prune();
   randomMatchLimiter.prune();
-  if (randomMatchQueue.prune() > 0) schedulePresenceBroadcast();
+  pruneRandomMatchQueue();
 }, 60_000);
 limiterCleanupTimer.unref();
 
@@ -260,6 +260,10 @@ function createRoom(id, { matchType = 'private', allowedRandomClientIds = [] } =
     deadline: 0,
     pausedRemainingMs: TURN_TIME_LIMIT_MS,
     winner: null,
+    // Display names are intentionally kept for the history/UI, but never use
+    // one as the authoritative outcome identifier: two guests may choose the
+    // same name.  p1/p2 are the stable seats used by the canonical resolver.
+    winnerSeat: null,
     finishReason: null,
     // A match starts only after both occupied player seats opt in. Client ids
     // survive reconnects, unlike Socket.IO ids.
@@ -303,6 +307,7 @@ function resetGame(room) {
   room.deadline = 0;
   room.pausedRemainingMs = TURN_TIME_LIMIT_MS;
   room.winner = null;
+  room.winnerSeat = null;
   room.finishReason = null;
   room.startAgreements = new Set();
   room.players.forEach((player) => {
@@ -377,6 +382,7 @@ function createRoomView(room, socketId) {
     gameState: room.gameState,
     deadline: room.deadline,
     winner: room.winner,
+    winnerSeat: room.winnerSeat,
     finishReason: room.finishReason,
     startReadyCount: room.players.filter((candidate) => startAgreements.has(candidate.clientId)).length,
     viewer: {
@@ -510,11 +516,21 @@ function schedulePresenceBroadcast() {
   presenceBroadcastTimer.unref();
 }
 
-function emitRandomMatchStatus(socket, state = 'searching') {
+function emitRandomMatchStatus(socket, state = 'searching', requestId = socket.data.randomQueueRequestId) {
   socket.emit('random_match_status', {
     state,
+    requestId: requestId || null,
     ...getPresenceView()
   });
+}
+
+function getSuppliedRandomSearchRequestId(value) {
+  return normalizeText(value, 64);
+}
+
+function normalizeRandomSearchRequestId(value) {
+  const supplied = getSuppliedRandomSearchRequestId(value);
+  return supplied || crypto.randomBytes(12).toString('base64url');
 }
 
 function createRandomRoomId() {
@@ -531,7 +547,53 @@ function isRandomQueueEntryAvailable(entry) {
       && !socket.data.roomId
       && socket.data.clientId === entry.clientId
       && socket.data.randomQueueClientId === entry.clientId
+      && socket.data.randomQueueRequestId === entry.requestId
   );
+}
+
+function pruneRandomMatchQueue(now = Date.now()) {
+  const removed = randomMatchQueue.prune(isRandomQueueEntryAvailable, now, (entry, reason) => {
+    if (reason !== 'expired') return;
+    const socket = io.sockets.sockets.get(entry.socketId);
+    // A user's ten-minute search lease ending is a normal, recoverable
+    // condition. Clear only the matching generation, then tell that exact
+    // client so the UI never claims to be searching after its entry is gone.
+    if (!socket || !socket.connected
+      || socket.data.randomQueueClientId !== entry.clientId
+      || socket.data.randomQueueRequestId !== entry.requestId) return;
+    socket.data.randomQueueClientId = undefined;
+    socket.data.randomQueueRequestId = undefined;
+    emitRandomMatchStatus(socket, 'expired', entry.requestId);
+  });
+  if (removed > 0) schedulePresenceBroadcast();
+  return removed;
+}
+
+function acknowledgeKnownRandomSearch(socket, requestId, acknowledge) {
+  if (!requestId) return false;
+  if (!socket.data.roomId && socket.data.randomQueueRequestId === requestId) {
+    const queueEntry = {
+      socketId: socket.id,
+      clientId: socket.data.clientId,
+      requestId
+    };
+    if (isRandomQueueEntryAvailable(queueEntry)) {
+      emitRandomMatchStatus(socket, 'searching', requestId);
+      replyToChat(acknowledge, { ok: true, requestId, state: 'searching' });
+      return true;
+    }
+  }
+
+  const room = getRoom(socket.data.roomId);
+  if (room?.matchType === 'random'
+    && socket.data.lastRandomSearchRequestId === requestId
+    && socket.data.lastRandomSearchRoomId === room.id) {
+    socket.emit('room_updated', createRoomView(room, socket.id));
+    emitChatState(socket, room, socket.data.clientId);
+    replyToChat(acknowledge, { ok: true, requestId, state: 'matched' });
+    return true;
+  }
+  return false;
 }
 
 function createRandomMatch(firstEntry, secondEntry) {
@@ -564,6 +626,9 @@ function createRandomMatch(firstEntry, secondEntry) {
     socket.data.roomId = room.id;
     socket.data.clientId = entry.clientId;
     socket.data.randomQueueClientId = undefined;
+    socket.data.randomQueueRequestId = undefined;
+    socket.data.lastRandomSearchRequestId = entry.requestId;
+    socket.data.lastRandomSearchRoomId = room.id;
     room.players.push(createPlayer({
       id: socket.id,
       clientId: entry.clientId,
@@ -577,6 +642,7 @@ function createRandomMatch(firstEntry, secondEntry) {
 }
 
 function startQueuedRandomMatches() {
+  pruneRandomMatchQueue();
   while (rooms.size < MAX_ACTIVE_ROOMS) {
     const firstEntry = randomMatchQueue.takeNext(isRandomQueueEntryAvailable);
     if (!firstEntry) break;
@@ -601,60 +667,120 @@ function removeEmptyRoom(room) {
   return true;
 }
 
-function leaveRandomMatchQueue(socket, { notify = true } = {}) {
+function leaveRandomMatchQueue(socket, { notify = true, requestId = '' } = {}) {
+  const requestedId = typeof requestId === 'string' ? requestId : '';
+  // A stale cancel event must not remove a newer search started immediately
+  // afterwards on the same socket.
+  if (requestedId && socket.data.randomQueueRequestId && requestedId !== socket.data.randomQueueRequestId) return false;
+  const activeRequestId = socket.data.randomQueueRequestId;
   const removed = randomMatchQueue.removeBySocket(socket.id);
   if (!removed) return false;
   if (socket.data.randomQueueClientId === removed.clientId) socket.data.randomQueueClientId = undefined;
-  if (notify) emitRandomMatchStatus(socket, 'idle');
+  socket.data.randomQueueRequestId = undefined;
+  if (notify) emitRandomMatchStatus(socket, 'idle', activeRequestId);
   schedulePresenceBroadcast();
   return true;
 }
 
-function queueRandomMatch(socket, { clientId, playerName }) {
-  if (socket.data.roomId) {
+function cancelPendingRandomSearch(socket, requestId = '') {
+  const requestedId = getSuppliedRandomSearchRequestId(requestId);
+  if (!socket.data.roomId) {
+    return leaveRandomMatchQueue(socket, { requestId: requestedId });
+  }
+
+  // A match can be found between the server acknowledgement and the browser
+  // receiving room_updated. Honour a cancel for that exact, just-created
+  // search generation while the new room is still waiting; otherwise a user
+  // who pressed "cancel search" could be pulled into a match they never saw.
+  const room = getRoom(socket.data.roomId);
+  if (!requestedId
+    || room?.matchType !== 'random'
+    || room.gameState !== 'waiting'
+    || socket.data.lastRandomSearchRequestId !== requestedId
+    || socket.data.lastRandomSearchRoomId !== room.id) return false;
+  const playerIndex = room.players.findIndex((player) => player.id === socket.id);
+  if (playerIndex < 0) return false;
+
+  socket.leave(room.id);
+  socket.data.roomId = undefined;
+  socket.data.lastRandomSearchRequestId = undefined;
+  socket.data.lastRandomSearchRoomId = undefined;
+  clearDisconnectTimer(room.id, room.players[playerIndex].clientId);
+  resetAfterPlayerDeparture(room, playerIndex);
+  emitRandomMatchStatus(socket, 'idle', requestedId);
+  schedulePresenceBroadcast();
+  return true;
+}
+
+function prepareRandomMatch(socket, { clientId, playerName, requestId }, { allowBoundRoom = false } = {}) {
+  if (socket.data.roomId && !allowBoundRoom) {
     emitError(socket, '対局中または観戦中は、ランダムマッチを検索できません。');
-    return false;
+    return null;
   }
   if (!randomMatchLimiter.consume(socket.data.clientIp)) {
     emitError(socket, 'ランダムマッチの検索回数が多すぎます。少し待ってからお試しください。');
-    return false;
+    return null;
   }
 
   const safeClientId = normalizeText(clientId, 80);
   const safePlayerName = normalizeText(playerName, MAX_PLAYER_NAME_LENGTH, 'プレイヤー');
   if (!safeClientId) {
     emitError(socket, '接続情報を確認できませんでした。ページを再読み込みしてお試しください。');
-    return false;
+    return null;
   }
 
-  const previousEntry = randomMatchQueue.remove(safeClientId);
+  const hasPreviousEntry = randomMatchQueue.has(safeClientId);
+  if (!hasPreviousEntry && randomMatchQueue.size >= randomMatchQueue.maxEntries) {
+    emitError(socket, '現在ランダムマッチの待機が混み合っています。少し待ってからお試しください。');
+    return null;
+  }
+  if (!hasPreviousEntry && randomMatchQueue.countByIp(socket.data.clientIp) >= MAX_RANDOM_QUEUE_PER_IP) {
+    emitError(socket, 'このネットワークからのランダムマッチ待機が多すぎます。少し待ってからお試しください。');
+    return null;
+  }
+
+  return {
+    clientId: safeClientId,
+    playerName: safePlayerName,
+    requestId: normalizeRandomSearchRequestId(requestId)
+  };
+}
+
+function enqueuePreparedRandomMatch(socket, prepared) {
+  const previousEntry = randomMatchQueue.remove(prepared.clientId);
   if (previousEntry && previousEntry.socketId !== socket.id) {
     const previousSocket = io.sockets.sockets.get(previousEntry.socketId);
     if (previousSocket) previousSocket.disconnect(true);
   }
-  if (!previousEntry && randomMatchQueue.countByIp(socket.data.clientIp) >= MAX_RANDOM_QUEUE_PER_IP) {
-    emitError(socket, 'このネットワークからのランダムマッチ待機が多すぎます。少し待ってからお試しください。');
-    return false;
-  }
 
-  socket.data.clientId = safeClientId;
-  socket.data.randomQueueClientId = safeClientId;
+  socket.data.clientId = prepared.clientId;
+  socket.data.randomQueueClientId = prepared.clientId;
+  socket.data.randomQueueRequestId = prepared.requestId;
+  socket.data.lastRandomSearchRequestId = undefined;
+  socket.data.lastRandomSearchRoomId = undefined;
   const queued = randomMatchQueue.enqueue({
-    clientId: safeClientId,
+    clientId: prepared.clientId,
     socketId: socket.id,
-    name: safePlayerName,
-    ip: socket.data.clientIp
+    name: prepared.playerName,
+    ip: socket.data.clientIp,
+    requestId: prepared.requestId
   });
   if (!queued.ok) {
     socket.data.randomQueueClientId = undefined;
+    socket.data.randomQueueRequestId = undefined;
     emitError(socket, '現在ランダムマッチの待機が混み合っています。少し待ってからお試しください。');
     return false;
   }
 
   startQueuedRandomMatches();
-  if (!socket.data.roomId) emitRandomMatchStatus(socket, 'searching');
+  if (!socket.data.roomId) emitRandomMatchStatus(socket, 'searching', prepared.requestId);
   schedulePresenceBroadcast();
   return true;
+}
+
+function queueRandomMatch(socket, payload, options = {}) {
+  const prepared = prepareRandomMatch(socket, payload, options);
+  return prepared ? enqueuePreparedRandomMatch(socket, prepared) : false;
 }
 
 function replyToChat(acknowledge, result) {
@@ -685,13 +811,16 @@ function processTurn(room) {
   const awardedCards = 2 + room.stack.length;
 
   let roundWinner = 'Draw';
+  let roundWinnerSeat = null;
   if (result === 'p1') {
     firstPlayer.score += awardedCards;
     roundWinner = firstPlayer.name;
+    roundWinnerSeat = 'p1';
     room.stack = [];
   } else if (result === 'p2') {
     secondPlayer.score += awardedCards;
     roundWinner = secondPlayer.name;
+    roundWinnerSeat = 'p2';
     room.stack = [];
   } else {
     room.stack.push(firstCard, secondCard);
@@ -703,6 +832,7 @@ function processTurn(room) {
     p1Card: firstCard,
     p2Card: secondCard,
     winner: roundWinner,
+    winnerSeat: roundWinnerSeat,
     awardedCards: result === 'draw' ? 0 : awardedCards
   };
   room.history.push(resultRecord);
@@ -710,11 +840,18 @@ function processTurn(room) {
   room.selections = {};
   room.deadline = 0;
 
-  if (firstPlayer.score > 8 || secondPlayer.score > 8 || room.round >= 7) {
+  const reachedScoreLimit = firstPlayer.score > 8 || secondPlayer.score > 8;
+  if (reachedScoreLimit || room.round >= 7) {
     room.gameState = 'finished';
-    room.winner = firstPlayer.score === secondPlayer.score
+    const isDraw = firstPlayer.score === secondPlayer.score;
+    room.winnerSeat = isDraw ? null : firstPlayer.score > secondPlayer.score ? 'p1' : 'p2';
+    room.winner = isDraw
       ? '引き分け'
-      : firstPlayer.score > secondPlayer.score ? firstPlayer.name : secondPlayer.name;
+      : room.winnerSeat === 'p1' ? firstPlayer.name : secondPlayer.name;
+    room.finishReason = {
+      id: `completed-${room.round}-${Date.now()}`,
+      type: reachedScoreLimit ? 'score-limit' : 'round-limit'
+    };
   } else {
     room.round += 1;
     startTurnTimer(room);
@@ -733,10 +870,12 @@ function finishGameByForfeit(room, player) {
   room.deadline = 0;
   room.gameState = 'finished';
   room.winner = winner.name;
+  room.winnerSeat = room.players.indexOf(winner) === 0 ? 'p1' : 'p2';
   room.finishReason = {
     id: `forfeit-${Date.now()}`,
     type: 'forfeit',
-    forfeitedBy: player.name
+    forfeitedBy: player.name,
+    forfeitedBySeat: room.players.indexOf(player) === 0 ? 'p1' : 'p2'
   };
   return true;
 }
@@ -812,10 +951,6 @@ io.on('connection', (socket) => {
     const clientId = normalizeText(payload.clientId, 80);
     const joinPreferences = normalizeJoinPreferences(payload);
 
-    // Switching from the random-match entry screen to Private PvP must never
-    // leave a second, invisible queue entry behind.
-    leaveRandomMatchQueue(socket, { notify: false });
-
     if (!roomId || !clientId) {
       emitError(socket, '部屋キーを確認してから、もう一度入室してください。');
       return;
@@ -863,6 +998,10 @@ io.on('connection', (socket) => {
       }
     }
 
+    // Only a validated, accepted room transition cancels an existing random
+    // search. A typo, full room, or forbidden room must not silently remove a
+    // player from the match queue they were already waiting in.
+    leaveRandomMatchQueue(socket, { notify: false });
     socket.join(room.id);
     socket.data.roomId = room.id;
     socket.data.clientId = clientId;
@@ -912,36 +1051,73 @@ io.on('connection', (socket) => {
     emitPresence(socket);
   });
 
-  socket.on('join_random_match', (payload = {}) => {
-    queueRandomMatch(socket, {
+  socket.on('join_random_match', (payload = {}, acknowledge) => {
+    const requestId = getSuppliedRandomSearchRequestId(payload?.requestId);
+    if (acknowledgeKnownRandomSearch(socket, requestId, acknowledge)) return;
+    const queued = queueRandomMatch(socket, {
       clientId: payload?.clientId,
-      playerName: payload?.playerName
+      playerName: payload?.playerName,
+      requestId
+    });
+    replyToChat(acknowledge, {
+      ok: queued,
+      requestId: socket.data.randomQueueRequestId || requestId || null
     });
   });
 
-  socket.on('leave_random_queue', () => {
-    if (socket.data.roomId) return;
-    leaveRandomMatchQueue(socket);
+  socket.on('leave_random_queue', (payload = {}) => {
+    cancelPendingRandomSearch(socket, payload?.requestId);
   });
 
-  socket.on('find_next_random_match', (payload = {}) => {
-    const room = getBoundRoom(socket, payload.roomId);
-    if (!room || room.matchType !== 'random') return;
+  socket.on('find_next_random_match', (payload = {}, acknowledge) => {
+    const reject = (message) => {
+      emitError(socket, message);
+      replyToChat(acknowledge, { ok: false, message });
+    };
+    const requestId = getSuppliedRandomSearchRequestId(payload?.requestId);
+    // The client may safely retry after an acknowledgement is delayed or lost.
+    // A duplicate never removes another player or creates a second queue entry.
+    if (acknowledgeKnownRandomSearch(socket, requestId, acknowledge)) return;
+    const room = getBoundRoom(socket, payload?.roomId);
+    if (!room || room.matchType !== 'random') {
+      reject('現在のランダムマッチを確認できませんでした。画面を更新して再試行してください。');
+      return;
+    }
     if (!['waiting', 'finished'].includes(room.gameState)) {
-      emitError(socket, '対局中は別の対戦相手を検索できません。先に降参または対局終了をお待ちください。');
+      reject('対局中は別の対戦相手を検索できません。先に降参または対局終了をお待ちください。');
       return;
     }
     const playerIndex = room.players.findIndex((player) => player.id === socket.id);
-    if (playerIndex < 0) return;
+    if (playerIndex < 0) {
+      reject('観戦者は別の相手を検索できません。観戦を終了してからお試しください。');
+      return;
+    }
     const player = room.players[playerIndex];
+    // Validate before removing the player from the old room.  This makes a
+    // full/rate-limited queue a non-destructive failure rather than a lost
+    // session that the browser cannot resume.
+    const prepared = prepareRandomMatch(socket, {
+      clientId: player.clientId,
+      playerName: player.name,
+      requestId
+    }, { allowBoundRoom: true });
+    if (!prepared) {
+      replyToChat(acknowledge, { ok: false, message: '別の相手を検索できませんでした。' });
+      return;
+    }
+
     socket.leave(room.id);
     socket.data.roomId = undefined;
     clearDisconnectTimer(room.id, player.clientId);
     resetAfterPlayerDeparture(room, playerIndex);
-    queueRandomMatch(socket, {
-      clientId: player.clientId,
-      playerName: player.name
-    });
+    if (!enqueuePreparedRandomMatch(socket, prepared)) {
+      // This is not expected after the synchronous preflight above, but make
+      // the failure explicit instead of leaving the UI in an indeterminate
+      // state if the queue implementation is changed in the future.
+      replyToChat(acknowledge, { ok: false, message: '別の相手を検索できませんでした。' });
+      return;
+    }
+    replyToChat(acknowledge, { ok: true, requestId: prepared.requestId });
   });
 
   socket.on('send_chat', (payload = {}, acknowledge) => {
@@ -1045,10 +1221,14 @@ io.on('connection', (socket) => {
   });
 
   socket.on('leave_room', (payload = {}) => {
-    const room = getBoundRoom(socket, payload.roomId);
+    const room = getBoundRoom(socket, payload?.roomId);
     if (!room) return;
     socket.leave(room.id);
     socket.data.roomId = undefined;
+    if (room.matchType === 'random') {
+      socket.data.lastRandomSearchRequestId = undefined;
+      socket.data.lastRandomSearchRoomId = undefined;
+    }
 
     const playerIndex = room.players.findIndex((player) => player.id === socket.id);
     if (playerIndex >= 0) {
@@ -1103,6 +1283,7 @@ module.exports = {
   finishGameByForfeit,
   io,
   normalizeJoinPreferences,
+  processTurn,
   promoteVolunteerSpectators,
   startWhenBothPlayersAgree,
   rankedDeadlineSweeper,
