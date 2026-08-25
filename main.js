@@ -78,6 +78,7 @@ const elements = {
   spectatorModeBadge: document.getElementById('spectator-mode-badge'),
   randomMatchBadge: document.getElementById('random-match-badge'),
   connectionState: document.getElementById('connection-state'),
+  connectionNotice: document.getElementById('connection-notice'),
   round: document.getElementById('current-round'),
   timer: document.getElementById('timer-count'),
   timerProgress: document.getElementById('timer-progress'),
@@ -329,6 +330,12 @@ function setConnectionState(connected, message = connected ? '接続中' : '再�
   elements.connectionState.classList.toggle('offline', !connected);
   const label = elements.connectionState.querySelector('span');
   if (label) setText(label, message);
+}
+
+function setConnectionNotice(message = '') {
+  const visible = typeof message === 'string' && message.length > 0;
+  elements.connectionNotice.classList.toggle('hidden', !visible);
+  if (visible) setText(elements.connectionNotice, message);
 }
 
 function showGameScreen() {
@@ -1446,6 +1453,7 @@ window.addEventListener('keydown', (event) => {
 if (socket) {
   socket.on('connect', () => {
     setConnectionState(true);
+    setConnectionNotice('');
     chatReady = false;
     updateChatControls();
     socket.emit('get_presence');
@@ -1455,6 +1463,7 @@ if (socket) {
 
   socket.on('disconnect', () => {
     setConnectionState(false);
+    setConnectionNotice('サーバーとの接続が一時的に切れました。自動で再接続しています。長引く場合は、サーバーの起動に最大約1分かかることがあります。');
     if (chatSendTimeout) window.clearTimeout(chatSendTimeout);
     chatSendTimeout = null;
     chatSending = false;
@@ -1466,6 +1475,7 @@ if (socket) {
 
   socket.on('connect_error', () => {
     setConnectionState(false, '接続を試行中');
+    setConnectionNotice('サーバーへ接続しています。しばらく利用がなかった場合、起動に最大約1分かかることがあります。画面を閉じずにお待ちください。');
     if (!currentRoom) setLoginMessage('サーバーへ接続しています…');
   });
 

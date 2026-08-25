@@ -10,12 +10,22 @@
        URL to the backend origin, which sends the authoritative CSP header. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
-  <script src="page-redirect.js?v=security-v1"></script>
+  <script src="page-redirect.js?v=security-v2"></script>
   <link rel="stylesheet" href="style.css?v=pvp-v11">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
   <script src="socket-loader.js?v=pvp-v11"></script>
 </head>
 <body>
+  <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
+    <section class="legacy-startup-panel" aria-labelledby="legacy-startup-title">
+      <span class="section-label">OVERTHINKING</span>
+      <h1 id="legacy-startup-title">対戦サーバーを起動しています</h1>
+      <p>しばらく利用がなかった場合、準備に最大約1分かかることがあります。</p>
+      <div class="legacy-startup-progress" aria-hidden="true"><i></i></div>
+      <strong id="legacy-startup-status">接続を確認しています…</strong>
+      <small>この画面のままお待ちください。準備ができ次第、自動でゲーム画面へ移動します。</small>
+    </section>
+  </main>
   <div class="atmosphere" aria-hidden="true">
     <div class="glow glow-one"></div>
     <div class="glow glow-two"></div>
@@ -122,6 +132,7 @@
     </main>
 
     <div id="game-screen" class="screen hidden">
+      <div id="connection-notice" class="connection-notice hidden" role="status" aria-live="polite" aria-atomic="true"></div>
       <main class="game-shell" aria-label="対戦ボード">
         <header class="game-header">
           <a class="game-brand" href="./" aria-label="OVERTHINKING のトップへ">OVER<span>THINKING</span></a>

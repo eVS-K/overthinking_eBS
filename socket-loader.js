@@ -1,6 +1,11 @@
 (() => {
   'use strict';
 
+  // The GitHub Pages legacy URL is now only a safe, static startup screen.
+  // page-redirect.js wakes the backend first, avoiding an empty Render cold
+  // start page and preventing a second Socket.IO bootstrap during that wait.
+  if (window.__overthinkingLegacyStartup === true) return;
+
   let mainLoaded = false;
   const isLocalHost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
   const socketScript = document.createElement('script');

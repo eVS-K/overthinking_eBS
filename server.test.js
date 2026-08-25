@@ -179,8 +179,9 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
   const port = await start(localServer);
   t.after(() => new Promise((resolve) => localServer.close(resolve)));
 
-  const [health, ready, ranked, rankedUi, legacyIndex, oauthRecovery, socketLoader, pageRedirect] = await Promise.all([
+  const [health, healthFromPages, ready, ranked, rankedUi, legacyIndex, oauthRecovery, socketLoader, pageRedirect] = await Promise.all([
     fetch(`http://127.0.0.1:${port}/health`),
+    fetch(`http://127.0.0.1:${port}/health`, { headers: { Origin: 'https://evs-k.github.io' } }),
     fetch(`http://127.0.0.1:${port}/readyz`),
     fetch(`http://127.0.0.1:${port}/ranked`),
     fetch(`http://127.0.0.1:${port}/ranked-ui.js`),
@@ -192,6 +193,8 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
   assert.equal(health.status, 200);
   assert.equal((await health.json()).status, 'ok');
   assert.equal(health.headers.get('cache-control'), 'no-store');
+  assert.equal(healthFromPages.headers.get('access-control-allow-origin'), 'https://evs-k.github.io');
+  assert.equal(healthFromPages.headers.get('vary'), 'Origin');
   assert.equal(ready.status, 200);
   assert.deepEqual(await ready.json(), { status: 'ready', guestPvp: 'ready', ranked: 'disabled' });
   assert.equal(ranked.status, 200);
@@ -213,7 +216,9 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
   assert.match(socketLoaderText, /\/socket\.io\/socket\.io\.js/);
   assert.doesNotMatch(legacyHtml, /cdn\.socket\.io/);
   assert.equal(pageRedirect.status, 200);
-  assert.match(await pageRedirect.text(), /window\.location\.replace/);
+  const redirectScript = await pageRedirect.text();
+  assert.match(redirectScript, /window\.fetch\(healthUrl/);
+  assert.match(redirectScript, /window\.location\.replace/);
   assert.equal(oauthRecovery.status, 200);
   assert.match(await oauthRecovery.text(), /HttpOnly transaction cookie/);
 });

@@ -210,7 +210,14 @@ const rankedRuntime = createRankedRuntime();
 const rankedDeadlineSweeper = startRankedDeadlineSweeper(rankedRuntime);
 registerRankedRoutes(app, { runtime: rankedRuntime, getClientIp: getRequestIp });
 
-app.get('/health', (_request, response) => {
+app.get('/health', (request, response) => {
+  // The static GitHub Pages startup screen may probe only this non-sensitive
+  // liveness endpoint while waking a sleeping Render instance. Never extend
+  // this narrow CORS exception to authenticated or state-changing routes.
+  if (normalizeOrigin(request.headers.origin) === 'https://evs-k.github.io') {
+    response.setHeader('Access-Control-Allow-Origin', 'https://evs-k.github.io');
+    response.setHeader('Vary', 'Origin');
+  }
   response.setHeader('Cache-Control', 'no-store');
   response.json({ status: 'ok', ranked: rankedRuntime.available ? 'available' : 'unavailable' });
 });

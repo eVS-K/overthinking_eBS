@@ -51,6 +51,21 @@ button:focus-visible, input:focus-visible, a:focus-visible, .card:focus-visible 
 .hidden { display: none !important; }
 .screen { position: relative; min-width: 0; max-width: 100%; }
 
+.legacy-startup-gate { display: none; }
+html.legacy-startup-pending .legacy-startup-gate { display: grid; place-items: center; min-height: 100vh; padding: 24px; }
+html.legacy-startup-pending #app, html.legacy-startup-pending .atmosphere { display: none; }
+.legacy-startup-panel { display: grid; justify-items: center; width: min(100%, 510px); padding: clamp(28px, 7vw, 54px); border: 1px solid rgba(141, 183, 255, .44); background: linear-gradient(145deg, rgba(30, 40, 72, .94), rgba(12, 17, 34, .97)); box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .08); text-align: center; }
+.legacy-startup-panel h1 { margin: 13px 0 0; color: var(--ink); font-family: var(--serif); font-size: clamp(25px, 6vw, 37px); font-weight: 400; }
+.legacy-startup-panel p { margin: 13px 0 0; color: #cbd8ef; font-size: 13px; line-height: 1.8; }
+.legacy-startup-panel strong { margin-top: 16px; color: var(--blue-bright); font-size: 13px; }
+.legacy-startup-panel small { margin-top: 12px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.legacy-startup-progress { width: min(100%, 290px); height: 4px; margin-top: 25px; overflow: hidden; background: rgba(141, 183, 255, .16); }
+.legacy-startup-progress i { display: block; width: 38%; height: 100%; background: linear-gradient(90deg, transparent, var(--blue-bright), transparent); animation: startup-progress 1.5s ease-in-out infinite; }
+
+.connection-notice { display: flex; align-items: center; justify-content: center; min-height: 42px; margin: 10px clamp(16px, 3vw, 30px) 0; padding: 10px 15px; border: 1px solid rgba(255, 119, 143, .58); color: #ffe0e5; background: linear-gradient(90deg, rgba(126, 39, 63, .84), rgba(43, 30, 53, .92)); box-shadow: 0 8px 24px rgba(126, 39, 63, .24); font-size: 12px; font-weight: 700; line-height: 1.55; text-align: center; }
+
+@keyframes startup-progress { 0% { transform: translateX(-120%); } 100% { transform: translateX(360%); } }
+
 .entry-screen {
   display: grid;
   place-items: center;

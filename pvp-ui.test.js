@@ -52,8 +52,14 @@ test('ランダム再検索は検索世代を保持し、古い部屋更新を�
 test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を使う', () => {
   const html = read('index.html');
   const loader = read('socket-loader.js');
+  const redirect = read('page-redirect.js');
 
   assert.match(html, /style\.css\?v=pvp-v11/);
   assert.match(html, /socket-loader\.js\?v=pvp-v11/);
+  assert.match(html, /id="legacy-startup-gate"/);
+  assert.match(html, /id="connection-notice"/);
   assert.match(loader, /main\.js\?v=pvp-v11/);
+  assert.match(loader, /__overthinkingLegacyStartup/);
+  assert.match(redirect, /window\.fetch\(healthUrl/);
+  assert.match(redirect, /credentials: 'omit'/);
 });
