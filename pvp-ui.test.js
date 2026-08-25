@@ -63,3 +63,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   assert.match(redirect, /window\.fetch\(healthUrl/);
   assert.match(redirect, /credentials: 'omit'/);
 });
+
+test('チャットとゲーム案内には個人情報・差別的表現の注意、および通信中断の案内を明示する', () => {
+  const html = read('index.html');
+
+  assert.match(html, /chat-safety-note/);
+  assert.match(html, /個人情報/);
+  assert.match(html, /差別・侮辱・脅迫/);
+  assert.match(html, /通信障害、サービスの再起動・中断等/);
+});

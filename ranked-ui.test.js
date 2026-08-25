@@ -13,6 +13,13 @@ test('公開ハンドルは英大文字・英小文字・数字・_・- の3〜2
   }
 });
 
+test('公開ハンドルの30日変更制限と個人情報・差別表現の注意がプロフィールに明示される', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'ranked.html'), 'utf8');
+  assert.match(html, /変更は30日に1回までです/);
+  assert.match(html, /個人情報/);
+  assert.match(html, /差別・侮辱・脅迫/);
+});
+
 test('Rankedのエラーは実装詳細ではなく日本語の利用者向け文言に変換する', () => {
   assert.match(errorMessage('HANDLE_COOLDOWN'), /30日/);
   assert.match(errorMessage('GAME_VERSION_MISMATCH'), /投了/);

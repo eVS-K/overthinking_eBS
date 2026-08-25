@@ -90,6 +90,7 @@
 .ranked-handle-form input { min-width: 0; padding: 9px 10px; border: 1px solid var(--line-strong); color: var(--ink); background: rgba(5, 9, 20, .45); font-family: var(--mono); font-size: 12px; }
 .ranked-handle-form .ranked-text-button { flex: 0 0 auto; border: 1px solid var(--line-strong); padding-inline: 11px; color: var(--blue-bright); }
 .ranked-handle-hint { margin: 8px 0 0; color: var(--faint); font-family: var(--mono); font-size: 9px; letter-spacing: .03em; line-height: 1.55; }
+.ranked-handle-safety { margin: 10px 0 0; padding: 10px 11px; border-left: 3px solid rgba(242, 189, 105, .8); color: #d9e2f3; background: rgba(242, 189, 105, .075); font-size: 11px; line-height: 1.7; }
 .ranked-handle-feedback { margin: 9px 0 0; padding: 9px 10px; border: 1px solid rgba(255, 130, 152, .55); border-left: 3px solid #ff849c; color: #ffe4e9; background: rgba(83, 29, 47, .42); font-size: 11px; line-height: 1.6; }
 .ranked-visibility-option { display: flex; gap: 10px; align-items: flex-start; margin-top: 16px; padding: 12px; border: 1px solid rgba(141, 183, 255, .3); color: #e4edff; background: rgba(42, 59, 104, .13); cursor: pointer; }
 .ranked-visibility-option input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--gold-bright); }
