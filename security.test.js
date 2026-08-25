@@ -37,11 +37,27 @@ test('制限器は追跡キーを上限で抑え、期限切れのキーを回�
   assert.equal(limiter.size, 1);
 });
 
-test('クライアントIPはプロキシの転送IPを優先し、不正値は安全に退避する', () => {
-  assert.equal(getClientIp({ headers: { 'x-forwarded-for': '203.0.113.24, 10.0.0.1' } }, { trustProxy: true }), '203.0.113.24');
-  assert.equal(getClientIp({ headers: { 'x-forwarded-for': '203.0.113.24' }, socket: { remoteAddress: '127.0.0.1' } }), '127.0.0.1');
+test('クライアントIPは信頼できる単一のedge headerだけを採用し、X-Forwarded-Forの偽装を採用しない', () => {
+  assert.equal(getClientIp({
+    headers: {
+      'cf-connecting-ip': '203.0.113.24',
+      'x-forwarded-for': '198.51.100.99, 10.0.0.1'
+    }
+  }, { trustProxy: true }), '203.0.113.24');
+  assert.equal(getClientIp({
+    headers: { 'x-forwarded-for': '203.0.113.24' },
+    socket: { remoteAddress: '127.0.0.1' }
+  }, { trustProxy: true }), '127.0.0.1');
+  assert.equal(getClientIp({
+    headers: { 'cf-connecting-ip': '203.0.113.24, 198.51.100.1' },
+    socket: { remoteAddress: '127.0.0.1' }
+  }, { trustProxy: true }), '127.0.0.1');
+  assert.equal(getClientIp({
+    headers: { 'cf-connecting-ip': '203.0.113.24' },
+    socket: { remoteAddress: '127.0.0.1' }
+  }, { trustProxy: true, trustedProxyHeader: 'x-forwarded-for' }), '127.0.0.1');
   assert.equal(getClientIp({ headers: {}, socket: { remoteAddress: '::ffff:127.0.0.1' } }), '::ffff:127.0.0.1');
-  assert.equal(getClientIp({ headers: { 'x-forwarded-for': 'not-an-ip' } }, { trustProxy: true }), 'unknown');
+  assert.equal(getClientIp({ headers: { 'cf-connecting-ip': 'not-an-ip' } }, { trustProxy: true }), 'unknown');
 });
 
 test('環境変数の数値は安全な範囲だけを受け入れる', () => {

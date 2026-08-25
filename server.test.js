@@ -6,12 +6,14 @@ const assert = require('node:assert/strict');
 const { createInitialHand } = require('./game-rules');
 const {
   MAX_CHAT_IPS_PER_ROOM,
+  PRIVATE_ROOM_IDLE_TTL_MS,
   app,
   buildDefaultAllowedOrigins,
   consumeChatIpQuota,
   createRoom,
   createRoomView,
   finishGameByForfeit,
+  isPrivateRoomIdleExpired,
   normalizeJoinPreferences,
   processTurn,
   promoteVolunteerSpectators,
@@ -48,6 +50,28 @@ test('観戦参加・空席への参加は明示的なboolean opt-inだけを受
   assert.deepEqual(normalizeJoinPreferences({ joinAsSpectator: 'true', autoJoinWhenSeatAvailable: true }), { joinAsSpectator: false, autoJoinWhenSeatAvailable: false });
   assert.deepEqual(normalizeJoinPreferences({ joinAsSpectator: true }), { joinAsSpectator: true, autoJoinWhenSeatAvailable: false });
   assert.deepEqual(normalizeJoinPreferences({ joinAsSpectator: true, autoJoinWhenSeatAvailable: true }), { joinAsSpectator: true, autoJoinWhenSeatAvailable: true });
+});
+
+test('Private PvPの待機・終了ルームだけがアイドル期限の対象となり、対局中は期限切れにならない', () => {
+  const waitingRoom = createRoom('idle-waiting');
+  waitingRoom.idleDeadline = 10_000;
+  assert.equal(isPrivateRoomIdleExpired(waitingRoom, 9_999), false);
+  assert.equal(isPrivateRoomIdleExpired(waitingRoom, 10_000), true);
+
+  const finishedRoom = createRoom('idle-finished');
+  finishedRoom.gameState = 'finished';
+  finishedRoom.idleDeadline = 10_000;
+  assert.equal(isPrivateRoomIdleExpired(finishedRoom, 10_000), true);
+
+  const playingRoom = createRoom('idle-playing');
+  playingRoom.gameState = 'playing';
+  playingRoom.idleDeadline = 10_000;
+  assert.equal(isPrivateRoomIdleExpired(playingRoom, 10_000), false);
+
+  const randomRoom = createRoom('idle-random', { matchType: 'random' });
+  randomRoom.idleDeadline = 10_000;
+  assert.equal(isPrivateRoomIdleExpired(randomRoom, 10_000), false);
+  assert.ok(PRIVATE_ROOM_IDLE_TTL_MS >= 60_000);
 });
 
 test('観戦者には常に両者の手札を渡し、希望していない観戦者を空席へ昇格させない', () => {
@@ -155,32 +179,41 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
   const port = await start(localServer);
   t.after(() => new Promise((resolve) => localServer.close(resolve)));
 
-  const [health, ranked, rankedUi, legacyIndex, oauthRecovery, socketLoader] = await Promise.all([
+  const [health, ready, ranked, rankedUi, legacyIndex, oauthRecovery, socketLoader, pageRedirect] = await Promise.all([
     fetch(`http://127.0.0.1:${port}/health`),
+    fetch(`http://127.0.0.1:${port}/readyz`),
     fetch(`http://127.0.0.1:${port}/ranked`),
     fetch(`http://127.0.0.1:${port}/ranked-ui.js`),
     fetch(`http://127.0.0.1:${port}/`),
     fetch(`http://127.0.0.1:${port}/oauth-recovery.js`),
-    fetch(`http://127.0.0.1:${port}/socket-loader.js`)
+    fetch(`http://127.0.0.1:${port}/socket-loader.js`),
+    fetch(`http://127.0.0.1:${port}/page-redirect.js`)
   ]);
   assert.equal(health.status, 200);
   assert.equal((await health.json()).status, 'ok');
+  assert.equal(health.headers.get('cache-control'), 'no-store');
+  assert.equal(ready.status, 200);
+  assert.deepEqual(await ready.json(), { status: 'ready', guestPvp: 'ready', ranked: 'disabled' });
   assert.equal(ranked.status, 200);
   assert.match(ranked.headers.get('content-security-policy'), /default-src 'self'/);
   assert.match(ranked.headers.get('content-security-policy'), /script-src 'self'/);
   const rankedHtml = await ranked.text();
   assert.match(rankedHtml, /ランク戦/);
   assert.match(rankedHtml, /ranked-ui\.js/);
-  assert.match(rankedHtml, /href="https:\/\/evs-k\.github\.io\/overthinking_eBS\/"/);
+  assert.match(rankedHtml, /href="\/"/);
   assert.equal(rankedUi.status, 200);
   assert.match(await rankedUi.text(), /HANDLE_PATTERN/);
   const legacyHtml = await legacyIndex.text();
+  assert.match(legacyHtml, /page-redirect\.js/);
+  assert.match(legacyHtml, /Content-Security-Policy/);
   assert.match(legacyHtml, /socket-loader\.js/);
   assert.equal(socketLoader.status, 200);
   const socketLoaderText = await socketLoader.text();
   assert.match(socketLoaderText, /overthinking-ebs\.onrender\.com\/socket\.io\/socket\.io\.js/);
   assert.match(socketLoaderText, /\/socket\.io\/socket\.io\.js/);
   assert.doesNotMatch(legacyHtml, /cdn\.socket\.io/);
+  assert.equal(pageRedirect.status, 200);
+  assert.match(await pageRedirect.text(), /window\.location\.replace/);
   assert.equal(oauthRecovery.status, 200);
   assert.match(await oauthRecovery.text(), /HttpOnly transaction cookie/);
 });

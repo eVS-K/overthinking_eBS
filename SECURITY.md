@@ -3,7 +3,11 @@
 ## Scope and trust boundary
 
 The legacy two-player game remains `Browser <-> Socket.IO <-> server.js` and
-does not require an account. It may continue to be served from GitHub Pages.
+does not require an account. The historical GitHub Pages URL remains a stable
+entry link, but it immediately transfers interactive Guest PvP to the backend
+origin. GitHub Pages cannot attach project-controlled security response
+headers; the backend origin is therefore the only place where the game board
+is executed publicly.
 
 Ranked is deliberately separate: the user enters the backend-origin
 `/ranked` application, where it uses cookie-authenticated REST endpoints.
@@ -57,11 +61,10 @@ an idempotency `requestId` UUID; the game id is in the path.
    validates its rule/evaluation versions, checksum, and exact initial value. A
    bad/missing table disables Ranked only; Guest PvP still starts.
 
-5. Use the backend-origin `/ranked` link for Rank and leaderboard. The GitHub
-   Pages entry page links there automatically; the Ranked header's Private PvP
-   and logo links deliberately return to the canonical GitHub Pages guest PvP
-   URL, rather than the backend root. If an OAuth provider falls back to that
-   Pages URL with a short-lived `code`, the Pages client immediately forwards
+5. Use the backend-origin `/ranked` link for Rank and leaderboard. The
+   historical GitHub Pages entry page immediately transfers to the backend
+   Guest PvP page, where response headers are enforced. If an OAuth provider
+   falls back to the old Pages URL with a short-lived `code`, the page forwards
    it to the backend callback; the backend still enforces its HttpOnly
    transaction cookie, PKCE, and one-time transaction validation.
 
@@ -87,8 +90,9 @@ not commit a real `.env` file.
 | `SESSION_IDLE_MS` | Ranked/Auth | Idle app-session lifetime; defaults to 7 days. |
 | `COOKIE_SECURE` | Local development only | Use `true` when testing over HTTPS. Production always uses secure cookies. |
 | `ALLOWED_ORIGINS` | Legacy Socket.IO | Comma-separated approved frontend origins. Defaults include the current GitHub Pages and Render URLs; localhost is added only when `NODE_ENV` is explicitly `development` or `test`. |
-| `TRUST_PROXY` | Hosting | Set to `true` only when the hosting network is a known reverse proxy that sanitizes `X-Forwarded-For` (such as the configured Render deployment). |
-| `MAX_ACTIVE_ROOMS`, `MAX_SPECTATORS_PER_ROOM`, `MAX_SOCKETS_PER_IP`, `MAX_HTTP_CONNECTIONS`, `SOCKET_EVENT_LIMIT`, `RATE_LIMIT_TRACKED_IPS` | Legacy PvP | Resource limits described below. |
+| `TRUST_PROXY` | Hosting | Set to `true` only for the public Render Web Service. With this enabled, the server accepts only `CF-Connecting-IP`, not `X-Forwarded-For`. Do not enable on a directly exposed process. |
+| `TRUSTED_PROXY_IP_HEADER` | Hosting | Must remain `cf-connecting-ip` in the Render/Cloudflare deployment. Any other value safely falls back to the proxy peer address, but should be treated as a configuration error and investigated. |
+| `MAX_ACTIVE_ROOMS`, `MAX_PRIVATE_ROOMS_PER_IP`, `PRIVATE_ROOM_IDLE_TTL_MS`, `MAX_SPECTATORS_PER_ROOM`, `MAX_SOCKETS_PER_IP`, `MAX_HTTP_CONNECTIONS`, `SOCKET_EVENT_LIMIT`, `RATE_LIMIT_TRACKED_IPS` | Legacy PvP | Resource limits described below. A private room that is waiting for consent or left on its result screen is reclaimed after the idle TTL; active/reconnecting games are never expired by this limit. |
 | `MAX_RANDOM_MATCH_QUEUE`, `MAX_RANDOM_QUEUE_PER_IP`, `RANDOM_MATCH_REQUEST_LIMIT` | Guest random match | Bounded queue size, per-IP queued sessions, and random-match search requests per minute. |
 
 Never put `DATABASE_URL`, `RANKED_SEED_ENCRYPTION_KEY`, a Supabase
@@ -175,7 +179,9 @@ normal two-player play:
 
 - Socket.IO rejects unapproved and originless production connections, limits
   connection attempts/events/IP concurrency/rooms/spectators, caps payloads at
-  16 KB, and disables WebSocket compression.
+  16 KB, and disables WebSocket compression. A network can hold at most three
+  private rooms it created at once, and inactive private waiting/result rooms
+  are ended after 15 minutes by default.
 - HTTP has connection, header, and request timeouts, bounded per-IP tracking,
   conservative global request limits, and security response headers.
 - Ranked JSON bodies are capped at 4 KB. Creation, moves, forfeits, profile
@@ -214,8 +220,9 @@ normal two-player play:
 
 `ALLOW_ORIGINLESS_SOCKET_CONNECTIONS=true` is for narrow local testing only;
 do not enable it publicly. Do not set `TRUST_PROXY=true` on a directly exposed
-process, since that would let a client forge the rate-limit IP via
-`X-Forwarded-For`.
+process. When it is enabled on Render, the implementation deliberately uses
+only Cloudflare's `CF-Connecting-IP` and ignores `X-Forwarded-For`, so a
+client-supplied forwarding chain cannot select its rate-limit identity.
 
 Set `NODE_ENV=production` in the deployed service and configure
 `ALLOWED_ORIGINS` explicitly. If `NODE_ENV` is omitted, the safe production
@@ -225,3 +232,24 @@ Application-level limits do **not** stop a volumetric DDoS attack that fills
 the network before the process is reached. Put production behind the host's
 DDoS protection and, where appropriate, a CDN/WAF such as Cloudflare with
 edge-level rate limiting.
+
+## Health, readiness, and monitoring
+
+- `GET /health` is a liveness endpoint. It is intentionally independent of
+  PostgreSQL so Guest PvP stays available if the optional Ranked stack is
+  unavailable. Configure Render's deployment health check to use this path.
+- `GET /readyz` verifies the Ranked runtime, all required Ranked tables, and
+  every checked-in SQL migration. It caches a successful/failed result for ten
+  seconds. It returns `503` with only `status`, `guestPvp`, and Ranked state
+  when Ranked is configured but not usable; it never returns database errors
+  or secrets. Monitor this endpoint externally and alert on a `503`; do not
+  use it as a restart trigger for Guest PvP.
+- Record and retain Render request identifiers (`Rndr-Id`) and Cloudflare
+  request identifiers (`CF-Ray`) in the hosting log explorer when diagnosing
+  production incidents. Alert at minimum on sustained `5xx`, readiness
+  failures, restart loops, high latency, connection saturation, and database
+  pool wait/timeout errors.
+- Guest rooms, random matching, online presence, and the default rate-limit
+  store are intentionally single-process. Keep one application instance until
+  a shared Socket.IO adapter, shared queue/presence store, and shared limiter
+  are deployed together.

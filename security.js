@@ -11,13 +11,30 @@ function normalizeIp(value) {
   return /^[0-9a-f:.]+$/i.test(candidate) ? candidate.toLowerCase() : '';
 }
 
-function getClientIp(request = {}, { trustProxy = false } = {}) {
+function readHeaderValue(headers, name) {
+  if (!headers || !name) return '';
+  const value = headers[name];
+  if (Array.isArray(value)) return value.length === 1 ? value[0] : '';
+  return typeof value === 'string' ? value : '';
+}
+
+// Render sends inbound requests through Cloudflare.  Unlike X-Forwarded-For,
+// CF-Connecting-IP is a single client-IP header set by that edge.  We never
+// accept a client-controlled forwarding chain for abuse controls: if this
+// header is missing, falling back to the peer address can be stricter for
+// users behind the same proxy, but it must not weaken rate limiting.
+const TRUSTED_PROXY_IP_HEADERS = new Set(['cf-connecting-ip']);
+
+function normalizeTrustedProxyHeader(value) {
+  if (typeof value !== 'string') return '';
+  const header = value.trim().toLowerCase();
+  return TRUSTED_PROXY_IP_HEADERS.has(header) ? header : '';
+}
+
+function getClientIp(request = {}, { trustProxy = false, trustedProxyHeader = 'cf-connecting-ip' } = {}) {
   if (trustProxy) {
-    const forwarded = request.headers?.['x-forwarded-for'];
-    const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-    const forwardedIp = typeof forwardedValue === 'string'
-      ? normalizeIp(forwardedValue.split(',')[0])
-      : '';
+    const header = normalizeTrustedProxyHeader(trustedProxyHeader);
+    const forwardedIp = normalizeIp(readHeaderValue(request.headers, header));
     if (forwardedIp) return forwardedIp;
   }
 
@@ -70,4 +87,9 @@ function createFixedWindowLimiter({ limit, windowMs, maxEntries = 5_000, now = (
   };
 }
 
-module.exports = { createFixedWindowLimiter, getClientIp, readPositiveInteger };
+module.exports = {
+  createFixedWindowLimiter,
+  getClientIp,
+  normalizeTrustedProxyHeader,
+  readPositiveInteger
+};

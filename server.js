@@ -33,6 +33,12 @@ function buildDefaultAllowedOrigins(environment = process.env) {
 const DEFAULT_ALLOWED_ORIGINS = buildDefaultAllowedOrigins();
 
 const MAX_ACTIVE_ROOMS = readPositiveInteger(process.env.MAX_ACTIVE_ROOMS, 300, { max: 5_000 });
+const MAX_PRIVATE_ROOMS_PER_IP = readPositiveInteger(process.env.MAX_PRIVATE_ROOMS_PER_IP, 3, { max: 50 });
+const PRIVATE_ROOM_IDLE_TTL_MS = readPositiveInteger(
+  process.env.PRIVATE_ROOM_IDLE_TTL_MS,
+  15 * 60_000,
+  { min: 60_000, max: 24 * 60 * 60_000 }
+);
 const MAX_SPECTATORS_PER_ROOM = readPositiveInteger(process.env.MAX_SPECTATORS_PER_ROOM, 40, { max: 500 });
 const MAX_SOCKETS_PER_IP = readPositiveInteger(process.env.MAX_SOCKETS_PER_IP, 32, { max: 500 });
 const MAX_HTTP_CONNECTIONS = readPositiveInteger(process.env.MAX_HTTP_CONNECTIONS, 800, { max: 10_000 });
@@ -56,9 +62,16 @@ const RANDOM_MATCH_ENTRY_MAX_AGE_MS = 10 * 60_000;
 const ALLOW_ORIGINLESS_SOCKET_CONNECTIONS = process.env.ALLOW_ORIGINLESS_SOCKET_CONNECTIONS === 'true'
   && process.env.NODE_ENV !== 'production';
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
+// Do not make this configurable as an arbitrary forwarding header. security.js
+// allow-lists the only provider header we accept, and falls back safely when
+// an invalid value is supplied.
+const TRUSTED_PROXY_IP_HEADER = process.env.TRUSTED_PROXY_IP_HEADER || 'cf-connecting-ip';
 
 function getRequestIp(request) {
-  return getClientIp(request, { trustProxy: TRUST_PROXY });
+  return getClientIp(request, {
+    trustProxy: TRUST_PROXY,
+    trustedProxyHeader: TRUSTED_PROXY_IP_HEADER
+  });
 }
 
 function normalizeOrigin(value) {
@@ -83,6 +96,7 @@ function isAllowedOrigin(origin) {
 const rooms = new Map();
 const roomTimers = new Map();
 const disconnectTimers = new Map();
+const privateRoomIdleTimers = new Map();
 const activeSocketsByIp = new Map();
 const httpRequestLimiter = createFixedWindowLimiter({
   limit: 240,
@@ -181,7 +195,7 @@ app.use((request, response, next) => {
 });
 
 app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'index.html')));
-app.get(['/index.html', '/main.js', '/oauth-recovery.js', '/socket-loader.js', '/style.css'], (request, response) => {
+app.get(['/index.html', '/main.js', '/oauth-recovery.js', '/socket-loader.js', '/page-redirect.js', '/style.css'], (request, response) => {
   response.sendFile(path.join(__dirname, request.path));
 });
 // Ranked/Auth lives on the backend origin so the opaque session cookie is never
@@ -196,7 +210,30 @@ const rankedRuntime = createRankedRuntime();
 const rankedDeadlineSweeper = startRankedDeadlineSweeper(rankedRuntime);
 registerRankedRoutes(app, { runtime: rankedRuntime, getClientIp: getRequestIp });
 
-app.get('/health', (_request, response) => response.json({ status: 'ok', ranked: rankedRuntime.available ? 'available' : 'unavailable' }));
+app.get('/health', (_request, response) => {
+  response.setHeader('Cache-Control', 'no-store');
+  response.json({ status: 'ok', ranked: rankedRuntime.available ? 'available' : 'unavailable' });
+});
+
+// Liveness deliberately remains independent from the optional Ranked stack so
+// Guest PvP continues through a Ranked outage. External monitoring should use
+// this endpoint and alert on a 503 rather than making Render restart a healthy
+// Guest PvP process just because PostgreSQL is temporarily unavailable.
+app.get('/readyz', async (_request, response) => {
+  let ranked;
+  try {
+    ranked = await rankedRuntime.checkReadiness();
+  } catch {
+    ranked = { status: 'unavailable', reason: 'Ranked readiness check failed' };
+  }
+  const degraded = ranked.status === 'unavailable';
+  response.setHeader('Cache-Control', 'no-store');
+  response.status(degraded ? 503 : 200).json({
+    status: degraded ? 'degraded' : 'ready',
+    guestPvp: 'ready',
+    ranked: ranked.status
+  });
+});
 
 function normalizeText(value, maxLength, fallback = '') {
   if (typeof value !== 'string') return fallback;
@@ -242,10 +279,14 @@ function promoteVolunteerSpectators(room, getSocketById = (socketId) => io.socke
   return promoted;
 }
 
-function createRoom(id, { matchType = 'private', allowedRandomClientIds = [] } = {}) {
+function createRoom(id, { matchType = 'private', allowedRandomClientIds = [], createdByIp = '' } = {}) {
   return {
     id,
     matchType: matchType === 'random' ? 'random' : 'private',
+    // This value is never sent to a browser. It exists solely to bound how
+    // many idle private rooms one network can reserve at a time.
+    createdByIp: typeof createdByIp === 'string' ? createdByIp : '',
+    idleDeadline: 0,
     // Random-room ids are unguessable, and this extra admission list prevents
     // a copied id from becoming an accidental public spectator invitation.
     allowedRandomClientIds: new Set(allowedRandomClientIds),
@@ -297,6 +338,94 @@ function clearDisconnectTimer(roomId, clientId) {
   disconnectTimers.delete(key);
 }
 
+function clearPrivateRoomIdleTimer(roomId) {
+  const timer = privateRoomIdleTimers.get(roomId);
+  if (timer) clearTimeout(timer);
+  privateRoomIdleTimers.delete(roomId);
+}
+
+function isPrivateRoomIdleCandidate(room) {
+  return Boolean(
+    room
+      && room.matchType === 'private'
+      && (room.gameState === 'waiting' || room.gameState === 'finished')
+  );
+}
+
+function isPrivateRoomIdleExpired(room, now = Date.now()) {
+  return Boolean(
+    isPrivateRoomIdleCandidate(room)
+      && Number.isSafeInteger(room.idleDeadline)
+      && room.idleDeadline > 0
+      && room.idleDeadline <= now
+  );
+}
+
+function countPrivateRoomsCreatedByIp(ip) {
+  if (!ip) return 0;
+  let count = 0;
+  for (const room of rooms.values()) {
+    if (room.matchType === 'private' && room.createdByIp === ip) count += 1;
+  }
+  return count;
+}
+
+function expirePrivateRoom(room) {
+  if (!room || rooms.get(room.id) !== room || !isPrivateRoomIdleCandidate(room)) return false;
+
+  clearPrivateRoomIdleTimer(room.id);
+  clearTurnTimer(room.id);
+  room.players.forEach((player) => clearDisconnectTimer(room.id, player.clientId));
+
+  const members = io.sockets.adapter.rooms.get(room.id);
+  members?.forEach((socketId) => {
+    const member = io.sockets.sockets.get(socketId);
+    if (!member) return;
+    member.leave(room.id);
+    if (member.data.roomId === room.id) member.data.roomId = undefined;
+    member.emit('room_expired', {
+      message: 'このルームは一定時間操作がなかったため終了しました。'
+    });
+  });
+
+  rooms.delete(room.id);
+  startQueuedRandomMatches();
+  schedulePresenceBroadcast();
+  return true;
+}
+
+function schedulePrivateRoomIdleExpiry(room) {
+  clearPrivateRoomIdleTimer(room.id);
+  if (!isPrivateRoomIdleCandidate(room)) {
+    room.idleDeadline = 0;
+    return;
+  }
+
+  const deadline = room.idleDeadline;
+  const delay = Math.max(0, deadline - Date.now());
+  const timer = setTimeout(() => {
+    const latestRoom = getRoom(room.id);
+    if (!latestRoom || latestRoom.idleDeadline !== deadline) return;
+    if (!isPrivateRoomIdleExpired(latestRoom)) {
+      schedulePrivateRoomIdleExpiry(latestRoom);
+      return;
+    }
+    expirePrivateRoom(latestRoom);
+  }, delay);
+  timer.unref?.();
+  privateRoomIdleTimers.set(room.id, timer);
+}
+
+function refreshPrivateRoomIdleExpiry(room, now = Date.now()) {
+  if (!isPrivateRoomIdleCandidate(room)) {
+    clearPrivateRoomIdleTimer(room?.id);
+    if (room) room.idleDeadline = 0;
+    return;
+  }
+  room.idleDeadline = now + PRIVATE_ROOM_IDLE_TTL_MS;
+  schedulePrivateRoomIdleExpiry(room);
+}
+
 function resetGame(room) {
   clearTurnTimer(room.id);
   room.round = 1;
@@ -321,9 +450,11 @@ function startNewGame(room) {
   room.needsFreshGame = false;
   if (room.players.length === 2 && room.players.every((player) => player.connected)) {
     room.gameState = 'playing';
+    refreshPrivateRoomIdleExpiry(room);
     startTurnTimer(room);
   } else {
     room.gameState = 'waiting';
+    refreshPrivateRoomIdleExpiry(room);
   }
 }
 
@@ -662,6 +793,7 @@ function startQueuedRandomMatches() {
 
 function removeEmptyRoom(room) {
   if (!room || room.players.length > 0 || room.spectators.length > 0) return false;
+  clearPrivateRoomIdleTimer(room.id);
   rooms.delete(room.id);
   startQueuedRandomMatches();
   return true;
@@ -852,6 +984,7 @@ function processTurn(room) {
       id: `completed-${room.round}-${Date.now()}`,
       type: reachedScoreLimit ? 'score-limit' : 'round-limit'
     };
+    refreshPrivateRoomIdleExpiry(room);
   } else {
     room.round += 1;
     startTurnTimer(room);
@@ -877,6 +1010,7 @@ function finishGameByForfeit(room, player) {
     forfeitedBy: player.name,
     forfeitedBySeat: room.players.indexOf(player) === 0 ? 'p1' : 'p2'
   };
+  refreshPrivateRoomIdleExpiry(room);
   return true;
 }
 
@@ -904,6 +1038,7 @@ function resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators = false
   promoteVolunteerSpectators(room);
 
   if (removeEmptyRoom(room)) return false;
+  refreshPrivateRoomIdleExpiry(room);
   broadcastRoom(room);
   return true;
 }
@@ -977,7 +1112,11 @@ io.on('connection', (socket) => {
         emitError(socket, '部屋の作成回数が上限に達しました。時間をおいて再試行してください。');
         return;
       }
-      room = createRoom(roomId);
+      if (countPrivateRoomsCreatedByIp(socket.data.clientIp) >= MAX_PRIVATE_ROOMS_PER_IP) {
+        emitError(socket, 'このネットワークで同時に作成できる待機ルーム数の上限に達しました。不要なルームを退出してからお試しください。');
+        return;
+      }
+      room = createRoom(roomId, { createdByIp: socket.data.clientIp });
       rooms.set(roomId, room);
     }
 
@@ -1043,6 +1182,7 @@ io.on('connection', (socket) => {
       });
     }
 
+    refreshPrivateRoomIdleExpiry(room);
     broadcastRoom(room);
     emitChatState(socket, room, clientId);
   });
@@ -1160,6 +1300,7 @@ io.on('connection', (socket) => {
         member.emit('chat_message', { ...message, isOwn: member.data.clientId === authorClientId });
       }
     });
+    refreshPrivateRoomIdleExpiry(room, now);
     replyToChat(acknowledge, { ok: true, sent: result.sent, limit: result.limit });
   });
 
@@ -1192,6 +1333,7 @@ io.on('connection', (socket) => {
     if (!room.startAgreements) room.startAgreements = new Set();
     room.startAgreements.add(player.clientId);
     startWhenBothPlayersAgree(room);
+    refreshPrivateRoomIdleExpiry(room);
     broadcastRoom(room);
   };
   socket.on('agree_to_start', agreeToStart);
@@ -1239,7 +1381,10 @@ io.on('connection', (socket) => {
       const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
       if (spectatorIndex >= 0) {
         room.spectators.splice(spectatorIndex, 1);
-        if (!removeEmptyRoom(room)) broadcastRoom(room);
+        if (!removeEmptyRoom(room)) {
+          refreshPrivateRoomIdleExpiry(room);
+          broadcastRoom(room);
+        }
       }
     }
   });
@@ -1263,7 +1408,10 @@ io.on('connection', (socket) => {
     const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
     if (spectatorIndex >= 0) {
       room.spectators.splice(spectatorIndex, 1);
-      if (!removeEmptyRoom(room)) broadcastRoom(room);
+      if (!removeEmptyRoom(room)) {
+        refreshPrivateRoomIdleExpiry(room);
+        broadcastRoom(room);
+      }
     }
   });
 });
@@ -1275,12 +1423,14 @@ if (require.main === module) {
 
 module.exports = {
   MAX_CHAT_IPS_PER_ROOM,
+  PRIVATE_ROOM_IDLE_TTL_MS,
   app,
   buildDefaultAllowedOrigins,
   createRoomView,
   consumeChatIpQuota,
   createRoom,
   finishGameByForfeit,
+  isPrivateRoomIdleExpired,
   io,
   normalizeJoinPreferences,
   processTurn,

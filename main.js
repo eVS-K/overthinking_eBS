@@ -1489,6 +1489,33 @@ if (socket) {
     renderRoom(room);
   });
 
+  socket.on('room_expired', ({ message } = {}) => {
+    // The server already removed this room and detached the socket. Do not
+    // attempt a second leave; simply clear the reconnect data so a refresh
+    // cannot re-create a room that expired for resource protection.
+    joinedRoom = false;
+    currentRoomId = '';
+    currentRoom = null;
+    mySelectedCardId = null;
+    committedCardId = null;
+    randomSearchActive = false;
+    randomSearchWanted = false;
+    randomSearchRequestId = '';
+    randomSearchSourceRoomId = '';
+    clearNextRandomMatchPending();
+    lastRoundId = null;
+    lastFinaleId = null;
+    previousScores.clear();
+    resetChat();
+    clearSavedSession();
+    resetTimer();
+    if (document.fullscreenElement === elements.gameScreen) document.exitFullscreen().catch(() => {});
+    setEntryMode('private');
+    setLoginMessage(message || 'ルームの有効時間が切れました。もう一度入室してください。');
+    showLoginScreen();
+    elements.roomIdInput.focus();
+  });
+
   socket.on('presence_updated', (presence) => {
     updatePresenceView(presence);
   });
