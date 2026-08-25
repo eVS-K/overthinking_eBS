@@ -20,6 +20,14 @@ test('公開ハンドルの30日変更制限と個人情報・差別表現の注
   assert.match(html, /差別・侮辱・脅迫/);
 });
 
+test('公式ランキングは判断の期待値とレーティングの理論上限を正確に案内する', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'ranked.html'), 'utf8');
+  assert.match(html, /結果期待値 76\.63%/);
+  assert.match(html, /レーティング 1,500/);
+  assert.match(html, /引き分け＝0\.5/);
+  assert.match(html, /単純な勝率とは異なります/);
+});
+
 test('Rankedのエラーは実装詳細ではなく日本語の利用者向け文言に変換する', () => {
   assert.match(errorMessage('HANDLE_COOLDOWN'), /30日/);
   assert.match(errorMessage('GAME_VERSION_MISMATCH'), /投了/);

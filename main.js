@@ -278,6 +278,21 @@ function resetLocalRoomForRandomSearch(message) {
   setLoginMessage(message);
 }
 
+function handleRandomMatchInterrupted(payload = {}) {
+  if (payload?.roomId && currentRoomId && payload.roomId !== currentRoomId) return;
+  const requestId = typeof payload?.requestId === 'string' ? payload.requestId : '';
+  const isSearching = payload?.state === 'searching' && Boolean(requestId);
+
+  resetLocalRoomForRandomSearch(
+    payload?.message || '対戦相手が退出したため、別の相手を探しています。'
+  );
+  randomSearchActive = isSearching;
+  randomSearchWanted = isSearching;
+  randomSearchRequestId = isSearching ? requestId : '';
+  randomSearchSourceRoomId = '';
+  renderEntryMode();
+}
+
 // Guest names are deliberately not unique.  Outcome UI must therefore use
 // the server-authoritative p1/p2 seat, never a display-name comparison.  The
 // small unique-name fallback keeps a rolling deployment readable when an old
@@ -1169,7 +1184,7 @@ function renderRoom(room) {
   elements.surrenderButton.classList.toggle('hidden', !canSurrender);
   elements.restartButton.classList.toggle('hidden', !canAgreeToStart);
   elements.nextRandomButton.classList.toggle('hidden', !canFindNextRandom);
-  elements.switchSpectatorButton.classList.toggle('hidden', !playerCanAct);
+  elements.switchSpectatorButton.classList.toggle('hidden', !playerCanAct || isRandomMatch);
   elements.playerControls.classList.toggle('hidden', !playerCanAct);
   setText(
     elements.restartButton,
@@ -1294,7 +1309,8 @@ elements.switchSpectatorButton.addEventListener('click', () => {
     setText(elements.status, '別の相手の検索開始を確認しています。しばらくお待ちください。');
     return;
   }
-  if (!socket?.connected || !currentRoomId || !currentRoom || currentRoom.viewer.isSpectator) return;
+  if (!socket?.connected || !currentRoomId || !currentRoom
+    || currentRoom.viewer.isSpectator || currentRoom.matchType === 'random') return;
   const activeGame = ['playing', 'reconnecting'].includes(currentRoom.gameState);
   const message = activeGame
     ? '観戦者に切り替えると、現在の対局は中断されます。観戦者に切り替えますか？'
@@ -1497,6 +1513,10 @@ if (socket) {
     elements.joinButton.disabled = false;
     setLoginMessage('');
     renderRoom(room);
+  });
+
+  socket.on('random_match_interrupted', (payload) => {
+    handleRandomMatchInterrupted(payload);
   });
 
   socket.on('room_expired', ({ message } = {}) => {

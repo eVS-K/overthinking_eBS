@@ -49,16 +49,28 @@ test('ランダム再検索は検索世代を保持し、古い部屋更新を�
   assert.match(server, /function cancelPendingRandomSearch\(/);
 });
 
+test('ランダムマッチは相手退出時に自動で再検索し、観戦者への切替を許可しない', () => {
+  const client = read('main.js');
+  const server = read('server.js');
+
+  assert.match(client, /function handleRandomMatchInterrupted\(/);
+  assert.match(client, /socket\.on\('random_match_interrupted'/);
+  assert.match(client, /switchSpectatorButton\.classList\.toggle\('hidden', !playerCanAct \|\| isRandomMatch\)/);
+  assert.match(server, /function requeueRemainingRandomPlayer\(/);
+  assert.match(server, /random_match_interrupted/);
+  assert.match(server, /room\.matchType === 'random'\) \{\s*emitError\(socket, 'ランダムマッチでは観戦者に切り替えられません。'\)/);
+});
+
 test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を使う', () => {
   const html = read('index.html');
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v11/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v11/);
+  assert.match(html, /style\.css\?v=pvp-v12/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v12/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v11/);
+  assert.match(loader, /main\.js\?v=pvp-v12/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /window\.fetch\(healthUrl/);
   assert.match(redirect, /credentials: 'omit'/);

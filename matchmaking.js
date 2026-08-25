@@ -62,6 +62,32 @@ class RandomMatchQueue {
     return null;
   }
 
+  // Select the oldest compatible pair without discarding valid people who
+  // merely need a different opponent. This keeps “別の相手を探す” meaningful
+  // while retaining FIFO order as far as compatibility allows.
+  takeCompatiblePair(isAvailable = () => true, isCompatible = () => true) {
+    const available = [];
+    for (const [clientId, entry] of this.entries) {
+      if (!isAvailable(entry)) {
+        this.entries.delete(clientId);
+        continue;
+      }
+      available.push(entry);
+    }
+
+    for (let firstIndex = 0; firstIndex < available.length; firstIndex += 1) {
+      for (let secondIndex = firstIndex + 1; secondIndex < available.length; secondIndex += 1) {
+        const first = available[firstIndex];
+        const second = available[secondIndex];
+        if (!isCompatible(first, second)) continue;
+        this.entries.delete(first.clientId);
+        this.entries.delete(second.clientId);
+        return [first, second];
+      }
+    }
+    return null;
+  }
+
   countByIp(ip) {
     let count = 0;
     for (const entry of this.entries.values()) {

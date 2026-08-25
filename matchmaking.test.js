@@ -47,3 +47,18 @@ test('接続切れと待機lease切れを区別して回収できる', () => {
   assert.deepEqual(removed, [['connected', 'expired'], ['gone', 'unavailable']]);
   assert.equal(queue.size, 0);
 });
+
+test('直前相手を避ける待機者は、互換性のある次の相手とだけ組み合わせる', () => {
+  const queue = new RandomMatchQueue({ maxEntries: 4 });
+  queue.enqueue({ clientId: 'a', socketId: 'socket-a', ip: '192.0.2.1', avoidClientId: 'b' }, 10);
+  queue.enqueue({ clientId: 'b', socketId: 'socket-b', ip: '192.0.2.2', avoidClientId: 'a' }, 11);
+  queue.enqueue({ clientId: 'c', socketId: 'socket-c', ip: '192.0.2.3' }, 12);
+
+  const pair = queue.takeCompatiblePair(
+    () => true,
+    (first, second) => first.avoidClientId !== second.clientId && second.avoidClientId !== first.clientId
+  );
+  assert.deepEqual(pair.map((entry) => entry.clientId), ['a', 'c']);
+  assert.equal(queue.size, 1);
+  assert.equal(queue.takeNext().clientId, 'b');
+});

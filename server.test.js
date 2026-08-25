@@ -7,6 +7,7 @@ const { createInitialHand } = require('./game-rules');
 const {
   MAX_CHAT_IPS_PER_ROOM,
   PRIVATE_ROOM_IDLE_TTL_MS,
+  areRandomMatchEntriesCompatible,
   app,
   buildDefaultAllowedOrigins,
   consumeChatIpQuota,
@@ -19,6 +20,17 @@ const {
   promoteVolunteerSpectators,
   startWhenBothPlayersAgree
 } = require('./server');
+
+test('直前の対戦相手を避けるランダム待機同士は、即時に再マッチしない', () => {
+  assert.equal(areRandomMatchEntriesCompatible(
+    { clientId: 'first', avoidClientId: 'second' },
+    { clientId: 'second', avoidClientId: 'first' }
+  ), false);
+  assert.equal(areRandomMatchEntriesCompatible(
+    { clientId: 'first', avoidClientId: 'second' },
+    { clientId: 'third', avoidClientId: '' }
+  ), true);
+});
 
 function start(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
