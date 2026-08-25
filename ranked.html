@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#090d1a">
   <meta name="robots" content="noindex">
-  <title>OVERTHINKING — ランク戦</title>
-  <link rel="stylesheet" href="/style.css?v=ranked-v7">
-  <link rel="stylesheet" href="/ranked.css?v=ranked-v7">
+  <title>OVERTHINKING — ソロ・ランク戦</title>
+  <link rel="stylesheet" href="/style.css?v=ranked-v8">
+  <link rel="stylesheet" href="/ranked.css?v=ranked-v8">
   <script src="/ranked-ui.js?v=ranked-v3" defer></script>
-  <script src="/ranked-client.js?v=ranked-v7" defer></script>
+  <script src="/ranked-client.js?v=ranked-v8" defer></script>
 </head>
 <body class="ranked-page">
   <div class="atmosphere" aria-hidden="true">
@@ -21,7 +21,7 @@
   <header class="ranked-site-header">
     <a class="game-brand" href="https://evs-k.github.io/overthinking_eBS/" aria-label="プライベート対戦に戻る">OVER<span>THINKING</span></a>
     <nav class="ranked-nav" aria-label="モード選択">
-      <a href="https://evs-k.github.io/overthinking_eBS/">プライベート対戦</a>
+      <a href="https://evs-k.github.io/overthinking_eBS/">対人対戦・ランダムマッチ</a>
       <a href="#leaderboard">ランキング</a>
       <span id="ranked-auth-status" class="ranked-auth-status hidden" role="status"><i aria-hidden="true"></i><span id="ranked-auth-status-label">サインイン中</span></span>
       <button id="ranked-logout" class="ranked-text-button hidden" type="button">ログアウト</button>
@@ -30,12 +30,12 @@
 
   <main class="ranked-layout">
     <section id="ranked-loading" class="ranked-panel ranked-loading" aria-live="polite">
-      <span class="section-label">ランク対戦</span>
+      <span class="section-label">ソロ・ランク戦</span>
       <p>認証状態を確認しています…</p>
     </section>
 
     <section id="ranked-auth" class="ranked-panel ranked-auth hidden" aria-labelledby="ranked-auth-title">
-      <span class="section-label">ランク戦</span>
+      <span class="section-label">ソロ・ランク戦</span>
       <h1 id="ranked-auth-title">決断の質で、<br><span>勝負する。</span></h1>
       <p>ランダムの相手との全局面をサーバーで判定し、実勝敗ではなく一手ごとの判断の期待値でレーティングを記録します。</p>
       <div id="ranked-auth-actions" class="ranked-auth-actions">
@@ -43,13 +43,13 @@
         <a class="secondary-button" href="/auth/login/github"><span>GitHubでサインイン</span><b aria-hidden="true">→</b></a>
       </div>
       <p id="ranked-auth-notice" class="ranked-auth-notice hidden" role="status"></p>
-      <p class="ranked-fine-print">ランク対戦はこのページ専用の安全なログイン状態を使います。プライベート対戦にはログイン不要です。</p>
+      <p class="ranked-fine-print">ソロ・ランク戦はこのページ専用の安全なログイン状態を使います。対人対戦・ランダムマッチにはログイン不要です。</p>
     </section>
 
     <div id="ranked-dashboard" class="ranked-dashboard hidden">
       <section class="ranked-panel ranked-profile" aria-labelledby="ranked-profile-title">
         <div class="ranked-panel-head">
-          <div><span class="section-label">ランクプロフィール</span><h1 id="ranked-profile-title" data-profile-handle>プレイヤー</h1></div>
+          <div><span class="section-label">ソロ・ランク プロフィール</span><h1 id="ranked-profile-title" data-profile-handle>プレイヤー</h1></div>
           <span id="ranked-provisional" class="ranked-badge">ランキング準備中</span>
         </div>
         <div class="ranked-stats-grid">
@@ -60,24 +60,28 @@
         </div>
         <p class="ranked-metric-guide">判断の期待値：各局面で選んだ一手の良さです。高いほど良い判断を選べています。</p>
         <p id="ranked-record" class="ranked-record">勝 0 · 分 0 · 敗 0</p>
-        <p id="ranked-provisional-note" class="ranked-provisional-note">ランキング掲載まで 0 / 50局</p>
+        <p id="ranked-provisional-note" class="ranked-provisional-note">ランキング掲載まで 0 / 10局</p>
         <form id="ranked-handle-form" class="ranked-handle-form" novalidate>
           <label for="ranked-handle-input">公開ハンドル</label>
           <div><input id="ranked-handle-input" type="text" minlength="3" maxlength="20" autocomplete="nickname" autocapitalize="off" spellcheck="false" inputmode="latin" pattern="[A-Za-z0-9_-]{3,20}" aria-describedby="ranked-handle-hint ranked-handle-feedback" title="3〜20文字の半角英大文字 A-Z・英小文字 a-z・数字・_・-のみ使用できます"><button class="ranked-text-button" type="submit">変更</button></div>
         </form>
         <p id="ranked-handle-hint" class="ranked-handle-hint">3〜20文字：半角英大文字 A-Z・英小文字 a-z・数字 0-9・_・- のみ。空白・改行・不可視文字は使えません。</p>
         <p id="ranked-handle-feedback" class="ranked-handle-feedback hidden" role="alert"></p>
+        <label class="ranked-visibility-option" for="ranked-leaderboard-visible">
+          <input id="ranked-leaderboard-visible" type="checkbox" checked>
+          <span><strong>公式ランキングに表示する</strong><small>オフにすると、名前・順位・成績はランキングに掲載されません。対局記録とレーティングは保存されます。</small></span>
+        </label>
       </section>
 
       <section id="ranked-game-panel" class="ranked-panel ranked-game" aria-labelledby="ranked-game-title">
         <div class="ranked-panel-head">
-          <div><span class="section-label">ランク戦</span><h2 id="ranked-game-title">サーバー判定対局</h2></div>
+          <div><span class="section-label">ソロ・ランク戦</span><h2 id="ranked-game-title">サーバー判定対局</h2></div>
           <span id="ranked-game-status" class="ranked-badge ranked-badge-blue">準備完了</span>
         </div>
 
         <div id="ranked-empty-state" class="ranked-empty-state">
           <p>ランダムの相手は残り手札から一様ランダムに選択します。あなたの一手だけを送信し、結果・レーティング・選択損失はサーバーが確定します。</p>
-          <button id="ranked-start" class="primary-button" type="button"><span>ランク戦を開始</span><b aria-hidden="true">→</b></button>
+          <button id="ranked-start" class="primary-button" type="button"><span>ソロ・ランク戦を開始</span><b aria-hidden="true">→</b></button>
         </div>
 
         <div id="ranked-board" class="hidden">
@@ -90,7 +94,7 @@
           <div id="ranked-opponent-hand" class="ranked-opponent-hand" aria-label="ランダムの相手の残り手札"></div>
           <div id="ranked-round-result" class="ranked-round-result hidden" role="status" aria-live="polite" aria-atomic="true"></div>
           <p id="ranked-instruction" class="ranked-instruction">一枚を選んでください。</p>
-          <div id="ranked-player-hand" class="ranked-card-row" aria-label="あなたのランク戦の手札"></div>
+          <div id="ranked-player-hand" class="ranked-card-row" aria-label="あなたのソロ・ランク戦の手札"></div>
           <div class="ranked-game-actions">
             <button id="ranked-confirm" class="primary-button" type="button" disabled><span>この一枚で勝負する</span><b aria-hidden="true">↗</b></button>
             <button id="ranked-forfeit" class="secondary-button" type="button">投了</button>
@@ -108,7 +112,7 @@
             <article><span>結果運</span><strong id="ranked-postgame-luck">—</strong></article>
           </div>
           <p id="ranked-seed-reveal" class="ranked-seed-reveal"></p>
-          <button id="ranked-play-again" class="primary-button" type="button"><span>次のランク戦へ</span><b aria-hidden="true">→</b></button>
+          <button id="ranked-play-again" class="primary-button" type="button"><span>次のソロ・ランク戦へ</span><b aria-hidden="true">→</b></button>
         </section>
       </section>
 
@@ -120,7 +124,7 @@
 
     <section id="leaderboard" class="ranked-panel ranked-leaderboard" aria-labelledby="leaderboard-title">
       <div class="ranked-panel-head"><div><span class="section-label">公式ランキング</span><h2 id="leaderboard-title">判断の期待値ランキング</h2></div><span id="leaderboard-season" class="ranked-badge">現在のシーズン</span></div>
-      <p class="ranked-leaderboard-note">50局以上のプロフィールだけを掲載します。サーバーが対局を確定するため自動操作には強い設計ですが、外部ソルバーを見ながらのプレイを完全に見分けることはできません。</p>
+      <p class="ranked-leaderboard-note">10局以上で、表示を許可したプロフィールだけを掲載します。サーバーが対局を確定するため自動操作には強い設計ですが、外部ソルバーを見ながらのプレイを完全に見分けることはできません。</p>
       <div id="leaderboard-list" class="leaderboard-list" aria-live="polite"><p class="history-empty">ランキングを読み込んでいます…</p></div>
     </section>
   </main>

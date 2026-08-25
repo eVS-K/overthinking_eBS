@@ -13,7 +13,8 @@ test('migrationは番号順に並び、各ファイルを一つのtransactionと
   assert.deepEqual(files, [
     '001_ranked.sql',
     '002_harden_ranked_database_access.sql',
-    '003_replace_legacy_uuid_derived_handles.sql'
+    '003_replace_legacy_uuid_derived_handles.sql',
+    '004_leaderboard_visibility_and_threshold.sql'
   ]);
 
   const queries = [];

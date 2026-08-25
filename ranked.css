@@ -88,6 +88,12 @@
 .ranked-handle-form .ranked-text-button { flex: 0 0 auto; border: 1px solid var(--line-strong); padding-inline: 11px; color: var(--blue-bright); }
 .ranked-handle-hint { margin: 8px 0 0; color: var(--faint); font-family: var(--mono); font-size: 9px; letter-spacing: .03em; line-height: 1.55; }
 .ranked-handle-feedback { margin: 9px 0 0; padding: 9px 10px; border: 1px solid rgba(255, 130, 152, .55); border-left: 3px solid #ff849c; color: #ffe4e9; background: rgba(83, 29, 47, .42); font-size: 11px; line-height: 1.6; }
+.ranked-visibility-option { display: flex; gap: 10px; align-items: flex-start; margin-top: 16px; padding: 12px; border: 1px solid rgba(141, 183, 255, .3); color: #e4edff; background: rgba(42, 59, 104, .13); cursor: pointer; }
+.ranked-visibility-option input { width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--gold-bright); }
+.ranked-visibility-option input:disabled { cursor: wait; opacity: .65; }
+.ranked-visibility-option > span { display: grid; gap: 3px; min-width: 0; }
+.ranked-visibility-option strong { font-size: 12px; }
+.ranked-visibility-option small { color: var(--muted); font-size: 10px; line-height: 1.55; }
 
 .ranked-empty-state { display: grid; justify-items: start; gap: 18px; max-width: 590px; padding: 36px 0 10px; }
 .ranked-empty-state p { margin: 0; color: #c0cce0; font-size: 13px; line-height: 1.85; }
@@ -111,8 +117,8 @@
 .ranked-ai-state strong { color: var(--blue-bright); font-family: var(--serif); font-size: 22px; font-weight: 400; }
 .ranked-ai-state > span:nth-of-type(2) { margin-left: 14px; }
 .ranked-ai-state > span:nth-of-type(2) + strong { color: var(--heart); }
-.ranked-opponent-hand { display: flex; gap: 6px; min-width: 0; padding: 10px 2px 4px; overflow-x: auto; scrollbar-width: thin; }
-.ranked-opponent-card { flex: 1 1 0; min-width: 0; padding: 8px 5px; overflow: hidden; border: 1px solid rgba(255, 150, 170, .34); color: #ffc2cd; background: linear-gradient(145deg, rgba(90, 42, 66, .5), rgba(31, 23, 45, .68)); font-family: var(--serif); font-size: clamp(11px, 1.7vw, 14px); line-height: 1; text-align: center; text-overflow: ellipsis; text-shadow: 0 0 12px rgba(255, 150, 170, .2); white-space: nowrap; }
+.ranked-opponent-hand { display: flex; gap: 6px; min-width: 0; padding: 10px 2px 8px; overflow-x: auto; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; scroll-padding-inline: 2px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.ranked-opponent-card { flex: 0 0 clamp(88px, 8vw, 108px); min-width: 0; padding: 9px 5px; overflow: hidden; border: 1px solid rgba(255, 150, 170, .34); color: #ffc2cd; background: linear-gradient(145deg, rgba(90, 42, 66, .5), rgba(31, 23, 45, .68)); font-family: var(--serif); font-size: clamp(11px, 1.7vw, 14px); line-height: 1; text-align: center; text-overflow: ellipsis; text-shadow: 0 0 12px rgba(255, 150, 170, .2); white-space: nowrap; scroll-snap-align: start; }
 
 .ranked-round-result { display: grid; justify-items: center; gap: 8px; min-width: 0; margin-top: 17px; padding: 14px; border: 1px solid rgba(242, 189, 105, .42); color: var(--gold-bright); background: radial-gradient(circle at center, rgba(242, 189, 105, .17), transparent 72%); text-align: center; }
 .ranked-round-result.round-won { border-color: rgba(242, 189, 105, .62); color: var(--gold-bright); }
@@ -133,8 +139,8 @@
 .round-new .ranked-duel > i { animation: ranked-duel-versus .5s ease-out .15s both; }
 .ranked-instruction { min-height: 20px; margin: 19px 0 10px; color: #c7d2e6; font-size: 12px; text-align: center; }
 
-.ranked-card-row { display: flex; gap: clamp(6px, 1vw, 10px); min-width: 0; padding: 7px 2px 15px; }
-.ranked-card { position: relative; display: flex; flex: 1 1 0; flex-direction: column; justify-content: space-between; min-width: 0; height: clamp(115px, 16vw, 150px); padding: 10px; overflow: hidden; border: 1px solid rgba(180, 202, 253, .32); color: var(--ink); background: linear-gradient(145deg, rgba(57, 70, 108, .88), rgba(26, 34, 61, .96)); box-shadow: inset 0 1px rgba(255, 255, 255, .1), 0 7px 14px rgba(0, 0, 0, .14); cursor: pointer; text-align: left; transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background .2s ease; }
+.ranked-card-row { display: flex; gap: clamp(6px, 1vw, 10px); min-width: 0; padding: 9px 2px 17px; overflow-x: auto; overflow-y: hidden; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; scroll-padding-inline: 2px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.ranked-card { position: relative; display: flex; flex: 0 0 clamp(110px, 10.2vw, 138px); flex-direction: column; justify-content: space-between; min-width: 0; height: clamp(124px, 12.4vw, 156px); padding: 10px; overflow: hidden; border: 1px solid rgba(180, 202, 253, .32); color: var(--ink); background: linear-gradient(145deg, rgba(57, 70, 108, .88), rgba(26, 34, 61, .96)); box-shadow: inset 0 1px rgba(255, 255, 255, .1), 0 7px 14px rgba(0, 0, 0, .14); cursor: pointer; text-align: left; scroll-snap-align: start; transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background .2s ease; }
 .ranked-card::before { position: absolute; inset: 4px; border: 1px solid rgba(229, 239, 255, .1); content: ''; pointer-events: none; }
 .ranked-card:hover { border-color: var(--gold-bright); transform: translateY(-5px); box-shadow: 0 13px 28px rgba(0, 0, 0, .27); }
 .ranked-card.selected { z-index: 1; border-color: var(--gold-bright); background: linear-gradient(145deg, #755c40, #302b34); box-shadow: 0 0 0 2px rgba(242, 189, 105, .25), 0 15px 30px rgba(0, 0, 0, .35); transform: translateY(-8px); }
@@ -143,7 +149,13 @@
 .ranked-card-name { position: relative; z-index: 1; padding-right: 24px; overflow: hidden; color: #f8faff; font-family: var(--serif); font-size: clamp(12px, 1.8vw, 16px); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .ranked-card-mark { position: absolute; top: 8px; right: 8px; z-index: 2; display: grid; place-items: center; width: 19px; height: 19px; border: 1px solid var(--gold); border-radius: 50%; color: var(--gold); background: rgba(10, 15, 30, .84); font-size: 11px; line-height: 1; }
 .ranked-card.selected .ranked-card-mark { border-color: var(--gold-bright); color: #17131d; background: var(--gold-bright); }
-.ranked-card small { position: relative; z-index: 1; overflow-wrap: anywhere; color: #b9c5db; font-size: clamp(8px, 1vw, 10px); line-height: 1.35; text-align: center; }
+.ranked-card-emblem { position: relative; z-index: 1; display: inline-flex; align-items: center; align-self: center; gap: 6px; color: rgba(206, 222, 255, .34); font-family: var(--serif); text-shadow: 0 0 17px currentColor; }
+.ranked-card-rank { font-size: clamp(36px, 4.5vw, 54px); font-weight: 400; letter-spacing: -.04em; line-height: .78; }
+.ranked-card-suit { font-size: clamp(29px, 3.6vw, 40px); line-height: 1; }
+.ranked-card.selected .ranked-card-emblem { color: rgba(255, 239, 197, .52); }
+.ranked-card-corner-pip { position: absolute; right: 9px; bottom: 9px; z-index: 1; display: grid; justify-items: center; color: var(--gold); font-family: var(--serif); font-size: 12px; font-weight: 700; line-height: .76; opacity: .78; transform: rotate(180deg); }
+.ranked-card-corner-pip span:last-child { margin-top: 2px; font-size: 13px; }
+.ranked-card small { position: relative; z-index: 1; padding-inline: 13px; overflow-wrap: anywhere; color: #b9c5db; font-size: clamp(8px, 1vw, 10px); line-height: 1.35; text-align: center; }
 .ranked-game-actions { display: flex; justify-content: center; gap: 10px; margin-top: 6px; }
 .ranked-game-actions .primary-button,
 .ranked-game-actions .secondary-button { min-width: min(100%, 240px); margin: 0; }
@@ -266,8 +278,8 @@
   .ranked-scoreline > div > strong { font-size: 34px; }
   .ranked-round-meta > strong { font-size: 20px !important; }
   .ranked-ai-state { padding-block: 10px; }
-  .ranked-opponent-hand { gap: 4px; padding-top: 8px; overflow: hidden; }
-  .ranked-opponent-card { flex: 1 1 0; min-width: 0; padding: 9px 2px; font-size: 10px; }
+  .ranked-opponent-hand { gap: 4px; padding-top: 8px; }
+  .ranked-opponent-card { flex-basis: 82px; padding: 9px 2px; font-size: 10px; }
   .ranked-round-result { margin-top: 12px; padding: 12px 8px; }
   .ranked-round-result strong { font-size: clamp(21px, 7vw, 29px); }
   .ranked-duel { gap: 6px; }

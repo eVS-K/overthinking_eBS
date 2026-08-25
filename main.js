@@ -5,6 +5,7 @@ const RANKED_APP_URL = new URL('/ranked', GAME_SERVER_URL).toString();
 const TURN_TIME_LIMIT_MS = 90_000;
 const CHAT_MESSAGE_LIMIT = 50;
 const MAX_RENDERED_CHAT_MESSAGES = 100;
+const CARD_MARKS = Object.freeze({ ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'JK', three: '3', two: '2' });
 
 const socket = window.io
   ? window.io(GAME_SERVER_URL, {
@@ -358,13 +359,33 @@ function createCard(card, suitType, isInteractive) {
 
   const center = document.createElement('div');
   center.className = 'card-center-suit';
-  center.textContent = suit.textContent;
+  const rankMark = document.createElement('span');
+  rankMark.className = 'card-rank-mark';
+  rankMark.textContent = CARD_MARKS[card.id] || '?';
+  rankMark.setAttribute('aria-hidden', 'true');
+  const suitMark = document.createElement('span');
+  suitMark.className = 'card-suit-mark';
+  suitMark.textContent = suit.textContent;
+  suitMark.setAttribute('aria-hidden', 'true');
+  center.append(rankMark, suitMark);
+
+  // 下隅にも小さなランクとスートを置き、一覧性を保ちつつトランプの
+  // カードフェイスらしい見た目にする。ゲーム上のスートは従来どおり
+  // プレイヤー側を表すだけで、カード性能には影響しない。
+  const cornerPip = document.createElement('div');
+  cornerPip.className = 'card-corner-pip';
+  cornerPip.setAttribute('aria-hidden', 'true');
+  const cornerRank = document.createElement('span');
+  cornerRank.textContent = CARD_MARKS[card.id] || '?';
+  const cornerSuit = document.createElement('span');
+  cornerSuit.textContent = suit.textContent;
+  cornerPip.append(cornerRank, cornerSuit);
 
   const description = document.createElement('div');
   description.className = 'card-desc';
   description.textContent = card.desc;
 
-  cardElement.append(top, center, description);
+  cardElement.append(top, center, description, cornerPip);
   return cardElement;
 }
 
@@ -1009,7 +1030,7 @@ elements.randomModeButton.addEventListener('click', () => {
 });
 
 elements.cancelRandomSearchButton.addEventListener('click', () => {
-  stopRandomSearch({ message: 'ランダム対戦の検索をやめました。' });
+  stopRandomSearch({ message: 'ランダムマッチの検索をやめました。' });
 });
 
 elements.spectateModeInput.addEventListener('change', syncSpectatorJoinOptions);

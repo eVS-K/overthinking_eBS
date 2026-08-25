@@ -6,6 +6,7 @@ const {
   INITIAL_DECISION_EV,
   PERFECT_PLAY_RATING,
   RANDOM_LEVEL_RATING,
+  LEADERBOARD_ELIGIBILITY_GAMES,
   RATING_LAMBDA,
   calculateRating,
   createEmptyRatingProfile,
@@ -42,8 +43,9 @@ test('forfeitはrated game数とloss/forfeitへ一度ずつ反映される', () 
     forfeit: true
   });
   assert.deepEqual({ games: profile.ratedGames, losses: profile.losses, forfeits: profile.forfeits }, { games: 1, losses: 1, forfeits: 1 });
-  assert.equal(isEligibleForLeaderboard({ ratedGames: 49 }), false);
-  assert.equal(isEligibleForLeaderboard({ ratedGames: 50 }), true);
+  assert.equal(LEADERBOARD_ELIGIBILITY_GAMES, 10);
+  assert.equal(isEligibleForLeaderboard({ ratedGames: 9 }), false);
+  assert.equal(isEligibleForLeaderboard({ ratedGames: 10 }), true);
 });
 
 test('一様random strategyのDecision Performance期待値は1000近傍へ写像される', () => {

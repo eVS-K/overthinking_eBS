@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   handle VARCHAR(20) NOT NULL UNIQUE CHECK (handle ~ '^[A-Za-z0-9_-]{3,20}$'),
   normalized_handle VARCHAR(20) NOT NULL UNIQUE CHECK (normalized_handle = lower(handle)),
   status VARCHAR(16) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'banned', 'deactivated')),
+  leaderboard_visible BOOLEAN NOT NULL DEFAULT true,
   handle_changed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -75,7 +76,7 @@ CREATE TABLE IF NOT EXISTS ranked_profiles (
 );
 CREATE INDEX IF NOT EXISTS ranked_profiles_leaderboard_idx
   ON ranked_profiles(season_id, decision_ev DESC, rating DESC, rated_games DESC)
-  WHERE rated_games >= 50;
+  WHERE rated_games >= 10;
 
 CREATE TABLE IF NOT EXISTS ranked_games (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

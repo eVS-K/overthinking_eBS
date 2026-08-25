@@ -151,6 +151,28 @@ test('leaderboard responseはprivate session/auth identityを返さない', asyn
   assert.equal(serialized.includes('email'), false);
 });
 
+test('ランキング公開設定は本人のCSRF保護された操作だけで変更でき、公開一覧から直ちに除外される', async (t) => {
+  const runtime = await startApi();
+  t.after(runtime.close);
+
+  const invalid = await json(await fetch(`${runtime.baseUrl}/api/profile`, {
+    method: 'PATCH', headers: headers(), body: JSON.stringify({ leaderboardVisible: 'yes' })
+  }));
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error.code, 'INVALID_PROFILE_UPDATE');
+
+  const hidden = await json(await fetch(`${runtime.baseUrl}/api/profile`, {
+    method: 'PATCH', headers: headers(), body: JSON.stringify({ leaderboardVisible: false })
+  }));
+  assert.equal(hidden.status, 200);
+  assert.equal(hidden.body.profile.leaderboardVisible, false);
+  assert.equal(hidden.body.profile.rank, null);
+
+  const current = await json(await fetch(`${runtime.baseUrl}/api/profile`, { headers: { Cookie: headers().Cookie } }));
+  assert.equal(current.status, 200);
+  assert.equal(current.body.profile.leaderboardVisible, false);
+});
+
 test('期限の確認はGETでは状態を変更せず、CSRF保護されたPOSTだけがtimeoutを確定する', async (t) => {
   const runtime = await startApi();
   t.after(runtime.close);

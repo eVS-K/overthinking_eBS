@@ -242,15 +242,15 @@ input::placeholder { color: #65708b; }
 .score-box strong.score-pop { animation: score-pop .5s ease; }
 .score-award { position: absolute; right: 0; bottom: -19px; z-index: 2; color: var(--gold-bright); font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .08em; pointer-events: none; animation: score-award 1.15s cubic-bezier(.16,.7,.22,1) both; white-space: nowrap; }
 
-.card-row { display: flex; gap: clamp(5px, 1.1vw, 10px); min-width: 0; }
+.card-row { display: flex; gap: clamp(5px, 1.1vw, 10px); min-width: 0; padding: 9px 2px 15px; overflow-x: auto; overflow-y: hidden; scroll-padding-inline: 2px; scroll-snap-type: x proximity; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
 .card {
   position: relative;
   display: flex;
-  flex: 1 1 0;
+  flex: 0 0 clamp(106px, 10.2vw, 136px);
   flex-direction: column;
   justify-content: space-between;
   min-width: 0;
-  height: clamp(112px, 16.8vw, 144px);
+  height: clamp(124px, 12.2vw, 154px);
   padding: 10px;
   overflow: hidden;
   border: 1px solid rgba(180, 202, 253, .3);
@@ -270,10 +270,16 @@ input::placeholder { color: #65708b; }
 .card-spade .card-top span:last-child { color: var(--gold); }
 .card-heart .card-top span:last-child { color: var(--heart); }
 .card-selected-mark { display: grid; place-items: center; width: 16px; height: 16px; margin-left: auto; border: 1px solid var(--gold-bright); border-radius: 50%; color: #17131d !important; background: var(--gold-bright); font-family: var(--sans); font-size: 10px !important; line-height: 1; }
-.card-center-suit { color: rgba(230, 238, 255, .18); font-family: var(--serif); font-size: clamp(25px, 4vw, 37px); line-height: .8; text-align: center; }
+.card-center-suit { display: inline-flex; align-items: center; justify-content: center; align-self: center; gap: 5px; color: rgba(230, 238, 255, .3); font-family: var(--serif); line-height: .8; text-align: center; }
+.card-rank-mark { color: currentColor; font-family: var(--serif); font-size: clamp(32px, 4.3vw, 49px); font-weight: 400; letter-spacing: -.04em; line-height: .72; text-shadow: 0 0 15px currentColor; }
+.card-suit-mark { color: currentColor; font-size: clamp(28px, 3.5vw, 40px); line-height: 1; text-shadow: 0 0 15px currentColor; }
+.card-corner-pip { position: absolute; right: 9px; bottom: 9px; z-index: 1; display: grid; justify-items: center; color: currentColor; font-family: var(--serif); font-size: 12px; font-weight: 700; line-height: .76; opacity: .76; transform: rotate(180deg); }
+.card-corner-pip span:last-child { margin-top: 2px; font-size: 13px; }
 .card-spade .card-center-suit { color: rgba(242, 189, 105, .21); }
 .card-heart .card-center-suit { color: rgba(255, 119, 143, .21); }
-.card-desc { position: relative; z-index: 1; overflow: hidden; color: #aebbd2; font-size: clamp(8px, 1.15vw, 10px); line-height: 1.25; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.card-spade .card-corner-pip { color: var(--gold); }
+.card-heart .card-corner-pip { color: var(--heart); }
+.card-desc { position: relative; z-index: 1; padding-inline: 12px; overflow: hidden; color: #aebbd2; font-size: clamp(8px, 1.15vw, 10px); line-height: 1.25; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .opponent-hand .card { background: linear-gradient(145deg, rgba(83, 49, 75, .83), rgba(40, 27, 49, .95)); }
 
 .table-center { margin: 0 calc(clamp(16px, 3vw, 30px) * -1); padding: 16px clamp(16px, 3vw, 30px) 14px; border-block: 1px solid var(--line); background: rgba(3, 7, 18, .36); }
@@ -444,7 +450,7 @@ input::placeholder { color: #65708b; }
   .room-chip span { font-size: 8px; }
   .room-chip strong { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
   .player-zone { padding-block: 15px; }
-  .card-row { gap: 7px; overflow-x: auto; overflow-y: hidden; padding: 9px 2px 13px; scrollbar-color: var(--line-strong) transparent; scroll-padding-inline: 2px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+  .card-row { gap: 7px; padding-bottom: 13px; }
   .card { flex: 0 0 96px; height: 130px; padding: 8px; scroll-snap-align: start; }
   .card.selected { transform: none; box-shadow: 0 0 0 2px rgba(242, 189, 105, .42), 0 0 24px rgba(242, 189, 105, .28), inset 0 1px rgba(255, 255, 255, .16); }
   .card.committing { animation: card-commit-mobile .48s ease both; }

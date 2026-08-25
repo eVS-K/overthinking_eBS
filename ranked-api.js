@@ -186,7 +186,7 @@ function registerRankedRoutes(app, { runtime, getClientIp }) {
 
   router.patch('/api/profile', requireAuth, requireStateChange, profileLimit, asyncRoute(async (request, response) => {
     noStore(response);
-    response.json({ profile: await service.updateHandle(request.auth.userId, request.body?.handle) });
+    response.json({ profile: await service.updateProfileSettings(request.auth.userId, request.body) });
   }));
 
   router.use((error, _request, response, _next) => sendError(response, error));

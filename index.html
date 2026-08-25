@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#090d1a">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
-  <link rel="stylesheet" href="style.css?v=pvp-v9">
+  <link rel="stylesheet" href="style.css?v=pvp-v10">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v9"></script>
+  <script src="socket-loader.js?v=pvp-v10"></script>
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true">
@@ -29,8 +29,8 @@
           <span class="mode-selector-label">ゲームモード</span>
           <div class="mode-selector-options">
             <button id="private-mode-btn" class="mode-option mode-option-active" type="button" aria-pressed="true"><b>プライベート対戦</b><small>ルームキーで対戦</small></button>
-            <button id="random-mode-btn" class="mode-option" type="button" aria-pressed="false"><b>ランダム対戦</b><small>すぐに相手を探す</small></button>
-            <a id="ranked-mode-link" class="mode-option" href="https://overthinking-ebs.onrender.com/ranked"><b>ランク戦・ランダム対戦</b><small>プレイ · ランキング</small></a>
+            <button id="random-mode-btn" class="mode-option" type="button" aria-pressed="false"><b>ランダムマッチ</b><small>オンラインの相手を探す</small></button>
+            <a id="ranked-mode-link" class="mode-option" href="https://overthinking-ebs.onrender.com/ranked"><b>ソロ・ランク戦</b><small>ランダムの相手 · ランキング</small></a>
           </div>
         </nav>
 
@@ -50,7 +50,7 @@
           </div>
 
           <section id="random-match-panel" class="random-match-panel hidden" aria-live="polite">
-            <span class="section-label">ランダム対戦</span>
+            <span class="section-label">ランダムマッチ</span>
             <strong><span id="random-online-count">—</span><small>人</small></strong>
             <p>現在オンライン</p>
             <span id="random-queue-count" class="random-queue-count">対戦相手を探し中 — 人</span>
@@ -123,7 +123,7 @@
           <div class="header-actions">
             <button id="fullscreenBtn" class="fullscreen-button" type="button" aria-pressed="false" title="ゲーム画面を全画面で表示"><span aria-hidden="true">⛶</span><span>全画面</span></button>
             <span id="spectator-mode-badge" class="spectator-mode-badge hidden">観戦中</span>
-            <span id="random-match-badge" class="random-match-badge hidden">ランダム対戦</span>
+            <span id="random-match-badge" class="random-match-badge hidden">ランダムマッチ</span>
             <button id="homeBtn" class="home-button hidden" type="button"><span aria-hidden="true">⌂</span><span id="home-btn-label">ホームへ戻る</span></button>
             <div id="connection-state" class="connection-state"><i></i><span>接続中</span></div>
           </div>

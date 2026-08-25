@@ -5,6 +5,9 @@ const INITIAL_EV_DENOMINATOR = 2520;
 const INITIAL_DECISION_EV = INITIAL_EV_NUMERATOR / INITIAL_EV_DENOMINATOR;
 const RATING_HALF_LIFE_GAMES = 50;
 const RATING_LAMBDA = 2 ** (-1 / RATING_HALF_LIFE_GAMES);
+// Rating itself keeps its 50-game half-life.  This lower threshold only
+// controls when a player may opt into the public leaderboard.
+const LEADERBOARD_ELIGIBILITY_GAMES = 10;
 const RANDOM_LEVEL_RATING = 1000;
 const PERFECT_PLAY_RATING = 1500;
 
@@ -26,7 +29,7 @@ function createEmptyRatingProfile() {
 }
 
 function isEligibleForLeaderboard(profile) {
-  return Number(profile?.ratedGames || 0) >= 50;
+  return Number(profile?.ratedGames || 0) >= LEADERBOARD_ELIGIBILITY_GAMES;
 }
 
 function clampDecisionPerformance(value) {
@@ -101,6 +104,7 @@ module.exports = {
   INITIAL_DECISION_EV,
   INITIAL_EV_DENOMINATOR,
   INITIAL_EV_NUMERATOR,
+  LEADERBOARD_ELIGIBILITY_GAMES,
   PERFECT_PLAY_RATING,
   RANDOM_LEVEL_RATING,
   RATING_HALF_LIFE_GAMES,

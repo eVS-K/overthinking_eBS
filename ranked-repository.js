@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { LEADERBOARD_ELIGIBILITY_GAMES } = require('./rating');
 
 function cloneValue(value) {
   if (Buffer.isBuffer(value)) return Buffer.from(value);
@@ -31,6 +32,7 @@ function mapProfile(row) {
     handle: row.handle,
     normalizedHandle: row.normalized_handle ?? row.normalizedHandle,
     status: row.status,
+    leaderboardVisible: row.leaderboard_visible ?? row.leaderboardVisible ?? true,
     handleChangedAt: row.handle_changed_at ?? row.handleChangedAt ?? null,
     createdAt: row.created_at ?? row.createdAt ?? null,
     updatedAt: row.updated_at ?? row.updatedAt ?? null
@@ -252,6 +254,17 @@ class PostgresRankedRepository {
     return mapProfile(result.rows[0]);
   }
 
+  async updateLeaderboardVisibility(userId, leaderboardVisible) {
+    const result = await this.query(
+      `UPDATE profiles
+       SET leaderboard_visible = $2, updated_at = now()
+       WHERE user_id = $1
+       RETURNING *`,
+      [userId, leaderboardVisible]
+    );
+    return mapProfile(result.rows[0]);
+  }
+
   async createSession(session) {
     const result = await this.query(
       `INSERT INTO app_sessions (id, user_id, session_token_hash, csrf_token_hash, expires_at, idle_expires_at, user_agent_hash, ip_hash)
@@ -451,18 +464,18 @@ class PostgresRankedRepository {
     const count = await this.query(
       `SELECT count(*)::integer AS total
        FROM ranked_profiles rp JOIN profiles p ON p.user_id = rp.user_id
-       WHERE rp.season_id = $1 AND rp.rated_games >= 50 AND p.status = 'active'`,
-      [seasonId]
+       WHERE rp.season_id = $1 AND rp.rated_games >= $2 AND p.status = 'active' AND p.leaderboard_visible = true`,
+      [seasonId, LEADERBOARD_ELIGIBILITY_GAMES]
     );
     const result = await this.query(
       `SELECT row_number() OVER (ORDER BY rp.decision_ev DESC, rp.rating DESC, p.public_id ASC) AS rank,
               p.public_id, p.handle, rp.rated_games, rp.wins, rp.draws, rp.losses, rp.forfeits,
               rp.decision_ev, rp.rating, rp.ew_weight, rp.ew_weight_sq, rp.ew_sum_sq
        FROM ranked_profiles rp JOIN profiles p ON p.user_id = rp.user_id
-       WHERE rp.season_id = $1 AND rp.rated_games >= 50 AND p.status = 'active'
+       WHERE rp.season_id = $1 AND rp.rated_games >= $2 AND p.status = 'active' AND p.leaderboard_visible = true
        ORDER BY rp.decision_ev DESC, rp.rating DESC, p.public_id ASC
-       LIMIT $2 OFFSET $3`,
-      [seasonId, limit, offset]
+       LIMIT $3 OFFSET $4`,
+      [seasonId, LEADERBOARD_ELIGIBILITY_GAMES, limit, offset]
     );
     return {
       total: Number(count.rows[0].total),
@@ -481,9 +494,9 @@ class PostgresRankedRepository {
       `WITH ranked AS (
         SELECT rp.user_id, row_number() OVER (ORDER BY rp.decision_ev DESC, rp.rating DESC, p.public_id ASC) AS rank
         FROM ranked_profiles rp JOIN profiles p ON p.user_id = rp.user_id
-        WHERE rp.season_id = $1 AND rp.rated_games >= 50 AND p.status = 'active'
-      ) SELECT rank FROM ranked WHERE user_id = $2`,
-      [seasonId, userId]
+        WHERE rp.season_id = $1 AND rp.rated_games >= $2 AND p.status = 'active' AND p.leaderboard_visible = true
+      ) SELECT rank FROM ranked WHERE user_id = $3`,
+      [seasonId, LEADERBOARD_ELIGIBILITY_GAMES, userId]
     );
     return result.rows[0] ? Number(result.rows[0].rank) : null;
   }
@@ -577,6 +590,7 @@ class MemoryRankedRepository {
       }
       profile = {
         userId, publicId: crypto.randomUUID(), handle, normalizedHandle: handle, status: 'active', handleChangedAt: null,
+        leaderboardVisible: true,
         createdAt: new Date(), updatedAt: new Date()
       };
       this.profiles.set(userId, profile);
@@ -597,6 +611,14 @@ class MemoryRankedRepository {
     profile.handle = handle;
     profile.normalizedHandle = normalizedHandle;
     profile.handleChangedAt = new Date(changedAt);
+    profile.updatedAt = new Date();
+    return cloneValue(profile);
+  }
+
+  async updateLeaderboardVisibility(userId, leaderboardVisible) {
+    const profile = this.profiles.get(userId);
+    if (!profile) return null;
+    profile.leaderboardVisible = leaderboardVisible;
     profile.updatedAt = new Date();
     return cloneValue(profile);
   }
@@ -763,7 +785,10 @@ class MemoryRankedRepository {
 
   async getLeaderboard(seasonId, { limit, offset }) {
     const entries = [...this.rankedProfiles.values()]
-      .filter((profile) => profile.seasonId === seasonId && profile.ratedGames >= 50 && this.profiles.get(profile.userId)?.status === 'active')
+      .filter((profile) => profile.seasonId === seasonId
+        && profile.ratedGames >= LEADERBOARD_ELIGIBILITY_GAMES
+        && this.profiles.get(profile.userId)?.status === 'active'
+        && this.profiles.get(profile.userId)?.leaderboardVisible !== false)
       .sort((left, right) => right.decisionEv - left.decisionEv || right.rating - left.rating || left.userId.localeCompare(right.userId))
       .map((profile, index) => ({
         rank: index + 1, publicId: this.profiles.get(profile.userId).publicId, handle: this.profiles.get(profile.userId).handle,

@@ -71,6 +71,45 @@ test('公開handleは20文字以内のASCII許可文字だけを受け入れ、�
   assert.equal(repeated.handle, 'Player-2026');
 });
 
+test('ランキング掲載は10局からで、公開可否を切り替えると順位・一覧の双方に即時反映する', async () => {
+  const { service, repository } = makeService();
+  await service.createOrResumeGame(USER_A);
+  const season = await repository.getActiveSeason();
+  const ratingProfile = await repository.getOrCreateRankedProfile(USER_A, season.id);
+  await repository.saveRankedProfile({
+    ...ratingProfile,
+    ratedGames: 10,
+    wins: 7,
+    losses: 3,
+    ewWeight: 10,
+    ewWeightSq: 9,
+    ewSum: 6,
+    ewSumSq: 4,
+    decisionEv: 0.6,
+    rating: 1188
+  });
+
+  const visible = await service.getProfileSummary(USER_A);
+  assert.equal(visible.leaderboardEligible, true);
+  assert.equal(visible.leaderboardVisible, true);
+  assert.equal(visible.rank, 1);
+  assert.equal((await service.getLeaderboard()).entries.length, 1);
+
+  const hidden = await service.updateProfileSettings(USER_A, { leaderboardVisible: false });
+  assert.equal(hidden.leaderboardEligible, true);
+  assert.equal(hidden.leaderboardVisible, false);
+  assert.equal(hidden.rank, null);
+  assert.equal((await service.getLeaderboard()).entries.length, 0);
+
+  const restored = await service.updateProfileSettings(USER_A, { leaderboardVisible: true });
+  assert.equal(restored.rank, 1);
+  assert.equal((await service.getLeaderboard()).entries.length, 1);
+  await assert.rejects(
+    service.updateProfileSettings(USER_A, { leaderboardVisible: 'yes' }),
+    (error) => error instanceof RankedError && error.code === 'INVALID_PROFILE_UPDATE'
+  );
+});
+
 test('moveはserver authoritativeで、同一requestIdはidempotent、カードは一度しか消費されない', async () => {
   const { service, repository } = makeService();
   const game = await service.createOrResumeGame(USER_A);

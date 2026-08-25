@@ -15,6 +15,7 @@ test('Rankedのエラーは実装詳細ではなく日本語の利用者向け�
   assert.match(errorMessage('HANDLE_COOLDOWN'), /30日/);
   assert.match(errorMessage('GAME_VERSION_MISMATCH'), /投了/);
   assert.match(errorMessage('IDENTITY_PROVIDER_UNAVAILABLE'), /認証サービス/);
+  assert.match(errorMessage('INVALID_PROFILE_UPDATE'), /プロフィール/);
   assert.equal(errorKind('HANDLE_COOLDOWN'), 'warning');
   assert.equal(errorKind('INVALID_HANDLE'), 'error');
 });

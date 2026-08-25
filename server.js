@@ -612,11 +612,11 @@ function leaveRandomMatchQueue(socket, { notify = true } = {}) {
 
 function queueRandomMatch(socket, { clientId, playerName }) {
   if (socket.data.roomId) {
-    emitError(socket, '対局中または観戦中は、ランダム対戦を検索できません。');
+    emitError(socket, '対局中または観戦中は、ランダムマッチを検索できません。');
     return false;
   }
   if (!randomMatchLimiter.consume(socket.data.clientIp)) {
-    emitError(socket, 'ランダム対戦の検索回数が多すぎます。少し待ってからお試しください。');
+    emitError(socket, 'ランダムマッチの検索回数が多すぎます。少し待ってからお試しください。');
     return false;
   }
 
@@ -633,7 +633,7 @@ function queueRandomMatch(socket, { clientId, playerName }) {
     if (previousSocket) previousSocket.disconnect(true);
   }
   if (!previousEntry && randomMatchQueue.countByIp(socket.data.clientIp) >= MAX_RANDOM_QUEUE_PER_IP) {
-    emitError(socket, 'このネットワークからのランダム対戦待機が多すぎます。少し待ってからお試しください。');
+    emitError(socket, 'このネットワークからのランダムマッチ待機が多すぎます。少し待ってからお試しください。');
     return false;
   }
 
@@ -647,7 +647,7 @@ function queueRandomMatch(socket, { clientId, playerName }) {
   });
   if (!queued.ok) {
     socket.data.randomQueueClientId = undefined;
-    emitError(socket, '現在ランダム対戦の待機が混み合っています。少し待ってからお試しください。');
+    emitError(socket, '現在ランダムマッチの待機が混み合っています。少し待ってからお試しください。');
     return false;
   }
 
@@ -849,7 +849,7 @@ io.on('connection', (socket) => {
     const returningPlayer = room.players.find((player) => player.clientId === clientId);
     const returningSpectator = room.spectators.find((spectator) => spectator.clientId === clientId);
     if (room.matchType === 'random' && !returningPlayer && !returningSpectator) {
-      emitError(socket, 'ランダム対戦の部屋へは、マッチした対戦者だけが入室できます。');
+      emitError(socket, 'ランダムマッチの部屋へは、マッチした対戦者だけが入室できます。');
       return;
     }
     if (!returningPlayer && !returningSpectator) {

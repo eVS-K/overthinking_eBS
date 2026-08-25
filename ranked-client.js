@@ -5,6 +5,7 @@
     ace: ['Ace', '能力なし'], king: ['King', '能力なし'], queen: ['Queen', '能力なし'], jack: ['Jack', '能力なし'],
     joker: ['Joker', '相手の強さをコピー'], three: ['Three', 'Jokerに勝利'], two: ['Two', 'Aceに勝利']
   });
+  const CARD_MARKS = Object.freeze({ ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'JK', three: '3', two: '2' });
   const rankedUi = window.OverthinkingRankedUi || {};
   const HANDLE_PATTERN = rankedUi.HANDLE_PATTERN || /^[A-Za-z0-9_-]{3,20}$/;
   const localizedErrorMessage = rankedUi.errorMessage || (() => '操作を完了できませんでした。通信状態を確認して、もう一度お試しください。');
@@ -28,7 +29,7 @@
     'ranked-postgame', 'ranked-game-status', 'ranked-round', 'ranked-timer', 'ranked-player-score', 'ranked-ai-score',
     'ranked-ai-remaining', 'ranked-stack', 'ranked-opponent-hand', 'ranked-player-hand', 'ranked-confirm', 'ranked-forfeit', 'ranked-instruction',
     'ranked-round-result', 'ranked-history-list', 'ranked-message', 'ranked-message-text', 'ranked-message-dismiss', 'ranked-rating', 'ranked-rank', 'ranked-decision-ev',
-    'ranked-games', 'ranked-record', 'ranked-provisional', 'ranked-provisional-note', 'ranked-handle-form', 'ranked-handle-input', 'ranked-handle-feedback',
+    'ranked-games', 'ranked-record', 'ranked-provisional', 'ranked-provisional-note', 'ranked-handle-form', 'ranked-handle-input', 'ranked-handle-feedback', 'ranked-leaderboard-visible',
     'ranked-postgame-result', 'ranked-postgame-score', 'ranked-postgame-performance', 'ranked-postgame-regret', 'ranked-postgame-rating',
     'ranked-postgame-luck', 'ranked-seed-reveal', 'ranked-play-again', 'leaderboard-list', 'leaderboard-season', 'ranked-game-panel'
   ].map((id) => [id, document.getElementById(id)]));
@@ -122,10 +123,18 @@
     elements['ranked-decision-ev'].textContent = profile.decisionEv === null ? '—' : formatNumber(profile.decisionEv, 4);
     elements['ranked-games'].textContent = String(profile.ratedGames);
     elements['ranked-record'].textContent = `勝 ${profile.wins} · 分 ${profile.draws} · 敗 ${profile.losses}${profile.forfeits ? ` · 投 ${profile.forfeits}` : ''}`;
-    elements['ranked-provisional'].textContent = profile.provisional ? 'ランキング準備中' : `順位 #${profile.rank || '—'}`;
+    const threshold = Number.isSafeInteger(profile.leaderboardThreshold) ? profile.leaderboardThreshold : 10;
+    const leaderboardVisible = profile.leaderboardVisible !== false;
+    elements['ranked-leaderboard-visible'].checked = leaderboardVisible;
+    elements['ranked-leaderboard-visible'].disabled = Boolean(state.visibilityUpdatePending);
+    elements['ranked-provisional'].textContent = profile.provisional
+      ? 'ランキング準備中'
+      : leaderboardVisible ? `順位 #${profile.rank || '—'}` : 'ランキング非公開';
     elements['ranked-provisional-note'].textContent = profile.provisional
-      ? `ランキング掲載まで ${profile.provisionalProgress} / 50局`
-      : `ランキング掲載中 · 有効対局数 ${formatNumber(profile.effectiveSampleSize, 1)}`;
+      ? `ランキング掲載まで ${profile.provisionalProgress} / ${threshold}局${leaderboardVisible ? '' : ' · 現在は非公開設定です'}`
+      : leaderboardVisible
+        ? `ランキング掲載中 · 有効対局数 ${formatNumber(profile.effectiveSampleSize, 1)}`
+        : 'ランキングは非公開です。対局記録とレーティングは保存されています。';
     elements['ranked-auth-status-label'].textContent = `サインイン中 · ${profile.handle}`;
     setHidden(elements['ranked-auth-status'], false);
   }
@@ -142,8 +151,16 @@
     button.disabled = Boolean(state.pendingMove || state.game?.versionMismatch);
     const top = document.createElement('span'); top.className = 'ranked-card-name'; top.textContent = name;
     const mark = document.createElement('span'); mark.className = 'ranked-card-mark'; mark.textContent = state.selectedCardId === cardId ? '✓' : '♠';
+    const emblem = document.createElement('span'); emblem.className = 'ranked-card-emblem'; emblem.setAttribute('aria-hidden', 'true');
+    const rank = document.createElement('span'); rank.className = 'ranked-card-rank'; rank.textContent = CARD_MARKS[cardId] || '?';
+    const suit = document.createElement('span'); suit.className = 'ranked-card-suit'; suit.textContent = '♠';
+    emblem.append(rank, suit);
+    const cornerPip = document.createElement('span'); cornerPip.className = 'ranked-card-corner-pip'; cornerPip.setAttribute('aria-hidden', 'true');
+    const cornerRank = document.createElement('span'); cornerRank.textContent = CARD_MARKS[cardId] || '?';
+    const cornerSuit = document.createElement('span'); cornerSuit.textContent = '♠';
+    cornerPip.append(cornerRank, cornerSuit);
     const desc = document.createElement('small'); desc.textContent = description;
-    button.append(top, mark, desc);
+    button.append(top, mark, emblem, desc, cornerPip);
     button.addEventListener('click', () => {
       if (state.pendingMove || state.game?.status !== 'active' || state.game?.versionMismatch) return;
       if (state.retryMove && state.retryMove.cardId !== cardId) state.retryMove = null;
@@ -165,7 +182,7 @@
     const [name, description] = CARD_INFO[cardId] || [cardId, ''];
     const card = document.createElement('span');
     card.className = 'ranked-opponent-card';
-    card.textContent = name;
+    card.textContent = `♥ ${CARD_MARKS[cardId] || '?'} · ${name}`;
     card.title = description ? `${name} — ${description}` : name;
     card.setAttribute('role', 'img');
     card.setAttribute('aria-label', description ? `${name}：${description}` : name);
@@ -364,7 +381,8 @@
       elements['leaderboard-season'].textContent = leaderboard.season?.id ? '現在のシーズン' : '準備中';
       const list = elements['leaderboard-list']; list.replaceChildren();
       if (!leaderboard.entries?.length) {
-        const empty = document.createElement('p'); empty.className = 'history-empty'; empty.textContent = 'ランキング掲載条件（50局）を満たすプロフィールはまだありません。'; list.append(empty); return;
+        const threshold = Number.isSafeInteger(leaderboard.eligibilityGames) ? leaderboard.eligibilityGames : 10;
+        const empty = document.createElement('p'); empty.className = 'history-empty'; empty.textContent = `掲載条件（${threshold}局）を満たし、表示を許可したプロフィールはまだありません。`; list.append(empty); return;
       }
       leaderboard.entries.forEach((entry) => {
         const row = document.createElement('article'); row.className = 'leaderboard-row';
@@ -437,6 +455,25 @@
     }
     try { const result = await api('/api/profile', { method: 'PATCH', body: { handle }, stateChanging: true }); renderProfile(result.profile); setHandleFeedback(''); setMessage('公開ハンドルを変更しました。', { kind: 'success', durationMs: 4_000 }); } catch (error) { setErrorMessage(error); }
   }
+  async function updateLeaderboardVisibility() {
+    if (!state.profile || state.visibilityUpdatePending) return;
+    const previous = state.profile.leaderboardVisible !== false;
+    const leaderboardVisible = elements['ranked-leaderboard-visible'].checked;
+    state.visibilityUpdatePending = true;
+    renderProfile(state.profile);
+    try {
+      const result = await api('/api/profile', { method: 'PATCH', body: { leaderboardVisible }, stateChanging: true });
+      renderProfile(result.profile);
+      await refreshLeaderboard();
+      setMessage(leaderboardVisible ? '公式ランキングへの表示をオンにしました。' : '公式ランキングから非公開にしました。', { kind: 'success', durationMs: 4_500 });
+    } catch (error) {
+      elements['ranked-leaderboard-visible'].checked = previous;
+      setErrorMessage(error);
+    } finally {
+      state.visibilityUpdatePending = false;
+      if (state.profile) renderProfile(state.profile);
+    }
+  }
   async function logout() {
     try { await api('/api/auth/logout', { method: 'POST', body: {}, stateChanging: true }); window.location.assign('/ranked'); } catch (error) { setErrorMessage(error); }
   }
@@ -468,6 +505,7 @@
   elements['ranked-forfeit'].addEventListener('click', forfeit);
   elements['ranked-handle-form'].addEventListener('submit', updateHandle);
   elements['ranked-handle-input'].addEventListener('input', () => setHandleFeedback(''));
+  elements['ranked-leaderboard-visible'].addEventListener('change', updateLeaderboardVisibility);
   elements['ranked-logout'].addEventListener('click', logout);
   elements['ranked-message-dismiss'].addEventListener('click', () => setMessage(''));
   window.addEventListener('beforeunload', clearTimer);

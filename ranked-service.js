@@ -20,6 +20,7 @@ const {
   INITIAL_DECISION_EV,
   INITIAL_EV_DENOMINATOR,
   INITIAL_EV_NUMERATOR,
+  LEADERBOARD_ELIGIBILITY_GAMES,
   calculateRating,
   createEmptyRatingProfile,
   effectiveSampleSize,
@@ -535,7 +536,7 @@ class RankedService {
       const rankedProfile = season
         ? (await tx.getRankedProfile(userId, season.id)) || createEmptyRatingProfile()
         : createEmptyRatingProfile();
-      const rank = season && isEligibleForLeaderboard(rankedProfile)
+      const rank = season && profile.leaderboardVisible && isEligibleForLeaderboard(rankedProfile)
         ? await tx.getLeaderboardRank(season.id, userId)
         : null;
       return this.publicProfileSummary(profile, rankedProfile, rank);
@@ -543,37 +544,66 @@ class RankedService {
   }
 
   async updateHandle(userId, handle) {
-    if (typeof handle !== 'string' || !/^[A-Za-z0-9_-]{3,20}$/.test(handle)) {
+    return this.updateProfileSettings(userId, { handle });
+  }
+
+  async updateProfileSettings(userId, changes) {
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+      throw new RankedError(400, 'INVALID_PROFILE_UPDATE', 'Profile update must be an object.');
+    }
+    const allowedFields = new Set(['handle', 'leaderboardVisible']);
+    const fields = Object.keys(changes);
+    if (fields.length === 0 || fields.some((field) => !allowedFields.has(field))) {
+      throw new RankedError(400, 'INVALID_PROFILE_UPDATE', 'Profile update contains unsupported fields.');
+    }
+    const updatesHandle = Object.hasOwn(changes, 'handle');
+    const updatesVisibility = Object.hasOwn(changes, 'leaderboardVisible');
+    if (updatesHandle && (typeof changes.handle !== 'string' || !/^[A-Za-z0-9_-]{3,20}$/.test(changes.handle))) {
       throw new RankedError(400, 'INVALID_HANDLE', 'Handle must be 3–20 ASCII letters, numbers, _ or -.');
     }
-    const normalizedHandle = handle.toLowerCase();
+    if (updatesVisibility && typeof changes.leaderboardVisible !== 'boolean') {
+      throw new RankedError(400, 'INVALID_PROFILE_UPDATE', 'leaderboardVisible must be a boolean.');
+    }
+    const normalizedHandle = updatesHandle ? changes.handle.toLowerCase() : null;
     return this.repository.transaction(async (tx) => {
       const profile = await this.assertActiveProfile(tx, userId);
       // The profile row lock makes the cooldown check and update one atomic
-      // operation even when two browser tabs submit different handles.
+      // operation even when two browser tabs submit different settings.
       const lockedProfile = await tx.getProfile(userId, { forUpdate: true }) || profile;
       if (lockedProfile.status !== 'active') {
         throw new RankedError(403, 'PROFILE_UNAVAILABLE', 'This account cannot use Ranked mode.');
       }
       const now = this.nowDate();
-      const unchanged = lockedProfile.normalizedHandle === normalizedHandle;
-      if (!unchanged && lockedProfile.handleChangedAt && now.getTime() - asDate(lockedProfile.handleChangedAt).getTime() < HANDLE_CHANGE_COOLDOWN_MS) {
-        throw new RankedError(429, 'HANDLE_COOLDOWN', 'Handle can only be changed once every 30 days.', {
-          nextChangeAt: dateAfter(lockedProfile.handleChangedAt, HANDLE_CHANGE_COOLDOWN_MS).toISOString()
-        });
-      }
       let updated = lockedProfile;
-      if (!unchanged) {
-        try {
-          updated = await tx.updateHandle(userId, handle, normalizedHandle, now);
-        } catch (error) {
-          if (error?.code === '23505') throw new RankedError(409, 'HANDLE_TAKEN', 'That handle is already in use.');
-          throw error;
+      if (updatesHandle) {
+        const unchanged = lockedProfile.normalizedHandle === normalizedHandle;
+        if (!unchanged && lockedProfile.handleChangedAt && now.getTime() - asDate(lockedProfile.handleChangedAt).getTime() < HANDLE_CHANGE_COOLDOWN_MS) {
+          throw new RankedError(429, 'HANDLE_COOLDOWN', 'Handle can only be changed once every 30 days.', {
+            nextChangeAt: dateAfter(lockedProfile.handleChangedAt, HANDLE_CHANGE_COOLDOWN_MS).toISOString()
+          });
+        }
+        if (!unchanged) {
+          try {
+            updated = await tx.updateHandle(userId, changes.handle, normalizedHandle, now);
+          } catch (error) {
+            if (error?.code === '23505') throw new RankedError(409, 'HANDLE_TAKEN', 'That handle is already in use.');
+            throw error;
+          }
         }
       }
-      const season = await this.ensureCurrentSeasonInTransaction(tx);
-      const rankedProfile = await tx.getOrCreateRankedProfile(userId, season.id, { forUpdate: true });
-      const rank = isEligibleForLeaderboard(rankedProfile)
+
+      if (updatesVisibility && updated.leaderboardVisible !== changes.leaderboardVisible) {
+        updated = await tx.updateLeaderboardVisibility(userId, changes.leaderboardVisible);
+        // A public cache must be invalidated as soon as visibility changes so
+        // an opt-out does not remain listed for its cache lifetime.
+        this.clearLeaderboardCache();
+      }
+
+      const season = await tx.getActiveSeason();
+      const rankedProfile = season
+        ? (await tx.getRankedProfile(userId, season.id, { forUpdate: true })) || createEmptyRatingProfile()
+        : createEmptyRatingProfile();
+      const rank = season && updated.leaderboardVisible && isEligibleForLeaderboard(rankedProfile)
         ? await tx.getLeaderboardRank(season.id, userId)
         : null;
       return this.publicProfileSummary(updated, rankedProfile, rank);
@@ -586,6 +616,9 @@ class RankedService {
       publicId: profile.publicId,
       handle: profile.handle,
       status: profile.status,
+      leaderboardVisible: profile.leaderboardVisible !== false,
+      leaderboardEligible: eligible,
+      leaderboardThreshold: LEADERBOARD_ELIGIBILITY_GAMES,
       ratedGames: rankedProfile.ratedGames,
       wins: rankedProfile.wins,
       draws: rankedProfile.draws,
@@ -594,8 +627,8 @@ class RankedService {
       decisionEv: rankedProfile.decisionEv,
       rating: rankedProfile.rating,
       provisional: !eligible,
-      provisionalProgress: Math.min(50, rankedProfile.ratedGames),
-      rank: eligible ? rank : null,
+      provisionalProgress: Math.min(LEADERBOARD_ELIGIBILITY_GAMES, rankedProfile.ratedGames),
+      rank: eligible && profile.leaderboardVisible !== false ? rank : null,
       effectiveSampleSize: effectiveSampleSize(rankedProfile),
       standardError: standardError(rankedProfile)
     };
@@ -620,7 +653,11 @@ class RankedService {
   async getLeaderboard({ limit = 25, offset = 0 } = {}) {
     const safeLimit = Number.isSafeInteger(limit) ? Math.min(Math.max(limit, 1), 100) : 25;
     const safeOffset = Number.isSafeInteger(offset) ? Math.min(Math.max(offset, 0), 10_000) : 0;
-    const key = `${safeLimit}:${safeOffset}`;
+    // Include the visibility/cache generation in the in-flight key.  Without
+    // this, a read that started just before a player opts out could be reused
+    // by a read that starts after the opt-out.
+    const cacheVersion = this.leaderboardCacheVersion;
+    const key = `${cacheVersion}:${safeLimit}:${safeOffset}`;
     const now = this.nowDate().getTime();
     this.pruneLeaderboardCache(now);
     const cached = this.leaderboardCache.get(key);
@@ -628,7 +665,6 @@ class RankedService {
     const inFlight = this.leaderboardInFlight.get(key);
     if (inFlight) return inFlight;
 
-    const cacheVersion = this.leaderboardCacheVersion;
     const query = this.repository.transaction(async (tx) => {
       const season = await tx.getActiveSeason();
       const leaderboard = season
@@ -643,6 +679,7 @@ class RankedService {
           ratingVersion: season.ratingVersion
         } : null,
         pagination: { limit: safeLimit, offset: safeOffset, total: leaderboard.total },
+        eligibilityGames: LEADERBOARD_ELIGIBILITY_GAMES,
         entries: leaderboard.entries.map((entry) => ({
           rank: entry.rank,
           publicId: entry.publicId,
