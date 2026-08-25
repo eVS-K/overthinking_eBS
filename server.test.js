@@ -219,7 +219,7 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
   assert.equal(rankedUi.status, 200);
   assert.match(await rankedUi.text(), /HANDLE_PATTERN/);
   const legacyHtml = await legacyIndex.text();
-  assert.match(legacyHtml, /page-redirect\.js/);
+  assert.match(legacyHtml, /page-redirect\.js\?v=security-v3/);
   assert.match(legacyHtml, /Content-Security-Policy/);
   assert.match(legacyHtml, /socket-loader\.js/);
   assert.equal(socketLoader.status, 200);
