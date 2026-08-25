@@ -74,6 +74,8 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /window\.fetch\(healthUrl/);
   assert.match(redirect, /credentials: 'omit'/);
+  assert.match(redirect, /startup-preview/);
+  assert.match(redirect, /起動待ち画面の表示プレビューです/);
 });
 
 test('チャットとゲーム案内には個人情報・差別的表現の注意、および通信中断の案内を明示する', () => {

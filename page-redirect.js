@@ -21,6 +21,18 @@
   window.__overthinkingLegacyStartup = true;
   document.documentElement.classList.add('legacy-startup-pending');
 
+  // A read-only preview makes this otherwise short-lived screen inspectable
+  // without intentionally letting the production service fall asleep.
+  if (current.searchParams.get('startup-preview') === '1') {
+    const showPreview = () => setStatus('起動待ち画面の表示プレビューです。');
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', showPreview, { once: true });
+    } else {
+      showPreview();
+    }
+    return;
+  }
+
   const target = new URL('https://overthinking-ebs.onrender.com/');
   target.search = current.search;
   target.hash = current.hash;
