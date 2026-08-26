@@ -66,16 +66,45 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v12/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v12/);
+  assert.match(html, /style\.css\?v=pvp-v13/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v13/);
+  assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v12/);
+  assert.match(loader, /main\.js\?v=pvp-v13/);
   assert.match(loader, /__overthinkingLegacyStartup/);
-  assert.match(redirect, /window\.fetch\(healthUrl/);
-  assert.match(redirect, /credentials: 'omit'/);
+  assert.match(redirect, /play\.html/);
+  assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
   assert.match(redirect, /startup-preview/);
   assert.match(redirect, /起動待ち画面の表示プレビューです/);
+  const gatewayHtml = read('play.html');
+  const gatewayScript = read('play-gateway.js');
+  assert.match(gatewayHtml, /対戦サーバーを起動しています/);
+  assert.match(gatewayScript, /window\.fetch\(healthUrl/);
+  assert.match(gatewayScript, /credentials: 'omit'/);
+});
+
+test('観戦中は空席参加予約の順番を部屋内で変更でき、席と勝敗の色・名前を対応させる', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const server = read('server.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="spectator-seat-panel"/);
+  assert.match(html, /id="spectator-auto-join-toggle"/);
+  assert.match(html, /id="spectator-seat-queue"/);
+  assert.match(client, /function renderSpectatorSeatPanel\(/);
+  assert.match(client, /set_spectator_auto_join/);
+  assert.match(client, /getSeatOwnerLabel\(currentRoom, 'p1'/);
+  assert.match(client, /getSeatOwnerLabel\(currentRoom, 'p2'/);
+  assert.match(client, /観戦者 \$\{roomView\.spectatorCount\}人/);
+  assert.match(server, /function getSpectatorSeatQueue\(/);
+  assert.match(server, /function normalizePlayerSeats\(/);
+  assert.match(server, /socket\.on\('set_spectator_auto_join'/);
+  assert.match(css, /\.reveal-card\.reveal-spade/);
+  assert.match(css, /\.reveal-card\.reveal-heart/);
+  assert.match(css, /\.history-item\.winner-p1/);
+  assert.match(css, /\.history-item\.winner-p2/);
 });
 
 test('チャットとゲーム案内には個人情報・差別的表現の注意、および通信中断の案内を明示する', () => {

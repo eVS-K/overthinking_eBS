@@ -21,6 +21,11 @@
   window.__overthinkingLegacyStartup = true;
   document.documentElement.classList.add('legacy-startup-pending');
 
+  function setStatus(message) {
+    const status = document.getElementById('legacy-startup-status');
+    if (status) status.textContent = message;
+  }
+
   // A read-only preview makes this otherwise short-lived screen inspectable
   // without intentionally letting the production service fall asleep.
   if (current.searchParams.get('startup-preview') === '1') {
@@ -33,48 +38,11 @@
     return;
   }
 
-  const target = new URL('https://overthinking-ebs.onrender.com/');
-  target.search = current.search;
-  target.hash = current.hash;
-  const healthUrl = new URL('/health', target.origin);
-  healthUrl.searchParams.set('legacyStartup', '1');
-
-  function setStatus(message) {
-    const status = document.getElementById('legacy-startup-status');
-    if (status) status.textContent = message;
-  }
-
-  async function waitForBackend() {
-    let attempts = 0;
-    while (true) {
-      attempts += 1;
-      const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 15_000);
-      try {
-        const response = await window.fetch(healthUrl, {
-          cache: 'no-store',
-          credentials: 'omit',
-          mode: 'cors',
-          signal: controller.signal
-        });
-        if (response.ok) {
-          window.location.replace(target.toString());
-          return;
-        }
-      } catch {
-        // The first request wakes a sleeping Render service. Retry quietly;
-        // the visible page remains static and does not need the backend.
-      } finally {
-        window.clearTimeout(timeout);
-      }
-      setStatus(attempts >= 2 ? 'サーバーを準備しています。もう少しお待ちください…' : 'サーバーへ接続しています…');
-      await new Promise((resolve) => window.setTimeout(resolve, 3_000));
-    }
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', waitForBackend, { once: true });
-  } else {
-    waitForBackend();
-  }
+  // The root Page used to own the probe itself. A narrow standalone gateway
+  // has no game bundle, socket loader, or hidden screen state, so it remains
+  // visibly available during a Render cold start even on cached deployments.
+  const gateway = new URL('play.html', current.href);
+  gateway.search = current.search;
+  gateway.hash = current.hash;
+  window.location.replace(gateway.toString());
 })();

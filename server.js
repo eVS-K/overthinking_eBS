@@ -195,7 +195,7 @@ app.use((request, response, next) => {
 });
 
 app.get('/', (_request, response) => response.sendFile(path.join(__dirname, 'index.html')));
-app.get(['/index.html', '/main.js', '/oauth-recovery.js', '/socket-loader.js', '/page-redirect.js', '/style.css'], (request, response) => {
+app.get(['/index.html', '/main.js', '/oauth-recovery.js', '/socket-loader.js', '/page-redirect.js', '/style.css', '/play.html', '/play-gateway.js', '/play-gateway.css'], (request, response) => {
   response.sendFile(path.join(__dirname, request.path));
 });
 // Ranked/Auth lives on the backend origin so the opaque session cookie is never
@@ -269,10 +269,67 @@ function createPlayer({ id, clientId, name }, seatIndex) {
   };
 }
 
+// A departing first-seat player used to leave the second player carrying the
+// heart suit. The next promoted spectator then also received a heart, which
+// made spectator views lose the spade side. Seats are defined by the current
+// player order after every safe room reset, never by a stale previous index.
+function normalizePlayerSeats(room) {
+  if (!room?.players) return;
+  room.players.forEach((player, seatIndex) => {
+    player.suit = seatIndex === 0 ? '♠' : '♥';
+  });
+}
+
+function getQueuedSpectators(room) {
+  return (room?.spectators || [])
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(({ candidate }) => candidate.autoJoinWhenSeatAvailable === true)
+    .sort((left, right) => {
+      const leftOrder = Number.isSafeInteger(left.candidate.seatQueueOrder) && left.candidate.seatQueueOrder > 0
+        ? left.candidate.seatQueueOrder : left.index + 1;
+      const rightOrder = Number.isSafeInteger(right.candidate.seatQueueOrder) && right.candidate.seatQueueOrder > 0
+        ? right.candidate.seatQueueOrder : right.index + 1;
+      return leftOrder - rightOrder || left.index - right.index;
+    })
+    .map(({ candidate }) => candidate);
+}
+
+function getSpectatorSeatQueue(room, spectator) {
+  const volunteers = getQueuedSpectators(room);
+  const position = spectator?.autoJoinWhenSeatAvailable === true
+    ? volunteers.findIndex((candidate) => candidate.id === spectator.id) + 1
+    : 0;
+  return {
+    position: position > 0 ? position : null,
+    length: volunteers.length
+  };
+}
+
+function reserveSpectatorSeat(room) {
+  room.nextSpectatorSeatOrder = Number.isSafeInteger(room.nextSpectatorSeatOrder)
+    ? room.nextSpectatorSeatOrder + 1
+    : 1;
+  return room.nextSpectatorSeatOrder;
+}
+
+function setSpectatorAutoJoin(room, spectator, enabled) {
+  if (!spectator) return false;
+  const willAutoJoin = enabled === true;
+  if (willAutoJoin && spectator.autoJoinWhenSeatAvailable !== true) {
+    spectator.seatQueueOrder = reserveSpectatorSeat(room);
+  } else if (!willAutoJoin) {
+    spectator.seatQueueOrder = 0;
+  }
+  spectator.autoJoinWhenSeatAvailable = willAutoJoin;
+  return true;
+}
+
 function promoteVolunteerSpectators(room, getSocketById = (socketId) => io.sockets.sockets.get(socketId)) {
   let promoted = 0;
   while (room.players.length < 2) {
-    const spectatorIndex = room.spectators.findIndex((spectator) => spectator.autoJoinWhenSeatAvailable === true);
+    const seatQueue = getQueuedSpectators(room);
+    const nextSpectator = seatQueue[0];
+    const spectatorIndex = nextSpectator ? room.spectators.indexOf(nextSpectator) : -1;
     if (spectatorIndex < 0) break;
     const spectator = room.spectators[spectatorIndex];
     const spectatorSocket = getSocketById(spectator.id);
@@ -283,6 +340,7 @@ function promoteVolunteerSpectators(room, getSocketById = (socketId) => io.socke
     room.players.push(createPlayer(spectator, room.players.length));
     promoted += 1;
   }
+  normalizePlayerSeats(room);
   return promoted;
 }
 
@@ -320,7 +378,8 @@ function createRoom(id, { matchType = 'private', allowedRandomClientIds = [], cr
     chat: [],
     chatUsage: new Map(),
     chatIpUsage: new Map(),
-    chatSequence: 0
+    chatSequence: 0,
+    nextSpectatorSeatOrder: 0
   };
 }
 
@@ -500,6 +559,7 @@ function createRoomView(room, socketId) {
   const spectator = room.spectators.find((candidate) => candidate.id === socketId);
   const isSpectator = Boolean(spectator);
   const startAgreements = room.startAgreements || new Set();
+  const spectatorSeatQueue = getSpectatorSeatQueue(room, spectator);
 
   return {
     id: room.id,
@@ -527,7 +587,9 @@ function createRoomView(room, socketId) {
       isSpectator,
       hasConfirmedSelection: Boolean(player && room.selections[player.id]),
       hasAgreedToStart: Boolean(player && startAgreements.has(player.clientId)),
-      autoJoinWhenSeatAvailable: Boolean(spectator?.autoJoinWhenSeatAvailable)
+      autoJoinWhenSeatAvailable: Boolean(spectator?.autoJoinWhenSeatAvailable),
+      seatQueuePosition: spectatorSeatQueue.position,
+      seatQueueLength: spectatorSeatQueue.length
     }
   };
 }
@@ -1098,7 +1160,8 @@ function resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators = false
       id: departingPlayer.id,
       clientId: departingPlayer.clientId,
       name: departingPlayer.name,
-      autoJoinWhenSeatAvailable: false
+      autoJoinWhenSeatAvailable: false,
+      seatQueueOrder: 0
     });
   }
 
@@ -1237,21 +1300,25 @@ io.on('connection', (socket) => {
       returningSpectator.id = socket.id;
       returningSpectator.name = playerName;
       if (joinPreferences.joinAsSpectator) {
-        returningSpectator.autoJoinWhenSeatAvailable = joinPreferences.autoJoinWhenSeatAvailable;
+        setSpectatorAutoJoin(room, returningSpectator, joinPreferences.autoJoinWhenSeatAvailable);
       }
       const previousSocket = io.sockets.sockets.get(previousSocketId);
       if (previousSocket && previousSocketId !== socket.id) previousSocket.disconnect(true);
     } else if (!joinPreferences.joinAsSpectator) {
       room.players.push(createPlayer({ id: socket.id, clientId, name: playerName }, room.players.length));
     } else {
-      room.spectators.push({
+      const spectator = {
         id: socket.id,
         clientId,
         name: playerName,
-        autoJoinWhenSeatAvailable: joinPreferences.autoJoinWhenSeatAvailable
-      });
+        autoJoinWhenSeatAvailable: false,
+        seatQueueOrder: 0
+      };
+      setSpectatorAutoJoin(room, spectator, joinPreferences.autoJoinWhenSeatAvailable);
+      room.spectators.push(spectator);
     }
 
+    normalizePlayerSeats(room);
     refreshPrivateRoomIdleExpiry(room);
     broadcastRoom(room);
     emitChatState(socket, room, clientId);
@@ -1433,6 +1500,21 @@ io.on('connection', (socket) => {
     broadcastRoom(room);
   });
 
+  socket.on('set_spectator_auto_join', (payload = {}) => {
+    const room = getBoundRoom(socket, payload.roomId);
+    if (!room || room.matchType !== 'private') return;
+    const spectator = room.spectators.find((candidate) => candidate.id === socket.id);
+    // Role changes are server-authoritative: only the viewer's own spectator
+    // entry may be changed, and a truthy string never becomes consent.
+    if (!spectator) return;
+    setSpectatorAutoJoin(room, spectator, payload.enabled === true);
+    // If a seat is already open, respect the ordered volunteer list now. This
+    // also recovers gracefully from a reconnection that happened mid-change.
+    promoteVolunteerSpectators(room);
+    refreshPrivateRoomIdleExpiry(room);
+    broadcastRoom(room);
+  });
+
   socket.on('switch_to_spectator', (payload = {}) => {
     const room = getBoundRoom(socket, payload.roomId);
     if (!room) return;
@@ -1521,6 +1603,7 @@ module.exports = {
   normalizeJoinPreferences,
   processTurn,
   promoteVolunteerSpectators,
+  setSpectatorAutoJoin,
   startWhenBothPlayersAgree,
   rankedDeadlineSweeper,
   rankedRuntime

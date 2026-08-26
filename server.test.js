@@ -18,6 +18,7 @@ const {
   normalizeJoinPreferences,
   processTurn,
   promoteVolunteerSpectators,
+  setSpectatorAutoJoin,
   startWhenBothPlayersAgree
 } = require('./server');
 
@@ -86,24 +87,69 @@ test('Private PvPの待機・終了ルームだけがアイドル期限の対象
   assert.ok(PRIVATE_ROOM_IDLE_TTL_MS >= 60_000);
 });
 
-test('観戦者には常に両者の手札を渡し、希望していない観戦者を空席へ昇格させない', () => {
+test('観戦者には常に両者の手札を渡し、空席参加予約を順番どおりに扱う', () => {
   const room = createRoom('spectator-view');
   room.players = [
     { id: 'p1', clientId: 'p1-client', name: '♠側', suit: '♠', hand: [{ id: 'ace' }], score: 2, connected: true },
     { id: 'p2', clientId: 'p2-client', name: '♥側', suit: '♥', hand: [{ id: 'king' }], score: 3, connected: true }
   ];
-  room.spectators = [{ id: 'viewer', clientId: 'viewer-client', name: '観戦者', autoJoinWhenSeatAvailable: false }];
+  room.spectators = [
+    { id: 'viewer', clientId: 'viewer-client', name: '観戦者', autoJoinWhenSeatAvailable: false },
+    { id: 'first-volunteer', clientId: 'first-volunteer-client', name: '先着希望者', autoJoinWhenSeatAvailable: true },
+    { id: 'second-volunteer', clientId: 'second-volunteer-client', name: '次の希望者', autoJoinWhenSeatAvailable: true }
+  ];
   const view = createRoomView(room, 'viewer');
   assert.equal(view.viewer.isSpectator, true);
   assert.equal(view.viewer.autoJoinWhenSeatAvailable, false);
+  assert.equal(view.viewer.seatQueuePosition, null);
+  assert.equal(view.viewer.seatQueueLength, 2);
   assert.deepEqual(view.players.map((player) => player.hand[0].id), ['ace', 'king']);
 
+  const secondVolunteerView = createRoomView(room, 'second-volunteer');
+  assert.equal(secondVolunteerView.viewer.seatQueuePosition, 2);
+  assert.equal(secondVolunteerView.viewer.seatQueueLength, 2);
+
   room.players.pop();
-  room.spectators.push({ id: 'volunteer', clientId: 'volunteer-client', name: '希望者', autoJoinWhenSeatAvailable: true });
-  const promoted = promoteVolunteerSpectators(room, (socketId) => socketId === 'volunteer' ? {} : null);
+  const promoted = promoteVolunteerSpectators(room, (socketId) => socketId === 'first-volunteer' ? {} : null);
   assert.equal(promoted, 1);
-  assert.equal(room.players[1].id, 'volunteer');
-  assert.deepEqual(room.spectators.map((spectator) => spectator.id), ['viewer']);
+  assert.equal(room.players[1].id, 'first-volunteer');
+  assert.deepEqual(room.spectators.map((spectator) => spectator.id), ['viewer', 'second-volunteer']);
+});
+
+test('観戦者は部屋内で参加予約をいつでも変更でき、再予約は列の最後尾になる', () => {
+  const room = createRoom('spectator-queue-order');
+  const first = { id: 'first', clientId: 'first-client', name: '先着', autoJoinWhenSeatAvailable: false, seatQueueOrder: 0 };
+  const second = { id: 'second', clientId: 'second-client', name: '次点', autoJoinWhenSeatAvailable: false, seatQueueOrder: 0 };
+  room.spectators = [first, second];
+
+  setSpectatorAutoJoin(room, second, true);
+  setSpectatorAutoJoin(room, first, true);
+  assert.equal(createRoomView(room, 'second').viewer.seatQueuePosition, 1);
+  assert.equal(createRoomView(room, 'first').viewer.seatQueuePosition, 2);
+
+  setSpectatorAutoJoin(room, second, false);
+  assert.equal(createRoomView(room, 'first').viewer.seatQueuePosition, 1);
+  assert.equal(createRoomView(room, 'second').viewer.seatQueuePosition, null);
+
+  setSpectatorAutoJoin(room, second, true);
+  assert.equal(createRoomView(room, 'first').viewer.seatQueuePosition, 1);
+  assert.equal(createRoomView(room, 'second').viewer.seatQueuePosition, 2);
+});
+
+test('♠側の退出後に観戦者が昇格しても、両席のスートは必ず♠・♥になる', () => {
+  const room = createRoom('spectator-seat-integrity');
+  room.players = [
+    { id: 'heart-player', clientId: 'heart-client', name: '残った人', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.spectators = [
+    { id: 'volunteer', clientId: 'volunteer-client', name: '昇格する人', autoJoinWhenSeatAvailable: true }
+  ];
+
+  assert.equal(promoteVolunteerSpectators(room, () => ({})), 1);
+  assert.deepEqual(room.players.map((player) => player.name), ['残った人', '昇格する人']);
+  assert.deepEqual(room.players.map((player) => player.suit), ['♠', '♥']);
+  const observerView = createRoomView(room, 'not-a-member');
+  assert.deepEqual(observerView.players.map((player) => player.suit), ['♠', '♥']);
 });
 
 test('降参は対局を一度だけ終了し、相手を勝者として確定する', () => {
@@ -191,7 +237,7 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
   const port = await start(localServer);
   t.after(() => new Promise((resolve) => localServer.close(resolve)));
 
-  const [health, healthFromPages, ready, ranked, rankedUi, legacyIndex, oauthRecovery, socketLoader, pageRedirect] = await Promise.all([
+  const [health, healthFromPages, ready, ranked, rankedUi, legacyIndex, oauthRecovery, socketLoader, pageRedirect, playGateway, playGatewayScript] = await Promise.all([
     fetch(`http://127.0.0.1:${port}/health`),
     fetch(`http://127.0.0.1:${port}/health`, { headers: { Origin: 'https://evs-k.github.io' } }),
     fetch(`http://127.0.0.1:${port}/readyz`),
@@ -200,7 +246,9 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
     fetch(`http://127.0.0.1:${port}/`),
     fetch(`http://127.0.0.1:${port}/oauth-recovery.js`),
     fetch(`http://127.0.0.1:${port}/socket-loader.js`),
-    fetch(`http://127.0.0.1:${port}/page-redirect.js`)
+    fetch(`http://127.0.0.1:${port}/page-redirect.js`),
+    fetch(`http://127.0.0.1:${port}/play.html`),
+    fetch(`http://127.0.0.1:${port}/play-gateway.js`)
   ]);
   assert.equal(health.status, 200);
   assert.equal((await health.json()).status, 'ok');
@@ -219,7 +267,7 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
   assert.equal(rankedUi.status, 200);
   assert.match(await rankedUi.text(), /HANDLE_PATTERN/);
   const legacyHtml = await legacyIndex.text();
-  assert.match(legacyHtml, /page-redirect\.js\?v=security-v3/);
+  assert.match(legacyHtml, /page-redirect\.js\?v=security-v4/);
   assert.match(legacyHtml, /Content-Security-Policy/);
   assert.match(legacyHtml, /socket-loader\.js/);
   assert.equal(socketLoader.status, 200);
@@ -229,8 +277,12 @@ test('legacy applicationはRanked未設定でも起動し、Ranked入口を安�
   assert.doesNotMatch(legacyHtml, /cdn\.socket\.io/);
   assert.equal(pageRedirect.status, 200);
   const redirectScript = await pageRedirect.text();
-  assert.match(redirectScript, /window\.fetch\(healthUrl/);
+  assert.match(redirectScript, /play\.html/);
   assert.match(redirectScript, /window\.location\.replace/);
+  assert.equal(playGateway.status, 200);
+  assert.match(await playGateway.text(), /対戦サーバーを起動しています/);
+  assert.equal(playGatewayScript.status, 200);
+  assert.match(await playGatewayScript.text(), /window\.fetch\(healthUrl/);
   assert.equal(oauthRecovery.status, 200);
   assert.match(await oauthRecovery.text(), /HttpOnly transaction cookie/);
 });

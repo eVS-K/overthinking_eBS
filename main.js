@@ -102,6 +102,9 @@ const elements = {
   restartButton: document.getElementById('restartBtn'),
   nextRandomButton: document.getElementById('nextRandomBtn'),
   switchSpectatorButton: document.getElementById('switchSpectatorBtn'),
+  spectatorSeatPanel: document.getElementById('spectator-seat-panel'),
+  spectatorAutoJoinToggle: document.getElementById('spectator-auto-join-toggle'),
+  spectatorSeatQueue: document.getElementById('spectator-seat-queue'),
   history: document.getElementById('history-list'),
   spectatorCount: document.getElementById('spectator-count'),
   chatList: document.getElementById('chat-list'),
@@ -335,6 +338,12 @@ function getRoundWinnerSeat(room, round) {
 
 function getSeatDisplayName(room, seat, fallback = '対戦相手') {
   return getPlayerForSeat(room, seat)?.name || fallback;
+}
+
+function getSeatOwnerLabel(room, seat, fallback = '対戦者') {
+  const suit = seat === 'p1' ? '♠' : seat === 'p2' ? '♥' : '';
+  const name = getSeatDisplayName(room, seat, fallback);
+  return suit ? `${suit} ${name}` : name;
 }
 
 function setLoginMessage(message = '') {
@@ -621,7 +630,7 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
       : getUniqueNameSeat(currentRoom, finishReason.forfeitedBy);
     const winnerSeat = getWinnerSeat(currentRoom);
     const outcomeClass = isSpectator
-      ? 'draw'
+      ? winnerSeat === 'p1' ? 'spade' : winnerSeat === 'p2' ? 'heart' : 'draw'
       : forfeitedSeat && forfeitedSeat === viewerSeat ? 'loss'
         : winnerSeat && winnerSeat === viewerSeat ? 'win' : 'draw';
     elements.revealArea.className = `reveal-area outcome-${outcomeClass} reveal-forfeit${isNewResult ? ' reveal-new' : ''}`;
@@ -663,7 +672,11 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   const viewerSeat = getViewerSeat(currentRoom);
   const roundWinnerName = getSeatDisplayName(currentRoom, roundWinnerSeat, lastRound.winner || '対戦者');
   const isMyWin = Boolean(me && !isDraw && viewerSeat === roundWinnerSeat);
-  const outcomeClass = isDraw ? 'draw' : isMyWin ? 'win' : me ? 'loss' : 'win';
+  const outcomeClass = isDraw
+    ? 'draw'
+    : currentRoom?.viewer?.isSpectator
+      ? roundWinnerSeat === 'p1' ? 'spade' : 'heart'
+      : isMyWin ? 'win' : me ? 'loss' : 'win';
   elements.revealArea.className = `reveal-area outcome-${outcomeClass}${isNewRound ? ' reveal-new' : ''}`;
 
   const result = document.createElement('div');
@@ -686,12 +699,12 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   outcome.append(outcomeLabel, outcomeTitle, outcomeDetail);
 
   const firstOwner = currentRoom?.viewer?.isSpectator
-    ? 'プレイヤー1'
+    ? getSeatOwnerLabel(currentRoom, 'p1', '♠側')
     : firstPlayer?.id === socket?.id ? 'あなた' : '相手';
   const secondOwner = currentRoom?.viewer?.isSpectator
-    ? 'プレイヤー2'
+    ? getSeatOwnerLabel(currentRoom, 'p2', '♥側')
     : firstOwner === 'あなた' ? '相手' : 'あなた';
-  const first = createRevealCard(lastRound.p1Card, firstOwner);
+  const first = createRevealCard(lastRound.p1Card, firstOwner, 'p1');
   first.classList.add('left');
   const versus = document.createElement('div');
   versus.className = 'reveal-versus';
@@ -703,7 +716,7 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     ? '引き分け · 持ち越し +2'
     : `獲得 ${awardText}`;
   versus.append(versusMark, winner);
-  const second = createRevealCard(lastRound.p2Card, secondOwner);
+  const second = createRevealCard(lastRound.p2Card, secondOwner, 'p2');
   second.classList.add('right');
   result.append(outcome, first, versus, second);
   elements.revealArea.replaceChildren(result);
@@ -734,7 +747,10 @@ function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
   const bottomSeat = getSeatForPlayer(room, bottomPlayer);
   const isDraw = !winnerSeat;
   const won = !isDraw && !isSpectator && winnerSeat === bottomSeat;
-  const outcome = isDraw ? 'draw' : isSpectator ? 'spectate' : won ? 'win' : 'loss';
+  const outcome = isDraw
+    ? 'draw'
+    : isSpectator ? winnerSeat === 'p1' ? 'spade' : winnerSeat === 'p2' ? 'heart' : 'spectate'
+      : won ? 'win' : 'loss';
   const finaleId = room.finishReason?.id
     || `completed:${room.round}:${room.winner}:${bottomPlayer?.score ?? ''}:${topPlayer?.score ?? ''}:${room.lastRound?.id ?? ''}`;
   const isNewFinale = finaleId !== lastFinaleId;
@@ -759,15 +775,19 @@ function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
   const score = document.createElement('div');
   score.className = 'final-scoreline';
   const bottomScore = document.createElement('strong');
+  bottomScore.className = 'final-score-spade';
   bottomScore.textContent = String(bottomPlayer?.score ?? '—');
   const divider = document.createElement('span');
   divider.textContent = '—';
   const topScore = document.createElement('strong');
+  topScore.className = 'final-score-heart';
   topScore.textContent = String(topPlayer?.score ?? '—');
   score.append(bottomScore, divider, topScore);
   const scoreCaption = document.createElement('p');
   scoreCaption.className = 'final-score-caption';
-  scoreCaption.textContent = `${bottomPlayer?.name || 'あなた'} ${bottomPlayer?.score ?? '—'}枚  —  ${topPlayer?.name || '相手'} ${topPlayer?.score ?? '—'}枚`;
+  scoreCaption.textContent = isSpectator
+    ? `${getSeatOwnerLabel(room, 'p1', '♠側')} ${bottomPlayer?.score ?? '—'}枚  —  ${getSeatOwnerLabel(room, 'p2', '♥側')} ${topPlayer?.score ?? '—'}枚`
+    : `${bottomPlayer?.name || 'あなた'} ${bottomPlayer?.score ?? '—'}枚  —  ${topPlayer?.name || '相手'} ${topPlayer?.score ?? '—'}枚`;
   const detail = document.createElement('p');
   detail.className = 'final-result-detail';
   if (room.finishReason?.type === 'forfeit') {
@@ -814,9 +834,9 @@ function playResultEffects(outcomeClass) {
   window.setTimeout(() => elements.gameScreen.classList.remove(`impact-${outcomeClass}`), 720);
 }
 
-function createRevealCard(card, owner) {
+function createRevealCard(card, owner, seat = '') {
   const node = document.createElement('div');
-  node.className = 'reveal-card';
+  node.className = `reveal-card${seat === 'p1' ? ' reveal-spade' : seat === 'p2' ? ' reveal-heart' : ''}`;
   const cardName = document.createElement('strong');
   cardName.textContent = card.name;
   const label = document.createElement('span');
@@ -840,14 +860,16 @@ function renderHistory(history) {
     const isDraw = !winnerSeat;
     const winnerName = getSeatDisplayName(currentRoom, winnerSeat, round.winner || '対戦者');
     const item = document.createElement('article');
-    item.className = `history-item${isDraw ? ' draw' : ''}`;
+    item.className = `history-item${isDraw ? ' draw' : ''}${winnerSeat ? ` winner-${winnerSeat}` : ''}`;
     const number = document.createElement('span');
     number.className = 'history-round';
     number.textContent = `第${round.round}`;
     const detail = document.createElement('div');
     detail.className = 'history-detail';
     const winner = document.createElement('strong');
-    winner.textContent = isDraw ? '引き分け · 持ち越し' : `${winnerName} が獲得`;
+    winner.textContent = isDraw
+      ? '引き分け · 持ち越し'
+      : `${getSeatOwnerLabel(currentRoom, winnerSeat, winnerName)} が獲得`;
     const cards = document.createElement('span');
     cards.textContent = `${round.p1Card.name}  対  ${round.p2Card.name}`;
     detail.append(winner, cards);
@@ -1021,10 +1043,12 @@ function renderStatus(room, me, opponent) {
     return;
   }
   if (room.viewer.isSpectator) {
+    const position = Number.isSafeInteger(room.viewer.seatQueuePosition) ? room.viewer.seatQueuePosition : 0;
+    const length = Number.isSafeInteger(room.viewer.seatQueueLength) ? room.viewer.seatQueueLength : 0;
     setText(
       elements.status,
       room.viewer.autoJoinWhenSeatAvailable
-        ? '観戦中です。空席ができた場合は対戦者として参加します。'
+        ? `観戦中です。空席ができた場合は対戦者として参加します（参加予約 ${position || 1}番目 / ${Math.max(length, 1)}人）。`
         : '観戦中です。両者の手札と勝負の行方を見守れます。'
     );
     return;
@@ -1079,6 +1103,26 @@ function renderStatus(room, me, opponent) {
   }
 }
 
+function renderSpectatorSeatPanel(room) {
+  const canManageSeat = Boolean(room?.viewer?.isSpectator && room.matchType === 'private');
+  elements.spectatorSeatPanel.classList.toggle('hidden', !canManageSeat);
+  if (!canManageSeat) return;
+
+  const enabled = room.viewer.autoJoinWhenSeatAvailable === true;
+  const position = Number.isSafeInteger(room.viewer.seatQueuePosition) ? room.viewer.seatQueuePosition : 0;
+  const length = Number.isSafeInteger(room.viewer.seatQueueLength) ? room.viewer.seatQueueLength : 0;
+  elements.spectatorAutoJoinToggle.checked = enabled;
+  elements.spectatorAutoJoinToggle.disabled = !socket?.connected;
+  setText(
+    elements.spectatorSeatQueue,
+    enabled
+      ? `参加予約中：${position || 1}番目 / ${Math.max(length, 1)}人。空席が出ると順番に参加します。`
+      : length > 0
+        ? `参加予約はオフです。現在 ${length}人が空席参加を予約しています。`
+        : '参加予約はオフです。空席ができても観戦を続けます。'
+  );
+}
+
 function updateConfirmButton() {
   const canConfirm = Boolean(
     currentRoom
@@ -1100,7 +1144,10 @@ function renderRoom(room) {
     viewer: room.viewer || {
       isSpectator: !room.players.some((player) => player.id === socket?.id),
       hasConfirmedSelection: Boolean(room.selections?.[socket?.id]),
-      hasAgreedToStart: false
+      hasAgreedToStart: false,
+      autoJoinWhenSeatAvailable: false,
+      seatQueuePosition: null,
+      seatQueueLength: 0
     }
   };
   randomSearchActive = false;
@@ -1168,9 +1215,9 @@ function renderRoom(room) {
   elements.myZone.setAttribute('aria-label', isSpectator ? '♠側プレイヤーの手札' : 'あなたの手札');
   elements.opponentZone.setAttribute('aria-label', isSpectator ? '♥側プレイヤーの手札' : '対戦相手の手札');
 
-  const spectatorLabel = roomView.spectatorCount ? `観戦 ${roomView.spectatorCount}` : '';
+  const spectatorLabel = `観戦者 ${roomView.spectatorCount}人`;
   setText(elements.spectatorCount, spectatorLabel);
-  elements.spectatorCount.classList.toggle('hidden', !spectatorLabel);
+  elements.spectatorCount.classList.remove('hidden');
   const playerCanAct = !isSpectator && Boolean(me);
   const canSurrender = playerCanAct && ['playing', 'reconnecting'].includes(roomView.gameState);
   const bothPlayersReady = roomView.players.length === 2 && roomView.players.every((player) => player.connected);
@@ -1202,6 +1249,7 @@ function renderRoom(room) {
   elements.homeButton.disabled = nextRandomMatchPending;
   setText(elements.homeButtonLabel, isSpectator ? '観戦をやめる' : 'ホームへ戻る');
 
+  renderSpectatorSeatPanel(roomView);
   renderTimer(roomView);
   renderReveal(roomView.lastRound || roomView.history?.[roomView.history.length - 1], roomView.finishReason, roomView.winner);
   renderHistory(roomView.history);
@@ -1339,6 +1387,21 @@ elements.cancelRandomSearchButton.addEventListener('click', () => {
 elements.spectateModeInput.addEventListener('change', syncSpectatorJoinOptions);
 elements.autoJoinSeatInput.addEventListener('change', () => {
   if (elements.autoJoinSeatInput.disabled) elements.autoJoinSeatInput.checked = false;
+});
+elements.spectatorAutoJoinToggle.addEventListener('change', () => {
+  if (!socket?.connected || !currentRoomId || !currentRoom?.viewer?.isSpectator || currentRoom.matchType !== 'private') {
+    renderSpectatorSeatPanel(currentRoom);
+    return;
+  }
+  const enabled = elements.spectatorAutoJoinToggle.checked === true;
+  const requestedRoomId = currentRoomId;
+  elements.spectatorAutoJoinToggle.disabled = true;
+  socket.emit('set_spectator_auto_join', { roomId: currentRoomId, enabled });
+  window.setTimeout(() => {
+    if (currentRoomId === requestedRoomId && currentRoom?.viewer?.isSpectator) {
+      renderSpectatorSeatPanel(currentRoom);
+    }
+  }, 3_500);
 });
 
 elements.chatInput.addEventListener('input', () => {

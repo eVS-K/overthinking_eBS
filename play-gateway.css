@@ -1,0 +1,14 @@
+:root { color-scheme: dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #090d1a; }
+* { box-sizing: border-box; }
+body { min-width: 0; min-height: 100vh; margin: 0; color: #edf3ff; background: radial-gradient(circle at 10% 0%, rgba(76, 99, 160, .24), transparent 36%), #090d1a; }
+.play-gateway { display: grid; place-items: center; min-height: 100vh; padding: 24px; }
+.play-gateway-panel { display: grid; justify-items: center; width: min(100%, 510px); padding: clamp(28px, 7vw, 54px); border: 1px solid rgba(141, 183, 255, .44); background: linear-gradient(145deg, rgba(30, 40, 72, .94), rgba(12, 17, 34, .97)); box-shadow: 0 24px 60px rgba(0, 0, 0, .36), inset 0 1px 0 rgba(255, 255, 255, .08); text-align: center; }
+.play-gateway-kicker { color: #f2bd69; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-weight: 700; letter-spacing: .2em; }
+.play-gateway h1 { margin: 13px 0 0; color: #f4f7ff; font-family: Georgia, "Times New Roman", serif; font-size: clamp(25px, 6vw, 37px); font-weight: 400; line-height: 1.25; }
+.play-gateway p { margin: 13px 0 0; color: #cbd8ef; font-size: 13px; line-height: 1.8; }
+.play-gateway strong { margin-top: 16px; color: #a9caff; font-size: 13px; }
+.play-gateway small { margin-top: 12px; color: #94a1bc; font-size: 11px; line-height: 1.7; }
+.play-gateway-progress { width: min(100%, 290px); height: 4px; margin-top: 25px; overflow: hidden; background: rgba(141, 183, 255, .16); }
+.play-gateway-progress i { display: block; width: 38%; height: 100%; background: linear-gradient(90deg, transparent, #a9caff, transparent); animation: play-gateway-progress 1.5s ease-in-out infinite; }
+@keyframes play-gateway-progress { from { transform: translateX(-120%); } to { transform: translateX(360%); } }
+@media (prefers-reduced-motion: reduce) { .play-gateway-progress i { animation: none; transform: translateX(82%); } }
