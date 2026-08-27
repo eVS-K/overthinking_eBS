@@ -4,6 +4,14 @@ const path = require('path');
 const crypto = require('crypto');
 const { Server } = require('socket.io');
 const { createInitialHand, resolveRound } = require('./game-rules');
+const {
+  CLASSIC_PRIVATE_RULESET_ID: CLASSIC_RULESET_VERSION,
+  CLASSIC_ROUND_LIMIT,
+  CLASSIC_SCORE_TARGET,
+  PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS,
+  createClassicPrivateRuleset,
+  isSupportedPrivateTurnTimeLimit
+} = require('./private-ruleset');
 const { createFixedWindowLimiter, getClientIp, readPositiveInteger } = require('./security');
 const { MAX_CHAT_MESSAGES_PER_SESSION, appendChatMessage } = require('./chat');
 const { RandomMatchQueue } = require('./matchmaking');
@@ -18,11 +26,6 @@ const TURN_TIME_LIMIT_MS = 90_000;
 // only Phase-1 private-room customization is an explicitly allow-listed turn
 // duration; Random Match and Ranked deliberately continue to use the fixed
 // classic 90 seconds.
-const PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS = Object.freeze([60_000, TURN_TIME_LIMIT_MS, 120_000]);
-const PRIVATE_TURN_TIME_LIMIT_OPTION_SET = new Set(PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS);
-const CLASSIC_RULESET_VERSION = 'classic-v1';
-const CLASSIC_ROUND_LIMIT = 7;
-const CLASSIC_SCORE_TARGET = 9;
 const RECONNECT_GRACE_MS = 30_000;
 const MAX_ROOM_ID_LENGTH = 24;
 const MAX_PLAYER_NAME_LENGTH = 20;
@@ -285,33 +288,14 @@ function createPlayer({ id, clientId, name }, seatIndex) {
 }
 
 function createDefaultPrivateRoomConfig() {
-  return {
-    ruleset: CLASSIC_RULESET_VERSION,
-    turnTimeLimitMs: TURN_TIME_LIMIT_MS,
-    roundLimit: CLASSIC_ROUND_LIMIT,
-    scoreTarget: CLASSIC_SCORE_TARGET,
-    timeoutPolicy: 'random-legal'
-  };
-}
-
-function isSupportedPrivateTurnTimeLimit(value) {
-  return Number.isSafeInteger(value) && PRIVATE_TURN_TIME_LIMIT_OPTION_SET.has(value);
+  return createClassicPrivateRuleset();
 }
 
 function clonePrivateRoomConfig(config) {
-  const turnTimeLimitMs = isSupportedPrivateTurnTimeLimit(config?.turnTimeLimitMs)
-    ? config.turnTimeLimitMs
-    : TURN_TIME_LIMIT_MS;
-  // Do not accept a client-supplied ruleset, score limit, deck, or timeout
-  // policy here. Those are deliberately fixed until the separate expanded
-  // rules engine is designed and audited.
-  return {
-    ruleset: CLASSIC_RULESET_VERSION,
-    turnTimeLimitMs,
-    roundLimit: CLASSIC_ROUND_LIMIT,
-    scoreTarget: CLASSIC_SCORE_TARGET,
-    timeoutPolicy: 'random-legal'
-  };
+  // The module accepts only the allow-listed timer. Client-supplied ruleset,
+  // score, deck, and timeout-policy fields are ignored until a complete
+  // expanded preset exists and has been audited.
+  return createClassicPrivateRuleset(config);
 }
 
 function isPrivateConfigLocked(room) {
