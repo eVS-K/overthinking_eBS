@@ -11,9 +11,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
   <script src="page-redirect.js?v=security-v4"></script>
-  <link rel="stylesheet" href="style.css?v=pvp-v13">
+  <link rel="stylesheet" href="style.css?v=pvp-v16">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v13"></script>
+  <script src="socket-loader.js?v=pvp-v16"></script>
 </head>
 <body>
   <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
@@ -156,7 +156,7 @@
 
         <section class="table-center" aria-label="ラウンド情報">
           <div class="round-dashboard">
-            <div class="round-count"><span>ラウンド</span><strong id="current-round">1</strong><em>/ 7</em></div>
+            <div class="round-count"><span>ラウンド</span><strong id="current-round">1</strong><em id="round-limit">/ 7</em></div>
             <div class="timer-block">
               <div class="timer-text"><span>残り時間</span><strong><span id="timer-count">--</span><small>秒</small></strong></div>
               <div class="timer-track" aria-hidden="true"><i id="timer-progress"></i></div>
@@ -174,6 +174,32 @@
               <input id="spectator-auto-join-toggle" type="checkbox">
               <span><strong>空席ができたら対戦者として参加する</strong><small id="spectator-seat-queue">参加予約はオフです</small></span>
             </label>
+          </section>
+          <section id="room-rules-panel" class="room-rules-panel" aria-labelledby="room-rules-title">
+            <div class="room-rules-heading">
+              <div><span class="section-label" id="room-rules-title">この部屋のルール</span><strong id="room-rules-mode">クラシック</strong></div>
+              <span id="room-rules-state" class="room-rules-state">設定を確認できます</span>
+            </div>
+            <p id="room-rules-summary" class="room-rules-summary">7枚の共通手札で、7ラウンドの読み合いを行います。</p>
+            <details class="room-rules-details">
+              <summary>ルールの詳細を見る</summary>
+              <ul>
+                <li id="room-rules-deck">両者とも A / K / Q / J / Joker / 3 / 2 を1枚ずつ使用します。</li>
+                <li id="room-rules-end">9枚獲得、または最終ラウンド終了時に獲得枚数が多い側の勝ちです。</li>
+                <li id="room-rules-timeout">時間切れ時は、残った手札からサーバーが1枚を選びます。</li>
+              </ul>
+            </details>
+            <div id="private-settings-controls" class="private-settings-controls hidden">
+              <label for="private-turn-time-select">
+                <span>1ラウンドの制限時間</span>
+                <select id="private-turn-time-select" aria-describedby="private-settings-feedback">
+                  <option value="60000">60秒</option>
+                  <option value="90000">90秒（標準）</option>
+                  <option value="120000">120秒</option>
+                </select>
+              </label>
+              <p id="private-settings-feedback" class="private-settings-feedback" role="status">現在の設定担当者は、対局開始前に変更できます。</p>
+            </div>
           </section>
         </section>
 

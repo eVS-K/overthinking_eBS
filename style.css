@@ -405,6 +405,24 @@ input::placeholder { color: #65708b; }
 .spectator-seat-option span { display: grid; gap: 3px; min-width: 0; }
 .spectator-seat-option strong { color: #e1ebff; font-size: 12px; line-height: 1.45; }
 .spectator-seat-option small { color: #aebcd6; font-size: 10px; line-height: 1.55; }
+.room-rules-panel { display: grid; gap: 9px; min-width: 0; margin-top: 11px; padding: 12px; border: 1px solid rgba(180, 202, 253, .3); background: linear-gradient(135deg, rgba(89, 112, 169, .1), rgba(6, 11, 25, .22)); }
+.room-rules-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; min-width: 0; }
+.room-rules-heading > div { display: grid; gap: 3px; min-width: 0; }
+.room-rules-heading .section-label { color: var(--blue-bright); }
+.room-rules-heading strong { color: #e5edff; font-family: var(--serif); font-size: 15px; font-weight: 400; line-height: 1.25; }
+.room-rules-state { flex: 0 0 auto; max-width: 48%; padding: 4px 6px; border: 1px solid var(--line); color: var(--muted); font-family: var(--mono); font-size: 8px; line-height: 1.35; text-align: right; }
+.room-rules-summary { margin: 0; color: #c8d7f0; font-size: 11px; line-height: 1.6; }
+.room-rules-details { min-width: 0; border-top: 1px solid var(--line); color: #b9c8df; font-size: 10px; line-height: 1.6; }
+.room-rules-details summary { padding-top: 8px; color: var(--blue-bright); cursor: pointer; font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+.room-rules-details summary:hover { color: #fff; }
+.room-rules-details ul { display: grid; gap: 5px; margin: 8px 0 0; padding-left: 1.25em; }
+.room-rules-details li { overflow-wrap: anywhere; }
+.private-settings-controls { display: grid; gap: 7px; padding-top: 10px; border-top: 1px solid rgba(242, 189, 105, .28); }
+.private-settings-controls label { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; color: #e5edff; font-size: 11px; font-weight: 700; }
+.private-settings-controls select { flex: 0 0 auto; max-width: 55%; min-height: 32px; padding: 6px 28px 6px 9px; border: 1px solid rgba(242, 189, 105, .58); color: var(--gold-bright); background: #111a31; font-family: var(--mono); font-size: 10px; font-weight: 700; }
+.private-settings-controls select:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
+.private-settings-controls select:disabled { cursor: wait; border-color: var(--line); color: var(--faint); }
+.private-settings-feedback { min-height: 15px; margin: 0; color: #aebcd6; font-size: 9px; line-height: 1.5; }
 
 .sidebar { align-self: stretch; padding: 20px 16px; }
 .sidebar-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
@@ -539,6 +557,14 @@ input::placeholder { color: #65708b; }
   .spectator-seat-panel { gap: 8px; margin-top: 9px; padding: 10px; }
   .spectator-seat-option strong { font-size: 11px; }
   .spectator-seat-option small, .spectator-seat-panel p { font-size: 9px; }
+  .room-rules-panel { gap: 8px; margin-top: 9px; padding: 10px; }
+  .room-rules-heading strong { font-size: 14px; }
+  .room-rules-state { max-width: 51%; font-size: 7px; }
+  .room-rules-summary { font-size: 10px; }
+  .room-rules-details { font-size: 9px; }
+  .private-settings-controls label { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .private-settings-controls select { width: 100%; max-width: none; }
+  .private-settings-feedback { font-size: 9px; }
   .final-result-panel { min-height: 218px; margin-top: 4px; padding: 24px 12px; }
   .final-result-title { font-size: clamp(36px, 11vw, 48px); }
   .final-scoreline { margin-top: 13px; }

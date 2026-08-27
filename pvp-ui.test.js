@@ -66,12 +66,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v13/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v13/);
+  assert.match(html, /style\.css\?v=pvp-v16/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v16/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v13/);
+  assert.match(loader, /main\.js\?v=pvp-v16/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -105,6 +105,31 @@ test('観戦中は空席参加予約の順番を部屋内で変更でき、席�
   assert.match(css, /\.reveal-card\.reveal-heart/);
   assert.match(css, /\.history-item\.winner-p1/);
   assert.match(css, /\.history-item\.winner-p2/);
+});
+
+test('Private対戦のルール概要と制限時間設定は、現在の設定担当者だけが開始前に変更できる', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="room-rules-panel"/);
+  assert.match(html, /id="round-limit"/);
+  assert.match(html, /id="private-turn-time-select"/);
+  assert.match(html, /value="60000">60秒/);
+  assert.match(html, /value="90000">90秒/);
+  assert.match(html, /value="120000">120秒/);
+  assert.match(html, /現在の設定担当者/);
+  assert.match(client, /function getRoomRules\(/);
+  assert.match(client, /function applyPrivateSettingsAcknowledgement\(/);
+  assert.match(client, /let isPending = privateSettingsPending\?\.roomId === room\?\.id;/);
+  assert.match(client, /clearPrivateSettingsPending\(\);\s*privateSettingsFeedback = '設定を反映しました。両者の開始同意はリセットされています。';\s*isPending = false;/);
+  assert.match(client, /function renderRoomRules\(/);
+  assert.match(client, /function isRoomHost\(room\) \{\s*return \(room\?\.viewer\?\.isRoomHost \?\? room\?\.viewer\?\.isHost\)/);
+  assert.match(client, /socket\.emit\('update_private_settings'/);
+  assert.match(client, /room\.matchType === 'random'/);
+  assert.match(client, /\(remainingMs \/ turnTimeLimitMs\) \* 100/);
+  assert.match(css, /\.room-rules-panel\s*\{/);
+  assert.match(css, /\.private-settings-controls\s*\{/);
 });
 
 test('チャットとゲーム案内には個人情報・差別的表現の注意、および通信中断の案内を明示する', () => {

@@ -14,6 +14,15 @@ const app = express();
 const server = http.createServer(app);
 
 const TURN_TIME_LIMIT_MS = 90_000;
+// Classic Guest PvP remains the canonical seven-card, seven-round game.  The
+// only Phase-1 private-room customization is an explicitly allow-listed turn
+// duration; Random Match and Ranked deliberately continue to use the fixed
+// classic 90 seconds.
+const PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS = Object.freeze([60_000, TURN_TIME_LIMIT_MS, 120_000]);
+const PRIVATE_TURN_TIME_LIMIT_OPTION_SET = new Set(PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS);
+const CLASSIC_RULESET_VERSION = 'classic-v1';
+const CLASSIC_ROUND_LIMIT = 7;
+const CLASSIC_SCORE_TARGET = 9;
 const RECONNECT_GRACE_MS = 30_000;
 const MAX_ROOM_ID_LENGTH = 24;
 const MAX_PLAYER_NAME_LENGTH = 20;
@@ -257,6 +266,12 @@ function normalizeJoinPreferences(payload) {
   };
 }
 
+function isPrivateSettingsPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  const supportedFields = new Set(['roomId', 'configRevision', 'turnTimeLimitMs']);
+  return Object.keys(payload).every((key) => supportedFields.has(key));
+}
+
 function createPlayer({ id, clientId, name }, seatIndex) {
   return {
     id,
@@ -266,6 +281,132 @@ function createPlayer({ id, clientId, name }, seatIndex) {
     hand: createInitialHand(),
     score: 0,
     connected: true
+  };
+}
+
+function createDefaultPrivateRoomConfig() {
+  return {
+    ruleset: CLASSIC_RULESET_VERSION,
+    turnTimeLimitMs: TURN_TIME_LIMIT_MS,
+    roundLimit: CLASSIC_ROUND_LIMIT,
+    scoreTarget: CLASSIC_SCORE_TARGET,
+    timeoutPolicy: 'random-legal'
+  };
+}
+
+function isSupportedPrivateTurnTimeLimit(value) {
+  return Number.isSafeInteger(value) && PRIVATE_TURN_TIME_LIMIT_OPTION_SET.has(value);
+}
+
+function clonePrivateRoomConfig(config) {
+  const turnTimeLimitMs = isSupportedPrivateTurnTimeLimit(config?.turnTimeLimitMs)
+    ? config.turnTimeLimitMs
+    : TURN_TIME_LIMIT_MS;
+  // Do not accept a client-supplied ruleset, score limit, deck, or timeout
+  // policy here. Those are deliberately fixed until the separate expanded
+  // rules engine is designed and audited.
+  return {
+    ruleset: CLASSIC_RULESET_VERSION,
+    turnTimeLimitMs,
+    roundLimit: CLASSIC_ROUND_LIMIT,
+    scoreTarget: CLASSIC_SCORE_TARGET,
+    timeoutPolicy: 'random-legal'
+  };
+}
+
+function isPrivateConfigLocked(room) {
+  return Boolean(room && ['playing', 'reconnecting'].includes(room.gameState));
+}
+
+function getRoomPrivateConfig(room) {
+  if (room?.matchType !== 'private') return null;
+  const source = isPrivateConfigLocked(room) && room.activePrivateConfig
+    ? room.activePrivateConfig
+    : room.privateConfig;
+  return clonePrivateRoomConfig(source);
+}
+
+function getRoomTurnTimeLimitMs(room) {
+  // Random Match is intentionally never configurable. Ranked has its own
+  // REST-side timing and does not use these Socket.IO rooms.
+  return room?.matchType === 'private'
+    ? getRoomPrivateConfig(room).turnTimeLimitMs
+    : TURN_TIME_LIMIT_MS;
+}
+
+function getPublicRoomRules(room) {
+  const config = getRoomPrivateConfig(room) || createDefaultPrivateRoomConfig();
+  return {
+    ...config,
+    // Config revisions only apply to private-room setup. It is still safe and
+    // useful to expose a stable zero to legacy/Random clients.
+    configRevision: room?.matchType === 'private' && Number.isSafeInteger(room.configRevision)
+      ? room.configRevision
+      : 0,
+    locked: isPrivateConfigLocked(room)
+  };
+}
+
+function ensurePrivateRoomHost(room) {
+  if (!room || room.matchType !== 'private') return '';
+  const currentHost = room.players.find((player) => player.clientId === room.hostClientId);
+  if (currentHost) return currentHost.clientId;
+  const nextHost = room.players.find((player) => player.connected) || room.players[0];
+  room.hostClientId = nextHost?.clientId || '';
+  return room.hostClientId;
+}
+
+function updatePrivateRoomSettings(room, {
+  clientId,
+  configRevision,
+  turnTimeLimitMs
+} = {}) {
+  if (!room || room.matchType !== 'private') {
+    return { ok: false, message: 'この設定はPrivate PvPでのみ変更できます。' };
+  }
+  if (!['waiting', 'finished'].includes(room.gameState)) {
+    return { ok: false, message: '対局中はルール設定を変更できません。' };
+  }
+  if (!clientId || room.hostClientId !== clientId) {
+    return { ok: false, message: 'ルール設定を変更できるのは、この部屋の現在の設定担当者だけです。' };
+  }
+  if (!Number.isSafeInteger(configRevision) || configRevision !== room.configRevision) {
+    return {
+      ok: false,
+      stale: true,
+      message: '部屋の設定が更新されています。最新の表示を確認してからもう一度お試しください。',
+      configRevision: room.configRevision,
+      settings: getPublicRoomRules(room)
+    };
+  }
+  if (!isSupportedPrivateTurnTimeLimit(turnTimeLimitMs)) {
+    return { ok: false, message: '制限時間は60秒・90秒・120秒から選択してください。' };
+  }
+
+  const currentConfig = getRoomPrivateConfig(room);
+  if (currentConfig.turnTimeLimitMs === turnTimeLimitMs) {
+    return {
+      ok: true,
+      changed: false,
+      configRevision: room.configRevision,
+      settings: getPublicRoomRules(room)
+    };
+  }
+
+  room.privateConfig = clonePrivateRoomConfig({ ...currentConfig, turnTimeLimitMs });
+  // A finished match no longer has a live frozen configuration. Clearing this
+  // snapshot makes the lobby show the next match's selected duration.
+  room.activePrivateConfig = null;
+  room.configRevision += 1;
+  // A choice made under a different rules setup must never silently carry
+  // over. Both players explicitly agree again after every real change.
+  room.startAgreements = new Set();
+
+  return {
+    ok: true,
+    changed: true,
+    configRevision: room.configRevision,
+    settings: getPublicRoomRules(room)
   };
 }
 
@@ -341,13 +482,15 @@ function promoteVolunteerSpectators(room, getSocketById = (socketId) => io.socke
     promoted += 1;
   }
   normalizePlayerSeats(room);
+  ensurePrivateRoomHost(room);
   return promoted;
 }
 
 function createRoom(id, { matchType = 'private', allowedRandomClientIds = [], createdByIp = '' } = {}) {
+  const normalizedMatchType = matchType === 'random' ? 'random' : 'private';
   return {
     id,
-    matchType: matchType === 'random' ? 'random' : 'private',
+    matchType: normalizedMatchType,
     // This value is never sent to a browser. It exists solely to bound how
     // many idle private rooms one network can reserve at a time.
     createdByIp: typeof createdByIp === 'string' ? createdByIp : '',
@@ -379,7 +522,14 @@ function createRoom(id, { matchType = 'private', allowedRandomClientIds = [], cr
     chatUsage: new Map(),
     chatIpUsage: new Map(),
     chatSequence: 0,
-    nextSpectatorSeatOrder: 0
+    nextSpectatorSeatOrder: 0,
+    // Private-only setup is intentionally an allow-listed classic config. A
+    // game receives an immutable snapshot in startNewGame(), while the lobby
+    // keeps the next-game setting and a monotonic revision for stale clients.
+    hostClientId: '',
+    privateConfig: normalizedMatchType === 'private' ? createDefaultPrivateRoomConfig() : null,
+    activePrivateConfig: null,
+    configRevision: normalizedMatchType === 'private' ? 1 : 0
   };
 }
 
@@ -500,7 +650,7 @@ function resetGame(room) {
   room.lastRound = null;
   room.selections = {};
   room.deadline = 0;
-  room.pausedRemainingMs = TURN_TIME_LIMIT_MS;
+  room.pausedRemainingMs = getRoomTurnTimeLimitMs(room);
   room.winner = null;
   room.winnerSeat = null;
   room.finishReason = null;
@@ -512,6 +662,11 @@ function resetGame(room) {
 }
 
 function startNewGame(room) {
+  if (room.matchType === 'private') {
+    // Freeze exactly the vetted lobby setup used for this game. Later Socket
+    // events cannot alter it because settings are rejected while playing.
+    room.activePrivateConfig = clonePrivateRoomConfig(room.privateConfig);
+  }
   resetGame(room);
   room.needsFreshGame = false;
   if (room.players.length === 2 && room.players.every((player) => player.connected)) {
@@ -524,11 +679,13 @@ function startNewGame(room) {
   }
 }
 
-function startTurnTimer(room, durationMs = TURN_TIME_LIMIT_MS) {
+function startTurnTimer(room, durationMs) {
   clearTurnTimer(room.id);
   if (room.gameState !== 'playing' || room.players.length !== 2 || !room.players.every((player) => player.connected)) return;
 
-  const safeDuration = Math.max(0, Math.min(durationMs, TURN_TIME_LIMIT_MS));
+  const turnTimeLimitMs = getRoomTurnTimeLimitMs(room);
+  const requestedDuration = Number.isFinite(durationMs) ? durationMs : turnTimeLimitMs;
+  const safeDuration = Math.max(0, Math.min(Math.floor(requestedDuration), turnTimeLimitMs));
   room.deadline = Date.now() + safeDuration;
   room.pausedRemainingMs = safeDuration;
 
@@ -560,10 +717,18 @@ function createRoomView(room, socketId) {
   const isSpectator = Boolean(spectator);
   const startAgreements = room.startAgreements || new Set();
   const spectatorSeatQueue = getSpectatorSeatQueue(room, spectator);
+  const isRoomHost = Boolean(
+    player
+      && room.matchType === 'private'
+      && player.clientId === room.hostClientId
+  );
 
   return {
     id: room.id,
     matchType: room.matchType,
+    // This is safe public configuration only. It never includes a private
+    // host/client identifier, cards, or any future hidden-rule material.
+    rules: getPublicRoomRules(room),
     players: room.players.map(({ id, name, suit, hand, score, connected }) => ({
       id,
       name,
@@ -585,6 +750,10 @@ function createRoomView(room, socketId) {
     startReadyCount: room.players.filter((candidate) => startAgreements.has(candidate.clientId)).length,
     viewer: {
       isSpectator,
+      isRoomHost,
+      // Keep a small compatibility alias while browser bundles are cached on
+      // GitHub Pages during rollout. Neither field exposes hostClientId.
+      isHost: isRoomHost,
       hasConfirmedSelection: Boolean(player && room.selections[player.id]),
       hasAgreedToStart: Boolean(player && startAgreements.has(player.clientId)),
       autoJoinWhenSeatAvailable: Boolean(spectator?.autoJoinWhenSeatAvailable),
@@ -1011,7 +1180,7 @@ function processTurn(room) {
   // サーバー側でカードを再検証する。状態が壊れても別のカードを消費しない。
   if (firstIndex < 0 || secondIndex < 0) {
     room.selections = {};
-    startTurnTimer(room, TURN_TIME_LIMIT_MS);
+    startTurnTimer(room);
     broadcastRoom(room);
     return;
   }
@@ -1051,8 +1220,8 @@ function processTurn(room) {
   room.selections = {};
   room.deadline = 0;
 
-  const reachedScoreLimit = firstPlayer.score > 8 || secondPlayer.score > 8;
-  if (reachedScoreLimit || room.round >= 7) {
+  const reachedScoreLimit = firstPlayer.score >= CLASSIC_SCORE_TARGET || secondPlayer.score >= CLASSIC_SCORE_TARGET;
+  if (reachedScoreLimit || room.round >= CLASSIC_ROUND_LIMIT) {
     room.gameState = 'finished';
     const isDraw = firstPlayer.score === secondPlayer.score;
     room.winnerSeat = isDraw ? null : firstPlayer.score > secondPlayer.score ? 'p1' : 'p2';
@@ -1169,6 +1338,9 @@ function resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators = false
   // Everyone else remains a spectator after a player departs or a game ends.
   // resetGame already clears every interrupted hand and score before promotion.
   promoteVolunteerSpectators(room);
+  // A host is retained through a reconnect grace period, but transfers only
+  // after their actual departure/switch has removed the player entry.
+  ensurePrivateRoomHost(room);
 
   if (removeEmptyRoom(room)) return false;
   refreshPrivateRoomIdleExpiry(room);
@@ -1319,6 +1491,7 @@ io.on('connection', (socket) => {
     }
 
     normalizePlayerSeats(room);
+    ensurePrivateRoomHost(room);
     refreshPrivateRoomIdleExpiry(room);
     broadcastRoom(room);
     emitChatState(socket, room, clientId);
@@ -1472,6 +1645,40 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('update_private_settings', (payload = {}, acknowledge) => {
+    const reject = (message) => {
+      emitError(socket, message);
+      replyToChat(acknowledge, { ok: false, message });
+    };
+    if (!isPrivateSettingsPayload(payload)) {
+      reject('ルール設定の形式を確認してから、もう一度お試しください。');
+      return;
+    }
+    const room = getBoundRoom(socket, payload.roomId);
+    if (!room) {
+      reject('現在の部屋を確認できませんでした。画面を更新して再試行してください。');
+      return;
+    }
+    const player = room.players.find((candidate) => candidate.id === socket.id);
+    if (!player || !player.connected) {
+      reject('観戦者はルール設定を変更できません。');
+      return;
+    }
+    const result = updatePrivateRoomSettings(room, {
+      clientId: player.clientId,
+      configRevision: payload.configRevision,
+      turnTimeLimitMs: payload.turnTimeLimitMs
+    });
+    if (!result.ok) {
+      emitError(socket, result.message);
+      replyToChat(acknowledge, result);
+      return;
+    }
+    refreshPrivateRoomIdleExpiry(room);
+    broadcastRoom(room);
+    replyToChat(acknowledge, result);
+  });
+
   const agreeToStart = (payload = {}) => {
     const room = getBoundRoom(socket, payload.roomId);
     if (!room || !['waiting', 'finished'].includes(room.gameState)) return;
@@ -1589,7 +1796,10 @@ if (require.main === module) {
 }
 
 module.exports = {
+  CLASSIC_ROUND_LIMIT,
+  CLASSIC_SCORE_TARGET,
   MAX_CHAT_IPS_PER_ROOM,
+  PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS,
   PRIVATE_ROOM_IDLE_TTL_MS,
   areRandomMatchEntriesCompatible,
   app,
@@ -1597,7 +1807,9 @@ module.exports = {
   createRoomView,
   consumeChatIpQuota,
   createRoom,
+  ensurePrivateRoomHost,
   finishGameByForfeit,
+  getRoomTurnTimeLimitMs,
   isPrivateRoomIdleExpired,
   io,
   normalizeJoinPreferences,
@@ -1605,6 +1817,7 @@ module.exports = {
   promoteVolunteerSpectators,
   setSpectatorAutoJoin,
   startWhenBothPlayersAgree,
+  updatePrivateRoomSettings,
   rankedDeadlineSweeper,
   rankedRuntime
 };

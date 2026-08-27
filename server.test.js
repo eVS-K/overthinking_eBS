@@ -5,7 +5,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createInitialHand } = require('./game-rules');
 const {
+  CLASSIC_ROUND_LIMIT,
+  CLASSIC_SCORE_TARGET,
   MAX_CHAT_IPS_PER_ROOM,
+  PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS,
   PRIVATE_ROOM_IDLE_TTL_MS,
   areRandomMatchEntriesCompatible,
   app,
@@ -13,13 +16,16 @@ const {
   consumeChatIpQuota,
   createRoom,
   createRoomView,
+  ensurePrivateRoomHost,
   finishGameByForfeit,
+  getRoomTurnTimeLimitMs,
   isPrivateRoomIdleExpired,
   normalizeJoinPreferences,
   processTurn,
   promoteVolunteerSpectators,
   setSpectatorAutoJoin,
-  startWhenBothPlayersAgree
+  startWhenBothPlayersAgree,
+  updatePrivateRoomSettings
 } = require('./server');
 
 test('直前の対戦相手を避けるランダム待機同士は、即時に再マッチしない', () => {
@@ -85,6 +91,130 @@ test('Private PvPの待機・終了ルームだけがアイドル期限の対象
   randomRoom.idleDeadline = 10_000;
   assert.equal(isPrivateRoomIdleExpired(randomRoom, 10_000), false);
   assert.ok(PRIVATE_ROOM_IDLE_TTL_MS >= 60_000);
+});
+
+test('Private PvPだけが60/90/120秒の設定を持ち、開始同意は設定変更で必ず取り消される', () => {
+  const room = createRoom('private-settings');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '作成者', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '参加者', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+  room.startAgreements.add('host-client');
+  room.startAgreements.add('guest-client');
+
+  assert.deepEqual(PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS, [60_000, 90_000, 120_000]);
+  assert.equal(getRoomTurnTimeLimitMs(room), 90_000);
+  const changed = updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: 1,
+    turnTimeLimitMs: 120_000
+  });
+  assert.equal(changed.ok, true);
+  assert.equal(changed.changed, true);
+  assert.equal(room.configRevision, 2);
+  assert.equal(getRoomTurnTimeLimitMs(room), 120_000);
+  assert.equal(room.startAgreements.size, 0);
+  assert.equal(changed.settings.roundLimit, CLASSIC_ROUND_LIMIT);
+  assert.equal(changed.settings.scoreTarget, CLASSIC_SCORE_TARGET);
+  assert.equal(changed.settings.timeoutPolicy, 'random-legal');
+
+  const stale = updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: 1,
+    turnTimeLimitMs: 60_000
+  });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.stale, true);
+  assert.equal(getRoomTurnTimeLimitMs(room), 120_000);
+});
+
+test('Private設定はホスト・待機/終了状態だけに限定され、開始済みの設定スナップショットは凍結される', () => {
+  const room = createRoom('private-settings-guard');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '作成者', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '参加者', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+
+  const nonHost = updatePrivateRoomSettings(room, {
+    clientId: 'guest-client',
+    configRevision: room.configRevision,
+    turnTimeLimitMs: 60_000
+  });
+  assert.equal(nonHost.ok, false);
+  assert.equal(getRoomTurnTimeLimitMs(room), 90_000);
+
+  const invalidValue = updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: room.configRevision,
+    turnTimeLimitMs: 61_000
+  });
+  assert.equal(invalidValue.ok, false);
+
+  room.privateConfig.turnTimeLimitMs = 120_000;
+  room.activePrivateConfig = { ...room.privateConfig, turnTimeLimitMs: 60_000 };
+  room.gameState = 'playing';
+  assert.equal(getRoomTurnTimeLimitMs(room), 60_000);
+  const duringGame = updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: room.configRevision,
+    turnTimeLimitMs: 90_000
+  });
+  assert.equal(duringGame.ok, false);
+  assert.equal(getRoomTurnTimeLimitMs(room), 60_000);
+
+  const randomRoom = createRoom('random-settings-guard', { matchType: 'random' });
+  assert.equal(getRoomTurnTimeLimitMs(randomRoom), 90_000);
+  assert.equal(updatePrivateRoomSettings(randomRoom, {
+    clientId: 'host-client',
+    configRevision: 0,
+    turnTimeLimitMs: 120_000
+  }).ok, false);
+});
+
+test('選択したPrivateの制限時間は開始時に凍結され、対局タイマーへ引き継がれる', () => {
+  const room = createRoom('private-timer-snapshot');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '設定担当者', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '参加者', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+  assert.equal(updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: room.configRevision,
+    turnTimeLimitMs: 120_000
+  }).ok, true);
+  room.startAgreements.add('host-client');
+  room.startAgreements.add('guest-client');
+
+  assert.equal(startWhenBothPlayersAgree(room), true);
+  assert.equal(room.gameState, 'playing');
+  assert.equal(room.activePrivateConfig.turnTimeLimitMs, 120_000);
+  assert.equal(room.pausedRemainingMs, 120_000);
+  assert.equal(getRoomTurnTimeLimitMs(room), 120_000);
+  assert.equal(finishGameByForfeit(room, room.players[0]), true);
+});
+
+test('room viewは設定の公開情報だけを返し、ホスト退室後に残った対戦者へ管理権限を移せる', () => {
+  const room = createRoom('private-host-view');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '作成者', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '参加者', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+  const hostView = createRoomView(room, 'p1');
+  const guestView = createRoomView(room, 'p2');
+  assert.equal(hostView.viewer.isRoomHost, true);
+  assert.equal(hostView.viewer.isHost, true);
+  assert.equal(guestView.viewer.isRoomHost, false);
+  assert.equal(hostView.rules.turnTimeLimitMs, 90_000);
+  assert.equal(hostView.rules.locked, false);
+  assert.equal(JSON.stringify(hostView).includes('hostClientId'), false);
+
+  room.players.shift();
+  assert.equal(ensurePrivateRoomHost(room), 'guest-client');
+  assert.equal(createRoomView(room, 'p2').viewer.isRoomHost, true);
 });
 
 test('観戦者には常に両者の手札を渡し、空席参加予約を順番どおりに扱う', () => {

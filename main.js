@@ -3,6 +3,7 @@ const GAME_SERVER_URL = ['localhost', '127.0.0.1'].includes(window.location.host
   : 'https://overthinking-ebs.onrender.com';
 const RANKED_APP_URL = new URL('/ranked', GAME_SERVER_URL).toString();
 const TURN_TIME_LIMIT_MS = 90_000;
+const PRIVATE_TURN_TIME_OPTIONS_MS = new Set([60_000, 90_000, 120_000]);
 const CHAT_MESSAGE_LIMIT = 50;
 const MAX_RENDERED_CHAT_MESSAGES = 100;
 const CARD_MARKS = Object.freeze({ ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'JK', three: '3', two: '2' });
@@ -35,6 +36,9 @@ let committedCardId = null;
 let joinedRoom = Boolean(savedSession);
 let currentRoom = null;
 let timerInterval = null;
+let privateSettingsPending = null;
+let privateSettingsTimeout = null;
+let privateSettingsFeedback = '';
 let lastRoundId = null;
 let lastFinaleId = null;
 let finalResultAnimationTimer = null;
@@ -80,6 +84,7 @@ const elements = {
   connectionState: document.getElementById('connection-state'),
   connectionNotice: document.getElementById('connection-notice'),
   round: document.getElementById('current-round'),
+  roundLimit: document.getElementById('round-limit'),
   timer: document.getElementById('timer-count'),
   timerProgress: document.getElementById('timer-progress'),
   stack: document.getElementById('stack-count'),
@@ -105,6 +110,15 @@ const elements = {
   spectatorSeatPanel: document.getElementById('spectator-seat-panel'),
   spectatorAutoJoinToggle: document.getElementById('spectator-auto-join-toggle'),
   spectatorSeatQueue: document.getElementById('spectator-seat-queue'),
+  roomRulesPanel: document.getElementById('room-rules-panel'),
+  roomRulesMode: document.getElementById('room-rules-mode'),
+  roomRulesState: document.getElementById('room-rules-state'),
+  roomRulesSummary: document.getElementById('room-rules-summary'),
+  roomRulesEnd: document.getElementById('room-rules-end'),
+  roomRulesTimeout: document.getElementById('room-rules-timeout'),
+  privateSettingsControls: document.getElementById('private-settings-controls'),
+  privateTurnTimeSelect: document.getElementById('private-turn-time-select'),
+  privateSettingsFeedback: document.getElementById('private-settings-feedback'),
   history: document.getElementById('history-list'),
   spectatorCount: document.getElementById('spectator-count'),
   chatList: document.getElementById('chat-list'),
@@ -264,6 +278,8 @@ function requestNextRandomMatch(sourceRoomId, requestId) {
 }
 
 function resetLocalRoomForRandomSearch(message) {
+  clearPrivateSettingsPending();
+  privateSettingsFeedback = '';
   joinedRoom = false;
   currentRoomId = '';
   currentRoom = null;
@@ -487,14 +503,205 @@ function resetTimer() {
   elements.timerProgress.style.width = '0%';
 }
 
+function getRoomRules(room) {
+  const source = room?.rules && typeof room.rules === 'object' ? room.rules : {};
+  const configuredTurnTime = Number(source.turnTimeLimitMs);
+  const configuredRoundLimit = Number(source.roundLimit);
+  const configuredScoreTarget = Number(source.scoreTarget ?? source.scoreLimit);
+  const configuredRevision = Number(source.configRevision ?? room?.configRevision);
+  return {
+    ruleset: typeof source.ruleset === 'string' && source.ruleset ? source.ruleset : 'classic-v1',
+    turnTimeLimitMs: Number.isSafeInteger(configuredTurnTime)
+      && configuredTurnTime >= 15_000
+      && configuredTurnTime <= 120_000
+      ? configuredTurnTime
+      : TURN_TIME_LIMIT_MS,
+    roundLimit: Number.isSafeInteger(configuredRoundLimit)
+      && configuredRoundLimit >= 1
+      && configuredRoundLimit <= 99
+      ? configuredRoundLimit
+      : 7,
+    scoreTarget: Number.isSafeInteger(configuredScoreTarget)
+      && configuredScoreTarget >= 1
+      && configuredScoreTarget <= 99
+      ? configuredScoreTarget
+      : 9,
+    // The server deliberately keeps the classic timeout policy fixed.  Do
+    // not let a future/malformed room view make the client describe a rule
+    // that the canonical game never applied.
+    timeoutPolicy: 'random-legal',
+    configRevision: Number.isSafeInteger(configuredRevision) && configuredRevision >= 0 ? configuredRevision : 0,
+    locked: source.locked === true || ['playing', 'reconnecting'].includes(room?.gameState)
+  };
+}
+
+function formatTurnTime(turnTimeLimitMs) {
+  return `${Math.round(turnTimeLimitMs / 1_000)}秒`;
+}
+
+function isRoomHost(room) {
+  return (room?.viewer?.isRoomHost ?? room?.viewer?.isHost) === true;
+}
+
+function clearPrivateSettingsPending() {
+  if (privateSettingsTimeout) window.clearTimeout(privateSettingsTimeout);
+  privateSettingsTimeout = null;
+  privateSettingsPending = null;
+}
+
+function applyPrivateSettingsAcknowledgement(result, roomId, { clearStartAgreement = false } = {}) {
+  if (!result?.settings || typeof result.settings !== 'object' || currentRoom?.id !== roomId) return false;
+  const revision = Number.isSafeInteger(result.configRevision)
+    ? result.configRevision
+    : currentRoom.configRevision;
+  currentRoom = {
+    ...currentRoom,
+    configRevision: revision,
+    rules: {
+      ...(currentRoom.rules || {}),
+      ...result.settings,
+      configRevision: Number.isSafeInteger(result.configRevision)
+        ? result.configRevision
+        : result.settings.configRevision ?? currentRoom.rules?.configRevision
+    },
+    viewer: clearStartAgreement
+      ? { ...(currentRoom.viewer || {}), hasAgreedToStart: false }
+      : currentRoom.viewer
+  };
+  return true;
+}
+
+function renderRoomRules(room) {
+  if (!elements.roomRulesPanel) return;
+  const rules = getRoomRules(room);
+  const isPrivateRoom = room?.matchType !== 'random';
+  const canEdit = Boolean(
+    isPrivateRoom
+    && isRoomHost(room)
+    && ['waiting', 'finished'].includes(room?.gameState)
+  );
+  let isPending = privateSettingsPending?.roomId === room?.id;
+
+  // A room update is authoritative. Only now do we mark an asynchronous
+  // settings request as saved, preventing a stale select value from looking
+  // like a successful change after a reconnect or a competing host update.
+  if (isPending && rules.turnTimeLimitMs === privateSettingsPending.turnTimeLimitMs) {
+    clearPrivateSettingsPending();
+    privateSettingsFeedback = '設定を反映しました。両者の開始同意はリセットされています。';
+    isPending = false;
+  }
+
+  setText(elements.roomRulesMode, isPrivateRoom ? 'プライベート対戦・クラシック' : 'ランダムマッチ・固定ルール');
+  setText(
+    elements.roomRulesState,
+    !isPrivateRoom
+      ? '設定は固定です'
+      : rules.locked
+        ? '対局中 — 設定は固定'
+        : canEdit
+          ? '現在の設定担当者 — 変更できます'
+          : '現在の設定担当者が変更できます'
+  );
+  setText(
+    elements.roomRulesSummary,
+    `共通の7枚で最大${rules.roundLimit}ラウンド。1ラウンド ${formatTurnTime(rules.turnTimeLimitMs)}、${rules.scoreTarget}枚獲得で即時決着です。`
+  );
+  setText(
+    elements.roomRulesEnd,
+    `${rules.scoreTarget}枚獲得、または第${rules.roundLimit}ラウンド終了時に獲得枚数が多い側の勝ちです。`
+  );
+  setText(
+    elements.roomRulesTimeout,
+    '時間切れ時は、残った手札からサーバーが1枚をランダムに選びます。'
+  );
+
+  elements.privateSettingsControls.classList.toggle('hidden', !canEdit);
+  if (!canEdit) return;
+
+  const selectableTurnTime = PRIVATE_TURN_TIME_OPTIONS_MS.has(rules.turnTimeLimitMs)
+    ? rules.turnTimeLimitMs
+    : TURN_TIME_LIMIT_MS;
+  const displayTurnTime = isPending ? privateSettingsPending.turnTimeLimitMs : selectableTurnTime;
+  elements.privateTurnTimeSelect.value = String(displayTurnTime);
+  elements.privateTurnTimeSelect.disabled = !socket?.connected || isPending;
+  setText(
+    elements.privateSettingsFeedback,
+    isPending
+      ? '設定をサーバーへ反映しています…'
+      : privateSettingsFeedback || '変更すると、両者の「対戦開始に同意する」はリセットされます。'
+  );
+}
+
+function requestPrivateTurnTimeChange(turnTimeLimitMs) {
+  if (!socket?.connected || !currentRoom || !currentRoomId || currentRoom.matchType === 'random') return;
+  if (!isRoomHost(currentRoom) || !['waiting', 'finished'].includes(currentRoom.gameState)) return;
+  if (!PRIVATE_TURN_TIME_OPTIONS_MS.has(turnTimeLimitMs)) {
+    privateSettingsFeedback = '選べる制限時間は60秒・90秒・120秒です。';
+    renderRoomRules(currentRoom);
+    return;
+  }
+
+  const rules = getRoomRules(currentRoom);
+  if (rules.turnTimeLimitMs === turnTimeLimitMs) {
+    privateSettingsFeedback = 'この部屋はすでにその制限時間です。';
+    renderRoomRules(currentRoom);
+    return;
+  }
+
+  clearPrivateSettingsPending();
+  const pendingRequest = {
+    roomId: currentRoomId,
+    configRevision: rules.configRevision,
+    turnTimeLimitMs
+  };
+  privateSettingsPending = pendingRequest;
+  privateSettingsFeedback = '';
+  renderRoomRules(currentRoom);
+  privateSettingsTimeout = window.setTimeout(() => {
+    if (privateSettingsPending !== pendingRequest) return;
+    clearPrivateSettingsPending();
+    privateSettingsFeedback = '設定の確認ができませんでした。通信状態を確認して、もう一度お試しください。';
+    if (currentRoom?.id === pendingRequest.roomId) renderRoomRules(currentRoom);
+  }, 5_000);
+
+  socket.emit('update_private_settings', pendingRequest, (result) => {
+    if (privateSettingsPending !== pendingRequest) return;
+    if (!result?.ok) {
+      clearPrivateSettingsPending();
+      privateSettingsFeedback = result?.message || '設定を変更できませんでした。';
+      // A rejected request may carry only a newer configuration revision.
+      // It is not proof that this viewer's own start consent changed, so do
+      // not erase that local state while resynchronising the selector.
+      if (applyPrivateSettingsAcknowledgement(result, pendingRequest.roomId)) {
+        renderRoom(currentRoom);
+      } else if (currentRoom?.id === pendingRequest.roomId) {
+        renderRoomRules(currentRoom);
+      }
+      return;
+    }
+
+    // Prefer the following room_updated event for the full new view. If the
+    // server returns settings in its acknowledgement, it is also
+    // authoritative and lets a slow broadcast keep this host informed.
+    if (applyPrivateSettingsAcknowledgement(result, pendingRequest.roomId, { clearStartAgreement: true })) {
+      clearPrivateSettingsPending();
+      privateSettingsFeedback = '設定を反映しました。両者の開始同意はリセットされています。';
+      renderRoom(currentRoom);
+    } else {
+      privateSettingsFeedback = '設定を確認しています…';
+    }
+  });
+}
+
 function renderTimer(room) {
   resetTimer();
   if (room.gameState !== 'playing' || !room.deadline) return;
+  const turnTimeLimitMs = getRoomRules(room).turnTimeLimitMs;
 
   const updateTimer = () => {
     const remainingMs = Math.max(0, room.deadline - Date.now());
     setText(elements.timer, Math.ceil(remainingMs / 1000));
-    elements.timerProgress.style.width = `${Math.min(100, (remainingMs / TURN_TIME_LIMIT_MS) * 100)}%`;
+    elements.timerProgress.style.width = `${Math.min(100, (remainingMs / turnTimeLimitMs) * 100)}%`;
   };
   updateTimer();
   timerInterval = window.setInterval(updateTimer, 300);
@@ -1159,6 +1366,10 @@ function renderRoom(room) {
   // A random-match id is server-generated. Persist it as soon as the room
   // view arrives so start consent, card submission, and reconnect all target
   // the same authoritative room just like Private PvP does.
+  if (currentRoom?.id && currentRoom.id !== roomView.id) {
+    clearPrivateSettingsPending();
+    privateSettingsFeedback = '';
+  }
   currentRoomId = roomView.id;
   joinedRoom = true;
   joinAsSpectator = roomView.viewer.isSpectator;
@@ -1170,6 +1381,7 @@ function renderRoom(room) {
   setText(elements.roomChipLabel, isRandomMatch ? 'マッチ' : 'ルーム');
   setText(elements.roomId, isRandomMatch ? 'ランダム' : roomView.id);
   setText(elements.round, roomView.round);
+  setText(elements.roundLimit, `/ ${getRoomRules(roomView).roundLimit}`);
   setText(elements.stack, roomView.stack.length);
 
   const isSpectator = roomView.viewer.isSpectator;
@@ -1250,6 +1462,7 @@ function renderRoom(room) {
   setText(elements.homeButtonLabel, isSpectator ? '観戦をやめる' : 'ホームへ戻る');
 
   renderSpectatorSeatPanel(roomView);
+  renderRoomRules(roomView);
   renderTimer(roomView);
   renderReveal(roomView.lastRound || roomView.history?.[roomView.history.length - 1], roomView.finishReason, roomView.winner);
   renderHistory(roomView.history);
@@ -1404,6 +1617,11 @@ elements.spectatorAutoJoinToggle.addEventListener('change', () => {
   }, 3_500);
 });
 
+elements.privateTurnTimeSelect.addEventListener('change', () => {
+  const turnTimeLimitMs = Number(elements.privateTurnTimeSelect.value);
+  requestPrivateTurnTimeChange(turnTimeLimitMs);
+});
+
 elements.chatInput.addEventListener('input', () => {
   const normalized = normalizeChatInput(elements.chatInput.value);
   if (elements.chatInput.value !== normalized) elements.chatInput.value = normalized;
@@ -1496,6 +1714,8 @@ elements.homeButton.addEventListener('click', () => {
   const returnToRandomEntry = currentRoom?.matchType === 'random';
   if (socket?.connected && roomIdToLeave) socket.emit('leave_room', { roomId: roomIdToLeave });
 
+  clearPrivateSettingsPending();
+  privateSettingsFeedback = '';
   joinedRoom = false;
   currentRoomId = '';
   mySelectedCardId = null;
@@ -1586,6 +1806,8 @@ if (socket) {
     // The server already removed this room and detached the socket. Do not
     // attempt a second leave; simply clear the reconnect data so a refresh
     // cannot re-create a room that expired for resource protection.
+    clearPrivateSettingsPending();
+    privateSettingsFeedback = '';
     joinedRoom = false;
     currentRoomId = '';
     currentRoom = null;
