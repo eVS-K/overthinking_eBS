@@ -6,7 +6,7 @@ const TURN_TIME_LIMIT_MS = 90_000;
 const PRIVATE_TURN_TIME_OPTIONS_MS = new Set([60_000, 90_000, 120_000]);
 const CHAT_MESSAGE_LIMIT = 50;
 const MAX_RENDERED_CHAT_MESSAGES = 100;
-const CARD_MARKS = Object.freeze({ ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'JK', three: '3', two: '2' });
+const CARD_MARKS = Object.freeze({ ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'Jk', three: '3', two: '2' });
 
 const socket = window.io
   ? window.io(GAME_SERVER_URL, {

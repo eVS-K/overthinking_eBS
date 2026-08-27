@@ -47,17 +47,16 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
   assert.match(css, /\.card-center-suit\s*\{[^}]*position:\s*absolute;[^}]*top:\s*50%;[^}]*left:\s*50%;[^}]*translate\(-50%, -50%\)/);
 });
 
-test('クラシック書体はカード中央だけへ適用し、角のスートとJokerの幅を保つ', () => {
+test('クラシック書体はカード中央だけへ適用し、Jokerも同じ大きさと幅で読める', () => {
   const client = read('main.js');
   const css = read('style.css');
 
   assert.match(client, /card-\$\{card\.id\}/);
+  assert.match(client, /joker: 'Jk'/);
   assert.match(css, /\.card-center-suit\s*\{[^}]*max-width:\s*calc\(100% - 18px\);/);
   assert.match(css, /\.card-center-suit\s*\{[^}]*font-family:\s*"Palatino Linotype", "Book Antiqua", Georgia, serif;/);
   assert.match(css, /\.card-rank-mark\s*\{[^}]*font-family:\s*inherit;[^}]*font-size:\s*clamp\(34px, 4\.5vw, 52px\);/);
-  assert.match(css, /\.card-joker \.card-center-suit\s*\{\s*gap:\s*3px;/);
-  assert.match(css, /\.card-joker \.card-rank-mark\s*\{\s*font-size:\s*clamp\(25px, 3vw, 34px\);/);
-  assert.match(css, /\.card-joker \.card-suit-mark\s*\{\s*font-size:\s*clamp\(24px, 2\.7vw, 32px\);/);
+  assert.doesNotMatch(css, /\.card-joker \.card-/);
   assert.match(css, /\.card-top\s*\{[^}]*font-family:\s*var\(--serif\);/);
   assert.match(css, /\.card-corner-pip\s*\{[^}]*font-family:\s*var\(--serif\);/);
 });
@@ -81,9 +80,9 @@ test('モバイルPvPは画面全体を横に広げず、ヘッダーと手札�
   assert.match(css, /\.game-header\s*\{\s*grid-template-areas:\s*"brand actions" "room room";/);
   assert.match(css, /\.table-center\s*\{\s*margin-inline:\s*0;\s*padding-inline:\s*0;/);
   assert.match(css, /\.card-row\s*\{[^}]*inline-size:\s*100%;/);
-  assert.match(css, /\.card\s*\{[\s\S]*?flex:\s*0 0 clamp\(94px, 12%, 118px\);/);
-  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.card\s*\{\s*flex:\s*0 0 96px;/);
-  assert.match(css, /@media \(max-width: 390px\) \{[\s\S]*?\.card\s*\{\s*flex-basis:\s*88px;/);
+  assert.match(css, /\.card\s*\{[\s\S]*?flex:\s*0 0 clamp\(100px, 12\.5%, 124px\);/);
+  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.card\s*\{\s*flex:\s*0 0 100px;/);
+  assert.match(css, /@media \(max-width: 390px\) \{[\s\S]*?\.card\s*\{\s*flex-basis:\s*94px;/);
 });
 
 test('ランダム再検索は検索世代を保持し、古い部屋更新を受理しない', () => {
@@ -115,12 +114,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v20/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v20/);
+  assert.match(html, /style\.css\?v=pvp-v21/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v21/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v20/);
+  assert.match(loader, /main\.js\?v=pvp-v21/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);

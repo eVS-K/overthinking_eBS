@@ -266,7 +266,7 @@ input::placeholder { color: #65708b; }
   position: relative;
   display: flex;
   /* Card size follows the board width, never the number of cards left. */
-  flex: 0 0 clamp(94px, 12%, 118px);
+  flex: 0 0 clamp(100px, 12.5%, 124px);
   flex-direction: column;
   justify-content: space-between;
   min-width: 0;
@@ -293,9 +293,6 @@ input::placeholder { color: #65708b; }
 .card-center-suit { position: absolute; top: 50%; left: 50%; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; max-width: calc(100% - 18px); color: rgba(230, 238, 255, .3); font-family: "Palatino Linotype", "Book Antiqua", Georgia, serif; line-height: .8; text-align: center; white-space: nowrap; transform: translate(-50%, -50%); }
 .card-rank-mark { color: currentColor; font-family: inherit; font-size: clamp(34px, 4.5vw, 52px); font-weight: 400; letter-spacing: -.07em; line-height: .72; text-shadow: 0 0 15px currentColor; }
 .card-suit-mark { color: currentColor; font-size: clamp(28px, 3.5vw, 40px); line-height: 1; text-shadow: 0 0 15px currentColor; }
-.card-joker .card-center-suit { gap: 3px; }
-.card-joker .card-rank-mark { font-size: clamp(25px, 3vw, 34px); letter-spacing: -.1em; }
-.card-joker .card-suit-mark { font-size: clamp(24px, 2.7vw, 32px); }
 .card-corner-pip { position: absolute; right: 9px; bottom: 9px; z-index: 1; display: grid; justify-items: center; color: currentColor; font-family: var(--serif); font-size: 12px; font-weight: 700; line-height: .76; opacity: .76; transform: rotate(180deg); }
 .card-corner-pip span:last-child { margin-top: 2px; font-size: 13px; }
 .card-spade .card-center-suit { color: rgba(242, 189, 105, .21); }
@@ -548,7 +545,7 @@ input::placeholder { color: #65708b; }
   .player-zone, .player-header, .table-center, .round-dashboard, .reveal-area, .reveal-result, .controls { min-width: 0; max-width: 100%; }
   .player-zone { padding-block: 15px; }
   .card-row { inline-size: 100%; max-width: 100%; gap: 7px; padding-bottom: 13px; overscroll-behavior-x: contain; }
-  .card { flex: 0 0 96px; height: 130px; padding: 8px; scroll-snap-align: start; }
+  .card { flex: 0 0 100px; height: 130px; padding: 8px; scroll-snap-align: start; }
   .card.selected { transform: none; box-shadow: 0 0 0 2px rgba(242, 189, 105, .42), 0 0 24px rgba(242, 189, 105, .28), inset 0 1px rgba(255, 255, 255, .16); }
   .card.committing { animation: card-commit-mobile .48s ease both; }
   .card-top { font-size: 13px; }
@@ -605,7 +602,7 @@ input::placeholder { color: #65708b; }
   .round-dashboard { grid-template-columns: 1fr 1.2fr 1fr; }
   .timer-text span { font-size: 8px; }
   .timer-text strong { font-size: 13px; }
-  .card { flex-basis: 88px; }
+  .card { flex-basis: 94px; }
   .home-button { padding-inline: 7px; font-size: 9px; }
 }
 
