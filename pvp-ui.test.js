@@ -47,6 +47,18 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
   assert.match(css, /\.card-center-suit\s*\{[^}]*position:\s*absolute;[^}]*top:\s*50%;[^}]*left:\s*50%;[^}]*translate\(-50%, -50%\)/);
 });
 
+test('この部屋のルールは対局盤を占有せず、操作ボタンの後ろに配置する', () => {
+  const html = read('index.html');
+  const css = read('style.css');
+
+  assert.ok(
+    html.indexOf('id="player-controls"') < html.indexOf('id="room-rules-panel"'),
+    'ルール欄は自分の手札・選択中のカード・対局操作の後ろに置く'
+  );
+  assert.match(css, /\.my-zone > \.room-rules-panel\s*\{\s*margin-top:\s*24px;/);
+  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.my-zone > \.room-rules-panel\s*\{\s*margin-top:\s*16px;/);
+});
+
 test('モバイルPvPは画面全体を横に広げず、ヘッダーと手札を明示的に収める', () => {
   const css = read('style.css');
 
@@ -88,12 +100,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v18/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v18/);
+  assert.match(html, /style\.css\?v=pvp-v19/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v19/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v18/);
+  assert.match(loader, /main\.js\?v=pvp-v19/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
