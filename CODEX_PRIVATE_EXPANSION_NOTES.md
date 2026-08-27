@@ -4,6 +4,8 @@
 
 デッキ編集、互換性判定、設定凍結、通信境界の詳細は、実装前設計の
 [`PRIVATE_PVP_EXPANSION_DESIGN.md`](./PRIVATE_PVP_EXPANSION_DESIGN.md) を参照する。勝敗・Blank・Tarotの未確定仕様は、dub-227さんの回答が得られるまで同設計でも保留とする。
+カードごとの導入順、必要機能、混在禁止、追加・廃止の運用は
+[`PRIVATE_PVP_CARD_CATALOG_DESIGN.md`](./PRIVATE_PVP_CARD_CATALOG_DESIGN.md) を参照する。
 
 ## 変更してはいけない基準
 
