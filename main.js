@@ -716,7 +716,7 @@ function createCard(card, suitType, isInteractive) {
   // 両プレイヤーは同じIDのカードを持つため、選択状態は操作できる自分の手札だけに適用する。
   const isSelected = isInteractive && card.id === mySelectedCardId;
   const isCommitting = isInteractive && card.id === committedCardId;
-  cardElement.className = `card card-${suitType}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
+  cardElement.className = `card card-${suitType} card-${card.id}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.dataset.cardId = card.id;
   cardElement.setAttribute(
     'aria-label',

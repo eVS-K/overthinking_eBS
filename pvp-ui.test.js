@@ -47,6 +47,21 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
   assert.match(css, /\.card-center-suit\s*\{[^}]*position:\s*absolute;[^}]*top:\s*50%;[^}]*left:\s*50%;[^}]*translate\(-50%, -50%\)/);
 });
 
+test('クラシック書体はカード中央だけへ適用し、角のスートとJokerの幅を保つ', () => {
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(client, /card-\$\{card\.id\}/);
+  assert.match(css, /\.card-center-suit\s*\{[^}]*max-width:\s*calc\(100% - 18px\);/);
+  assert.match(css, /\.card-center-suit\s*\{[^}]*font-family:\s*"Palatino Linotype", "Book Antiqua", Georgia, serif;/);
+  assert.match(css, /\.card-rank-mark\s*\{[^}]*font-family:\s*inherit;[^}]*font-size:\s*clamp\(34px, 4\.5vw, 52px\);/);
+  assert.match(css, /\.card-joker \.card-center-suit\s*\{\s*gap:\s*3px;/);
+  assert.match(css, /\.card-joker \.card-rank-mark\s*\{\s*font-size:\s*clamp\(25px, 3vw, 34px\);/);
+  assert.match(css, /\.card-joker \.card-suit-mark\s*\{\s*font-size:\s*clamp\(24px, 2\.7vw, 32px\);/);
+  assert.match(css, /\.card-top\s*\{[^}]*font-family:\s*var\(--serif\);/);
+  assert.match(css, /\.card-corner-pip\s*\{[^}]*font-family:\s*var\(--serif\);/);
+});
+
 test('この部屋のルールは対局盤を占有せず、操作ボタンの後ろに配置する', () => {
   const html = read('index.html');
   const css = read('style.css');
@@ -100,12 +115,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v19/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v19/);
+  assert.match(html, /style\.css\?v=pvp-v20/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v20/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v19/);
+  assert.match(loader, /main\.js\?v=pvp-v20/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);

@@ -290,9 +290,12 @@ input::placeholder { color: #65708b; }
 .card-spade .card-top span:last-child { color: var(--gold); }
 .card-heart .card-top span:last-child { color: var(--heart); }
 .card-selected-mark { display: grid; place-items: center; width: 16px; height: 16px; margin-left: auto; border: 1px solid var(--gold-bright); border-radius: 50%; color: #17131d !important; background: var(--gold-bright); font-family: var(--sans); font-size: 10px !important; line-height: 1; }
-.card-center-suit { position: absolute; top: 50%; left: 50%; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: rgba(230, 238, 255, .3); font-family: var(--serif); line-height: .8; text-align: center; transform: translate(-50%, -50%); }
-.card-rank-mark { color: currentColor; font-family: var(--serif); font-size: clamp(32px, 4.3vw, 49px); font-weight: 400; letter-spacing: -.04em; line-height: .72; text-shadow: 0 0 15px currentColor; }
+.card-center-suit { position: absolute; top: 50%; left: 50%; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; max-width: calc(100% - 18px); color: rgba(230, 238, 255, .3); font-family: "Palatino Linotype", "Book Antiqua", Georgia, serif; line-height: .8; text-align: center; white-space: nowrap; transform: translate(-50%, -50%); }
+.card-rank-mark { color: currentColor; font-family: inherit; font-size: clamp(34px, 4.5vw, 52px); font-weight: 400; letter-spacing: -.07em; line-height: .72; text-shadow: 0 0 15px currentColor; }
 .card-suit-mark { color: currentColor; font-size: clamp(28px, 3.5vw, 40px); line-height: 1; text-shadow: 0 0 15px currentColor; }
+.card-joker .card-center-suit { gap: 3px; }
+.card-joker .card-rank-mark { font-size: clamp(25px, 3vw, 34px); letter-spacing: -.1em; }
+.card-joker .card-suit-mark { font-size: clamp(24px, 2.7vw, 32px); }
 .card-corner-pip { position: absolute; right: 9px; bottom: 9px; z-index: 1; display: grid; justify-items: center; color: currentColor; font-family: var(--serif); font-size: 12px; font-weight: 700; line-height: .76; opacity: .76; transform: rotate(180deg); }
 .card-corner-pip span:last-child { margin-top: 2px; font-size: 13px; }
 .card-spade .card-center-suit { color: rgba(242, 189, 105, .21); }
