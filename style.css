@@ -299,8 +299,13 @@ input::placeholder { color: #65708b; }
 .card-heart .card-center-suit { color: rgba(255, 119, 143, .21); }
 .card-spade .card-corner-pip { color: var(--gold); }
 .card-heart .card-corner-pip { color: var(--heart); }
-.card-desc { position: relative; z-index: 1; padding-inline: 12px; overflow: hidden; color: #aebbd2; font-size: clamp(8px, 1.15vw, 10px); line-height: 1.25; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .opponent-hand .card { background: linear-gradient(145deg, rgba(83, 49, 75, .83), rgba(40, 27, 49, .95)); }
+
+.selected-card-panel { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; margin: -1px 2px 5px; padding: 9px 11px; overflow: hidden; border: 1px solid rgba(242, 189, 105, .44); border-inline-start: 3px solid var(--gold-bright); color: #edf2ff; background: linear-gradient(100deg, rgba(106, 83, 48, .34), rgba(32, 39, 67, .56) 42%, rgba(13, 21, 43, .72)); box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 8px 18px rgba(0, 0, 0, .12); animation: selected-card-enter .26s cubic-bezier(.19,.82,.3,1.1) both; }
+.selected-card-suit { display: grid; place-items: center; width: 38px; aspect-ratio: 1; border: 1px solid rgba(242, 189, 105, .55); border-radius: 50%; color: var(--gold-bright); background: rgba(242, 189, 105, .09); box-shadow: 0 0 16px rgba(242, 189, 105, .18); font-family: var(--serif); font-size: 22px; line-height: 1; }
+.selected-card-copy { display: grid; gap: 2px; min-width: 0; }
+.selected-card-copy strong { overflow: hidden; color: #fff3ce; font-family: var(--serif); font-size: 18px; font-weight: 400; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; }
+.selected-card-copy p { margin: 0; overflow-wrap: anywhere; color: #c8d4eb; font-size: 11px; line-height: 1.45; }
 
 .table-center { margin: 0 calc(clamp(16px, 3vw, 30px) * -1); padding: 16px clamp(16px, 3vw, 30px) 14px; border-block: 1px solid var(--line); background: rgba(3, 7, 18, .36); }
 .round-dashboard { display: grid; grid-template-columns: 1fr minmax(180px, 1.45fr) 1fr; align-items: center; gap: 16px; }
@@ -484,6 +489,7 @@ input::placeholder { color: #65708b; }
 @keyframes settle { from { opacity: 0; transform: translateY(13px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes score-pop { 50% { color: #fff4c9; transform: scale(1.25); } }
 @keyframes score-award { 0% { opacity: 0; transform: translateY(4px) scale(.75); } 22% { opacity: 1; } 100% { opacity: 0; transform: translateY(-34px) scale(1.12); } }
+@keyframes selected-card-enter { from { opacity: 0; transform: translateY(-7px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes card-commit { 0% { transform: translateY(-8px) scale(1); } 45% { filter: brightness(1.45); transform: translateY(-23px) scale(1.07); } 100% { opacity: .28; filter: brightness(1.8); transform: translateY(-46px) scale(.85); } }
 @keyframes card-commit-mobile { 0% { opacity: 1; filter: brightness(1); transform: scale(1); } 45% { filter: brightness(1.45); transform: scale(1.025); } 100% { opacity: .4; filter: brightness(1.7); transform: scale(.97); } }
 @keyframes outcome-enter { from { opacity: 0; transform: scale(.72); } to { opacity: 1; transform: scale(1); } }
@@ -542,7 +548,10 @@ input::placeholder { color: #65708b; }
   .card.selected { transform: none; box-shadow: 0 0 0 2px rgba(242, 189, 105, .42), 0 0 24px rgba(242, 189, 105, .28), inset 0 1px rgba(255, 255, 255, .16); }
   .card.committing { animation: card-commit-mobile .48s ease both; }
   .card-top { font-size: 13px; }
-  .card-desc { font-size: 8px; white-space: normal; }
+  .selected-card-panel { grid-template-columns: 36px minmax(0, 1fr); gap: 8px; margin-inline: 0; padding: 8px 9px; }
+  .selected-card-suit { width: 33px; font-size: 19px; }
+  .selected-card-copy strong { font-size: 16px; }
+  .selected-card-copy p { font-size: 10px; }
   .table-center { margin-inline: 0; padding-inline: 0; }
   .round-dashboard { grid-template-columns: 1fr 1.25fr 1fr; gap: 8px; }
   .round-count strong, .stack-box strong { font-size: 26px; }

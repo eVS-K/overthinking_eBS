@@ -95,6 +95,10 @@ const elements = {
   mySideLabel: document.getElementById('my-side-label'),
   myScore: document.getElementById('my-score'),
   myHand: document.getElementById('my-hand'),
+  selectedCardPanel: document.getElementById('selected-card-panel'),
+  selectedCardSuit: document.getElementById('selected-card-suit'),
+  selectedCardName: document.getElementById('selected-card-name'),
+  selectedCardDescription: document.getElementById('selected-card-description'),
   opponentName: document.getElementById('opp-name'),
   opponentSideLabel: document.getElementById('opp-side-label'),
   opponentScore: document.getElementById('opp-score'),
@@ -714,7 +718,13 @@ function createCard(card, suitType, isInteractive) {
   const isCommitting = isInteractive && card.id === committedCardId;
   cardElement.className = `card card-${suitType}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.dataset.cardId = card.id;
-  cardElement.setAttribute('aria-label', `${card.name}、${card.desc}${isSelected ? '、選択中' : ''}`);
+  cardElement.setAttribute(
+    'aria-label',
+    isSelected
+      ? `${card.name}、選択中。能力は選択中のカード欄に表示されています。`
+      : `${card.name}。選択すると能力を表示します。`
+  );
+  if (isSelected) cardElement.setAttribute('aria-describedby', 'selected-card-description');
 
   if (isInteractive) {
     cardElement.setAttribute('role', 'button');
@@ -728,6 +738,10 @@ function createCard(card, suitType, isInteractive) {
         'spade',
         true,
         { focusCardId: card.id }
+      );
+      renderSelectedCardDetails(
+        currentRoom?.players.find((player) => player.id === socket?.id)?.hand || [],
+        { isInteractive: true, suitType: 'spade' }
       );
       updateConfirmButton();
     };
@@ -780,11 +794,7 @@ function createCard(card, suitType, isInteractive) {
   cornerSuit.textContent = suit.textContent;
   cornerPip.append(cornerRank, cornerSuit);
 
-  const description = document.createElement('div');
-  description.className = 'card-desc';
-  description.textContent = card.desc;
-
-  cardElement.append(top, center, description, cornerPip);
+  cardElement.append(top, center, cornerPip);
   return cardElement;
 }
 
@@ -800,6 +810,22 @@ function renderHand(container, hand, suitType, isInteractive, { focusCardId = nu
   // keyboard user's position across that harmless redraw rather than losing
   // focus from the card they just toggled.
   focusTarget?.focus();
+}
+
+function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'spade' } = {}) {
+  const selectedCard = isInteractive && mySelectedCardId
+    ? (hand || []).find((card) => card.id === mySelectedCardId)
+    : null;
+  const shouldShow = Boolean(selectedCard);
+  elements.selectedCardPanel.classList.toggle('hidden', !shouldShow);
+  if (!shouldShow) {
+    setText(elements.selectedCardName, '—');
+    setText(elements.selectedCardDescription, '');
+    return;
+  }
+  setText(elements.selectedCardSuit, suitType === 'heart' ? '♥' : '♠');
+  setText(elements.selectedCardName, selectedCard.name);
+  setText(elements.selectedCardDescription, `能力：${selectedCard.desc}`);
 }
 
 function updateScore(element, player) {
@@ -1403,11 +1429,13 @@ function renderRoom(room) {
     setText(elements.myName, displayedBottomPlayer.name);
     updateScore(elements.myScore, displayedBottomPlayer);
     renderHand(elements.myHand, displayedBottomPlayer.hand, 'spade', isInteractive);
+    renderSelectedCardDetails(displayedBottomPlayer.hand, { isInteractive, suitType: 'spade' });
   } else {
     mySelectedCardId = null;
     setText(elements.myName, isSpectator ? '♠側を待機中' : 'あなた');
     setText(elements.myScore, isSpectator ? '—' : '0');
     elements.myHand.replaceChildren();
+    renderSelectedCardDetails([], { isInteractive: false });
   }
 
   if (displayedTopPlayer) {

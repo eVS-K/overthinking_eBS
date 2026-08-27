@@ -25,6 +25,27 @@ test('PvPの最終結果パネルは空いた手札領域を使い、一度だ�
   assert.match(css, /\.final-result-panel\s*\{[^}]*min-height:\s*clamp\(190px, 25vw, 265px\);/);
 });
 
+test('カード能力は常設せず、選択中の自分のカードだけを手札直下で説明する', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="selected-card-panel"[^>]*aria-live="polite"/);
+  assert.match(html, /id="selected-card-name"/);
+  assert.match(html, /id="selected-card-description"/);
+  assert.ok(
+    html.indexOf('id="my-hand"') < html.indexOf('id="selected-card-panel"')
+      && html.indexOf('id="selected-card-panel"') < html.indexOf('id="final-result-panel"'),
+    '選択中カードの詳細は、手札の直下かつ最終結果パネルの前に表示する'
+  );
+  assert.match(client, /function renderSelectedCardDetails\(/);
+  assert.match(client, /setText\(elements\.selectedCardDescription, `能力：\$\{selectedCard\.desc\}`\);/);
+  assert.match(client, /renderSelectedCardDetails\(displayedBottomPlayer\.hand, \{ isInteractive, suitType: 'spade' \}\);/);
+  assert.doesNotMatch(client, /description\.className = 'card-desc'/);
+  assert.match(css, /\.selected-card-panel\s*\{/);
+  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.selected-card-panel\s*\{/);
+});
+
 test('モバイルPvPは画面全体を横に広げず、ヘッダーと手札を明示的に収める', () => {
   const css = read('style.css');
 
@@ -66,12 +87,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v16/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v16/);
+  assert.match(html, /style\.css\?v=pvp-v17/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v17/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v16/);
+  assert.match(loader, /main\.js\?v=pvp-v17/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
