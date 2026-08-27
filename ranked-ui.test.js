@@ -51,3 +51,19 @@ test('認証エラーはサインインボタンから十分に離れ、支援�
   assert.match(client, /window\.history\?\.replaceState/);
   assert.match(client, /サインイン操作から再試行/);
 });
+
+test('ソロ・ランク戦のカードもPvPと同じJk表記・中央書体・固定カード幅を使う', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'ranked.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, 'ranked.css'), 'utf8');
+  const client = fs.readFileSync(path.join(__dirname, 'ranked-client.js'), 'utf8');
+
+  assert.match(client, /joker: 'Jk'/);
+  assert.match(css, /\.ranked-card\s*\{[\s\S]*?flex:\s*0 0 clamp\(114px, 10\.7vw, 142px\);/);
+  assert.match(css, /\.ranked-card-emblem\s*\{[^}]*font-family:\s*"Palatino Linotype", "Book Antiqua", Georgia, serif;/);
+  assert.match(css, /\.ranked-card-rank\s*\{[^}]*font-family:\s*inherit;[^}]*font-size:\s*clamp\(34px, 4\.5vw, 52px\);/);
+  assert.match(css, /\.ranked-card-corner-pip\s*\{[^}]*font-family:\s*var\(--serif\);/);
+  assert.match(css, /@media \(max-width: 760px\) \{[\s\S]*?\.ranked-card\s*\{\s*flex:\s*0 0 110px;/);
+  assert.match(css, /@media \(max-width: 390px\) \{\s*\.ranked-card\s*\{\s*flex-basis:\s*102px;/);
+  assert.match(html, /ranked\.css\?v=ranked-v10/);
+  assert.match(html, /ranked-client\.js\?v=ranked-v10/);
+});

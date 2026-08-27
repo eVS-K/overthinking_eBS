@@ -5,7 +5,9 @@
     ace: ['Ace', '能力なし'], king: ['King', '能力なし'], queen: ['Queen', '能力なし'], jack: ['Jack', '能力なし'],
     joker: ['Joker', '相手の強さをコピー'], three: ['Three', 'Jokerに勝利'], two: ['Two', 'Aceに勝利']
   });
-  const CARD_MARKS = Object.freeze({ ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'JK', three: '3', two: '2' });
+  // Keep the compact Joker mark consistent with Private PvP.  `Jk` stays
+  // readable at the shared rank size, unlike an all-caps `JK` lockup.
+  const CARD_MARKS = Object.freeze({ ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'Jk', three: '3', two: '2' });
   const rankedUi = window.OverthinkingRankedUi || {};
   const HANDLE_PATTERN = rankedUi.HANDLE_PATTERN || /^[A-Za-z0-9_-]{3,20}$/;
   const localizedErrorMessage = rankedUi.errorMessage || (() => '操作を完了できませんでした。通信状態を確認して、もう一度お試しください。');
