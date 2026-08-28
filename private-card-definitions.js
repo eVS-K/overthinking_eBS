@@ -32,6 +32,32 @@ const AVAILABLE_CONDITIONAL_TAROT_IDS = new Set([
   'the-devil',
   'the-tower'
 ]);
+// Tarotの表示番号は、ローマ数字ではなく大アルカナの並び順に対応する
+// ギリシャ文字を用いる。Fool（0番）をαとして数えるため、Death（XIII）はξ。
+const TAROT_GREEK_MARKS_BY_ID = Object.freeze({
+  'the-fool': 'α',
+  'the-magician': 'β',
+  'the-high-priestess': 'γ',
+  'the-empress': 'δ',
+  'the-emperor': 'ε',
+  'the-hierophant': 'ζ',
+  'the-lovers': 'η',
+  'the-chariot': 'θ',
+  strength: 'ι',
+  'the-hermit': 'κ',
+  'wheel-of-fortune': 'λ',
+  justice: 'μ',
+  'the-hanged-man': 'ν',
+  death: 'ξ',
+  temperance: 'ο',
+  'the-devil': 'π',
+  'the-tower': 'ρ',
+  'the-star': 'σ',
+  'the-moon': 'τ',
+  'the-sun': 'υ',
+  judgement: 'φ',
+  'the-world': 'χ'
+});
 
 function freezeDefinition(definition) {
   return Object.freeze({
@@ -178,6 +204,9 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   }
 ].map((definition) => freezeDefinition({
   ...definition,
+  displayMark: definition.category === 'tarot'
+    ? TAROT_GREEK_MARKS_BY_ID[definition.id]
+    : '',
   status: definition.id === 'blank'
     ? 'engine-ready'
     : AVAILABLE_CONDITIONAL_TAROT_IDS.has(definition.id)
@@ -223,6 +252,7 @@ module.exports = {
   PRIVATE_CARD_DEFINITION_BY_ID,
   PRIVATE_CARD_STATUSES,
   AVAILABLE_CONDITIONAL_TAROT_IDS,
+  TAROT_GREEK_MARKS_BY_ID,
   getClassicPrivateCardDefinition,
   getPrivateCardDefinition
 };

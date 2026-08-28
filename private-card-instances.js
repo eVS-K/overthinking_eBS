@@ -84,6 +84,8 @@ function publicClassicCard(instance) {
     definitionId: normalized.definitionId,
     name: definition.name,
     desc: definition.desc,
+    category: definition.category || '',
+    displayMark: definition.displayMark || '',
     state: { ...normalized.state }
   };
 }

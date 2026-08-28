@@ -9,8 +9,15 @@ const MAX_RENDERED_CHAT_MESSAGES = 100;
 const CARD_MARKS = Object.freeze({
   ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'Jk', three: '3', two: '2',
   ten: '10', nine: '9', eight: '8', seven: '7', six: '6', five: '5', four: '4',
-  death: 'XIII', temperance: 'XIV', 'the-devil': 'XV', 'the-tower': 'XVI',
   blank: '—', 'virtual-blank': '—'
+});
+const TAROT_CARD_MARKS = Object.freeze({
+  'the-fool': 'α', 'the-magician': 'β', 'the-high-priestess': 'γ', 'the-empress': 'δ',
+  'the-emperor': 'ε', 'the-hierophant': 'ζ', 'the-lovers': 'η', 'the-chariot': 'θ',
+  strength: 'ι', 'the-hermit': 'κ', 'wheel-of-fortune': 'λ', justice: 'μ',
+  'the-hanged-man': 'ν', death: 'ξ', temperance: 'ο', 'the-devil': 'π',
+  'the-tower': 'ρ', 'the-star': 'σ', 'the-moon': 'τ', 'the-sun': 'υ',
+  judgement: 'φ', 'the-world': 'χ'
 });
 const CLASSIC_PRIVATE_RULESET_ID = 'classic-v1';
 const EXPANDED_PRIVATE_RULESET_ID = 'private-expanded-v1';
@@ -59,6 +66,7 @@ let timerInterval = null;
 let privateSettingsPending = null;
 let privateSettingsTimeout = null;
 let privateSettingsFeedback = '';
+let spectatorTarotSelectionId = '';
 let lastRoundId = null;
 let lastFinaleId = null;
 let finalResultAnimationTimer = null;
@@ -135,6 +143,12 @@ const elements = {
   spectatorSeatPanel: document.getElementById('spectator-seat-panel'),
   spectatorAutoJoinToggle: document.getElementById('spectator-auto-join-toggle'),
   spectatorSeatQueue: document.getElementById('spectator-seat-queue'),
+  spectatorTarotGuide: document.getElementById('spectator-tarot-guide'),
+  spectatorTarotList: document.getElementById('spectator-tarot-list'),
+  spectatorTarotDetail: document.getElementById('spectator-tarot-detail'),
+  spectatorTarotMark: document.getElementById('spectator-tarot-mark'),
+  spectatorTarotName: document.getElementById('spectator-tarot-name'),
+  spectatorTarotDescription: document.getElementById('spectator-tarot-description'),
   roomRulesPanel: document.getElementById('room-rules-panel'),
   roomRulesMode: document.getElementById('room-rules-mode'),
   roomRulesState: document.getElementById('room-rules-state'),
@@ -561,6 +575,7 @@ function getRoomRules(room) {
         name: card.name,
         desc: typeof card.desc === 'string' ? card.desc : '',
         category: typeof card.category === 'string' ? card.category : '',
+        displayMark: typeof card.displayMark === 'string' ? card.displayMark : '',
         maxCopiesPerDeck: Number.isSafeInteger(card.maxCopiesPerDeck) ? card.maxCopiesPerDeck : MAX_EXPANDED_CARD_COPIES
       }))
     : [];
@@ -713,13 +728,15 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
   elements.expandedDeckList.replaceChildren();
   catalog.forEach((card) => {
     const row = document.createElement('article');
-    row.className = `expanded-deck-card${card.category === 'tarot' ? ' expanded-deck-card-tarot' : ''}`;
+    const isTarot = isTarotCard(card);
+    const isNoAbility = isNoAbilityCard(card);
+    row.className = `expanded-deck-card${isTarot ? ' expanded-deck-card-tarot' : ''}${isNoAbility ? ' expanded-deck-card-no-ability' : ''}`;
     const copy = document.createElement('div');
     const name = document.createElement('strong');
-    name.textContent = card.name;
+    name.textContent = formatCardDisplayName(card);
     const type = document.createElement('span');
     type.className = 'expanded-deck-card-type';
-    type.textContent = card.category === 'tarot' ? '条件型 TAROT' : '';
+    type.textContent = isTarot ? '条件型 TAROT' : '';
     const description = document.createElement('small');
     description.textContent = card.desc || '能力なし';
     copy.append(name);
@@ -960,14 +977,33 @@ function getCurrentInteractiveHand() {
   return getSelectableDisplayHand(me?.hand, currentRoom, canChoose);
 }
 
+function getCardMark(card) {
+  const suppliedMark = typeof card?.displayMark === 'string' ? card.displayMark : '';
+  return suppliedMark || TAROT_CARD_MARKS[card?.definitionId] || CARD_MARKS[card?.definitionId] || CARD_MARKS[card?.id] || '?';
+}
+
+function isTarotCard(card) {
+  return card?.category === 'tarot' || Boolean(TAROT_CARD_MARKS[card?.definitionId]);
+}
+
+function isNoAbilityCard(card) {
+  return card?.virtual !== true && card?.desc === '能力なし';
+}
+
+function formatCardDisplayName(card) {
+  const mark = isTarotCard(card) ? getCardMark(card) : '';
+  return mark ? `${mark} ${card.name}` : card.name;
+}
+
 function createCard(card, suitType, isInteractive) {
   const cardElement = document.createElement('div');
   // 両プレイヤーは同じIDのカードを持つため、選択状態は操作できる自分の手札だけに適用する。
   const isSelected = isInteractive && card.id === mySelectedCardId;
   const isCommitting = isInteractive && card.id === committedCardId;
-  const cardMark = CARD_MARKS[card.definitionId] || CARD_MARKS[card.id] || '?';
-  const isTarot = card.category === 'tarot';
-  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isTarot ? ' card-tarot' : ''}${card.roundInfo?.conditional ? ' card-conditional' : ''}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
+  const cardMark = getCardMark(card);
+  const isTarot = isTarotCard(card);
+  const isNoAbility = isNoAbilityCard(card);
+  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isTarot ? ' card-tarot' : ''}${isNoAbility ? ' card-no-ability' : ''}${card.roundInfo?.conditional ? ' card-conditional' : ''}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.dataset.cardId = card.id;
   cardElement.setAttribute(
     'aria-label',
@@ -1074,8 +1110,10 @@ function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'sp
     setText(elements.selectedCardStrength, '');
     elements.selectedCardStrength.classList.add('hidden');
     setText(elements.selectedCardDescription, '');
+    elements.selectedCardPanel.classList.remove('selected-card-no-ability');
     return;
   }
+  elements.selectedCardPanel.classList.toggle('selected-card-no-ability', isNoAbilityCard(selectedCard));
   setText(elements.selectedCardSuit, suitType === 'heart' ? '♥' : '♠');
   setText(elements.selectedCardName, selectedCard.name);
   const strengthText = Number.isSafeInteger(selectedCard.roundInfo?.strength)
@@ -1630,6 +1668,48 @@ function renderSpectatorSeatPanel(room) {
   );
 }
 
+function getActiveSpectatorTarotCards(room) {
+  const rules = getRoomRules(room);
+  if (rules.ruleset !== EXPANDED_PRIVATE_RULESET_ID) return [];
+  const copiesById = new Map(rules.deck.map((entry) => [entry.definitionId, entry.copies]));
+  return rules.deckCatalog
+    .filter((card) => isTarotCard(card) && (copiesById.get(card.id) || 0) > 0)
+    .map((card) => ({ ...card, copies: copiesById.get(card.id) || 0 }));
+}
+
+function renderSpectatorTarotGuide(room) {
+  if (!elements.spectatorTarotGuide) return;
+  const cards = room?.viewer?.isSpectator ? getActiveSpectatorTarotCards(room) : [];
+  const shouldShow = cards.length > 0;
+  elements.spectatorTarotGuide.classList.toggle('hidden', !shouldShow);
+  if (!shouldShow) {
+    spectatorTarotSelectionId = '';
+    elements.spectatorTarotList.replaceChildren();
+    return;
+  }
+  if (!cards.some((card) => card.id === spectatorTarotSelectionId)) {
+    spectatorTarotSelectionId = cards[0].id;
+  }
+  elements.spectatorTarotList.replaceChildren();
+  cards.forEach((card) => {
+    const button = document.createElement('button');
+    const isSelected = card.id === spectatorTarotSelectionId;
+    button.type = 'button';
+    button.className = `spectator-tarot-card${isSelected ? ' is-selected' : ''}`;
+    button.setAttribute('aria-pressed', String(isSelected));
+    button.textContent = `${formatCardDisplayName(card)} ×${card.copies}`;
+    button.addEventListener('click', () => {
+      spectatorTarotSelectionId = card.id;
+      renderSpectatorTarotGuide(room);
+    });
+    elements.spectatorTarotList.append(button);
+  });
+  const selectedCard = cards.find((card) => card.id === spectatorTarotSelectionId) || cards[0];
+  setText(elements.spectatorTarotMark, getCardMark(selectedCard));
+  setText(elements.spectatorTarotName, formatCardDisplayName(selectedCard));
+  setText(elements.spectatorTarotDescription, `能力：${selectedCard.desc || '能力なし'}`);
+}
+
 function updateConfirmButton() {
   const canConfirm = Boolean(
     currentRoom
@@ -1765,6 +1845,7 @@ function renderRoom(room) {
   setText(elements.homeButtonLabel, isSpectator ? '観戦をやめる' : 'ホームへ戻る');
 
   renderSpectatorSeatPanel(roomView);
+  renderSpectatorTarotGuide(roomView);
   renderRoomRules(roomView);
   renderTimer(roomView);
   renderReveal(roomView.lastRound || roomView.history?.[roomView.history.length - 1], roomView.finishReason, roomView.winner);

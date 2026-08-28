@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   AVAILABLE_CONDITIONAL_TAROT_IDS,
+  TAROT_GREEK_MARKS_BY_ID,
   getClassicPrivateCardDefinition,
   getPrivateCardDefinition
 } = require('./private-card-definitions');
@@ -35,4 +36,12 @@ test('初期導入の4枚の条件型TarotだけはPrivate拡張デッキへ入�
     assert.equal(card.maxCopiesPerDeck, 1);
     assert.equal(card.requiresFeatures.includes('conditional-strength-v1'), true);
   }
+});
+
+test('Tarotの表示記号はローマ数字ではなく大アルカナ順のギリシャ文字である', () => {
+  assert.equal(TAROT_GREEK_MARKS_BY_ID['the-fool'], 'α');
+  assert.equal(TAROT_GREEK_MARKS_BY_ID.death, 'ξ');
+  assert.equal(TAROT_GREEK_MARKS_BY_ID.temperance, 'ο');
+  assert.equal(TAROT_GREEK_MARKS_BY_ID['the-tower'], 'ρ');
+  assert.equal(getPrivateCardDefinition('death').displayMark, 'ξ');
 });

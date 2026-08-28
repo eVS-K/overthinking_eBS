@@ -379,7 +379,14 @@ function getPublicRoomRules(room) {
   const expandedDeckCatalog = isExpandedPrivateRoomConfig(config)
     ? PRIVATE_CARD_CATALOG
       .filter((definition) => definition.status === 'available' && definition.availability.includes(config.ruleset))
-      .map(({ id, name, desc, category, maxCopiesPerDeck }) => ({ id, name, desc, category, maxCopiesPerDeck }))
+      .map(({ id, name, desc, category, displayMark, maxCopiesPerDeck }) => ({
+        id,
+        name,
+        desc,
+        category,
+        displayMark: displayMark || '',
+        maxCopiesPerDeck
+      }))
     : [];
   return {
     ...config,
@@ -776,7 +783,8 @@ function publicExpandedCard(card, state = null, seat = '') {
     definitionId: publicCard.definitionId,
     name: publicCard.name,
     desc: publicCard.desc,
-    category: preview?.category || '',
+    category: preview?.category || publicCard.category || '',
+    displayMark: publicCard.displayMark || '',
     state: { ...publicCard.state },
     ...(preview ? {
       roundInfo: {

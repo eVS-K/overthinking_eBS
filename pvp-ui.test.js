@@ -117,12 +117,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v26/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v26/);
+  assert.match(html, /style\.css\?v=pvp-v27/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v27/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v26/);
+  assert.match(loader, /main\.js\?v=pvp-v27/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -234,14 +234,31 @@ test('条件型Tarotは選択時・公開済み履歴でだけ現在ラウンド
   const client = read('main.js');
   const css = read('style.css');
 
-  assert.match(client, /death: 'XIII'/);
-  assert.match(client, /temperance: 'XIV'/);
+  assert.match(client, /death: 'ξ'/);
+  assert.match(client, /temperance: 'ο'/);
   assert.match(client, /function formatRoundCardLabel\(/);
   assert.match(client, /createRevealCard\(lastRound\.p1Card, firstOwner, 'p1', lastRound\.p1Strength\)/);
   assert.match(client, /round\.p1Strength/);
   assert.match(css, /\.card-tarot\s*\{/);
   assert.match(css, /\.selected-card-strength\s*\{/);
   assert.match(css, /\.expanded-deck-card-tarot\s*\{/);
+});
+
+test('Tarotはギリシャ文字で表示し、観戦者も使用中の能力を確認できる', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(client, /death: 'ξ'/);
+  assert.match(client, /temperance: 'ο'/);
+  assert.doesNotMatch(client, /death: 'XIII'/);
+  assert.match(html, /id="spectator-tarot-guide"/);
+  assert.match(html, /id="spectator-tarot-list"/);
+  assert.match(client, /function renderSpectatorTarotGuide\(/);
+  assert.match(client, /getActiveSpectatorTarotCards/);
+  assert.match(client, /selected-card-no-ability/);
+  assert.match(css, /\.spectator-tarot-guide\s*\{/);
+  assert.match(css, /\.card-no-ability\s*\{/);
 });
 
 test('チャットとゲーム案内には個人情報・差別的表現の注意、および通信中断の案内を明示する', () => {
