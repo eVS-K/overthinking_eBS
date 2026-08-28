@@ -8,10 +8,12 @@ const {
   CLASSIC_PRIVATE_RULESET_ID,
   CLASSIC_ROUND_LIMIT,
   CLASSIC_SCORE_TARGET,
+  EXPANDED_PRIVATE_RULESET_ID,
   MAX_PRIVATE_CARD_INSTANCES,
   assertClassicPrivateRuleset,
   assertPrivateExpansionLimits,
   createClassicPrivateRuleset,
+  createExpandedPrivateRuleset,
   isSupportedPrivateTurnTimeLimit
 } = require('./private-ruleset');
 
@@ -68,4 +70,22 @@ test('将来の拡張設定にはカード数・ラウンド・履歴などの�
     historyLimit: 32,
     spectatorLimit: 8
   }), /totalCardInstances/);
+});
+
+test('Private拡張presetは総ラウンド・任意の即時勝利・タイムアウト方針を凍結する', () => {
+  const rules = createExpandedPrivateRuleset({
+    turnTimeLimitMs: 120_000,
+    roundLimit: 10,
+    scoreTarget: null,
+    timeoutPolicy: 'blank-on-timeout',
+    forged: 'ignored'
+  });
+  assert.equal(rules.ruleset, EXPANDED_PRIVATE_RULESET_ID);
+  assert.equal(rules.turnTimeLimitMs, 120_000);
+  assert.equal(rules.roundLimit, 10);
+  assert.equal(rules.scoreTarget, null);
+  assert.equal(rules.timeoutPolicy, 'blank-on-timeout');
+  assert.throws(() => createExpandedPrivateRuleset({ roundLimit: 0 }), /round limit/);
+  assert.throws(() => createExpandedPrivateRuleset({ scoreTarget: -1 }), /score target/);
+  assert.equal(createExpandedPrivateRuleset({ timeoutPolicy: 'forged' }).timeoutPolicy, 'random-legal-then-blank');
 });

@@ -3,7 +3,7 @@
 このファイルは、対話の要約で失われやすい設計判断を保つための作業メモです。公開仕様そのものではなく、実装時は `game-rules.js` とテストを正本として扱います。秘密情報・認証情報・本番設定値は記録しません。
 
 デッキ編集、互換性判定、設定凍結、通信境界の詳細は、実装前設計の
-[`PRIVATE_PVP_EXPANSION_DESIGN.md`](./PRIVATE_PVP_EXPANSION_DESIGN.md) を参照する。勝敗・Blank・Tarotの未確定仕様は、dub-227さんの回答が得られるまで同設計でも保留とする。
+[`PRIVATE_PVP_EXPANSION_DESIGN.md`](./PRIVATE_PVP_EXPANSION_DESIGN.md) を参照する。更新版の提案書で追加通常札・終了条件・Tarotの能力文は提示されたが、Blank、ロック、伏せ札、対象選択の運用上の未確定事項は同設計で保留とする。
 カードごとの導入順、必要機能、混在禁止、追加・廃止の運用は
 [`PRIVATE_PVP_CARD_CATALOG_DESIGN.md`](./PRIVATE_PVP_CARD_CATALOG_DESIGN.md) を参照する。
 
@@ -17,8 +17,8 @@
 ## 採用済みの方針と進捗
 
 1. Private PvPのみ、60 / 90 / 120秒を待機中・終了後に選択可能。開始後は設定スナップショットを凍結し、変更時は両者の開始同意を解除する。Random / Rankedでは拒否する。
-2. Private拡張の基礎として、`private-ruleset.js`、`private-card-definitions.js`、`private-card-instances.js`、`private-game-engine.js`を追加済み。
-3. 現在のPrivate純粋エンジンはクラシックを`instanceId`単位で再現するだけで、公開済みSocket対局の勝敗処理は変更していない。
+2. Private拡張の基礎として、`private-ruleset.js`、`private-card-definitions.js`、`private-card-instances.js`、`private-deck.js`、`private-game-engine.js`を追加済み。
+3. 現在のPrivate純粋エンジンはクラシックを`instanceId`単位で再現し、Ten〜Fourを含む凍結済み共通デッキ、総ラウンド終了時の得点比較、任意の即時勝利閾値を実装済み。公開済みSocket対局の勝敗処理は変更していない。
 4. `instanceId`はサーバー発行を前提とし、同名カードのコピーでも一枚ずつ消費する。履歴・持ち越し札・得点に矛盾がある状態は拒否する。
 5. カード能力は常設せず、自分が選択中の札だけを手札直下に表示する。選択解除・確定後・観戦中は消す。
 6. 「この部屋のルール」は対局中央から外し、自分の手札・選択カード・操作ボタンの後ろへ置く。
@@ -37,12 +37,12 @@
 
 ## 未確定のため実装しない項目
 
-1. 可変デッキで9枚先取を維持するか、終了条件を変えるか。
-2. Blankが手札を消費するか、仮想札か、誰が獲得するか。
-3. ロックをいつ解除するか。
-4. フリップ／ノイズを誰にどこまで見せるか。
-5. Tarot効果の正確な順序。暫定の処理順は、常時効果 → プレイ時 → 強さ確定 → 勝敗 → 勝利／敗北時 → 対象選択 → 後処理。
-6. コピー・生成能力の上限、連鎖、総ラウンドへの影響。
+1. Blankをランダムな合法札の後に出すか、常に手札外の仮想札として出すか。獲得・得点・手札消費の扱い。
+2. ロックが「ほかのカードが出されたとき」に解除される範囲。
+3. フリップ／ノイズを誰にどこまで見せるか。
+4. Tarot効果の正確な順序。暫定の処理順は、常時効果 → プレイ時 → 強さ確定 → 勝敗 → 勝利／敗北時 → 対象選択 → 後処理。
+5. コピー・生成能力の上限、連鎖、総ラウンドへの影響。
+6. 提案にある即時敗北条件の具体的な発動条件。
 
 ## Tarotの段階導入案
 
@@ -50,13 +50,13 @@
 - 仕様確定後: The Chariot、Strength。Strengthは浮動小数点を用いず内部値を整数化して比較する。
 - 後回し: Fool、Hermit、Magician、Emperor、Wheel of Fortune（コピー、無効化、ラウンド延長）。
 - 拡張エンジン完成後: High Priestess、Empress、Hierophant、Lovers、Justice、Hanged Man、Star、Sun（対象選択、手札追加・破壊、ロック、伏せ札）。
-- 保留: Moon、Judgement、World。Worldは効果未定義のため実装しない。
+- 保留: Moon、Judgement、World。Worldの効果は「相手の獲得札を奪い、そのコピーを自分の手札へ加える」と提示されたが、獲得札の実体移送と対象選択が未実装のため保留する。
 
 ## 推奨する実装順
 
-1. 完了: Private設定、設定凍結、選択中カードの説明、拡張用の純粋エンジンとカード実体ID。
-2. 次: Tarotなしの追加通常カード、可変デッキ、Blank。ただし上記の終了条件とBlank仕様を先に決定する。
-3. ロック、伏せ札、受信者別の秘匿表示。
+1. 完了: Private設定、設定凍結、選択中カードの説明、拡張用の純粋エンジンとカード実体ID、Ten〜Four、可変デッキ、総ラウンド／即時勝利の終了判定。
+2. 次: デッキ編集UI、開始同意・設定revision、Private Socket対局への接続。
+3. Blank、ロック、伏せ札、受信者別の秘匿表示。
 4. 条件型Tarotを少数だけ実験導入。
 5. 対象選択・コピー・生成型Tarotを一枚ずつ追加。
 

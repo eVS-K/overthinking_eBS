@@ -10,14 +10,20 @@
 const { MAX_PRIVATE_CARD_INSTANCES } = require('./private-ruleset');
 const {
   CLASSIC_PRIVATE_CARD_DEFINITION_BY_ID,
-  getClassicPrivateCardDefinition
+  PRIVATE_CARD_DEFINITION_BY_ID,
+  getClassicPrivateCardDefinition,
+  getPrivateCardDefinition
 } = require('./private-card-definitions');
 
-const CARD_DEFINITION_BY_ID = CLASSIC_PRIVATE_CARD_DEFINITION_BY_ID;
+const CARD_DEFINITION_BY_ID = PRIVATE_CARD_DEFINITION_BY_ID;
 const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}:[A-Za-z0-9_-]{1,16}:[1-9][0-9]{0,5}$/;
 
 function getClassicCardDefinition(definitionId) {
   return getClassicPrivateCardDefinition(definitionId);
+}
+
+function getPrivateCardDefinitionById(definitionId) {
+  return getPrivateCardDefinition(definitionId);
 }
 
 function assertInstanceId(instanceId) {
@@ -29,7 +35,7 @@ function assertInstanceId(instanceId) {
 
 function createPrivateCardInstance({ instanceId, definitionId, state = {} } = {}) {
   assertInstanceId(instanceId);
-  getClassicCardDefinition(definitionId);
+  getPrivateCardDefinitionById(definitionId);
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
     throw new TypeError('private card state must be an object');
   }
@@ -49,7 +55,7 @@ function clonePrivateCardInstance(instance) {
   return createPrivateCardInstance(instance);
 }
 
-function createClassicPrivateCardInstances({ namespace, seat, definitionIds } = {}) {
+function createPrivateCardInstances({ namespace, seat, definitionIds } = {}) {
   if (typeof namespace !== 'string' || !/^[A-Za-z0-9_-]{1,48}$/.test(namespace)) {
     throw new RangeError('invalid private instance namespace');
   }
@@ -65,9 +71,14 @@ function createClassicPrivateCardInstances({ namespace, seat, definitionIds } = 
   }));
 }
 
+// Kept as an alias for the classic-only factory and existing callers.  The
+// generic function above is the only instance construction path for future
+// Private-only cards as well.
+const createClassicPrivateCardInstances = createPrivateCardInstances;
+
 function publicClassicCard(instance) {
   const normalized = clonePrivateCardInstance(instance);
-  const definition = getClassicCardDefinition(normalized.definitionId);
+  const definition = getPrivateCardDefinitionById(normalized.definitionId);
   return {
     instanceId: normalized.instanceId,
     definitionId: normalized.definitionId,
@@ -77,13 +88,18 @@ function publicClassicCard(instance) {
   };
 }
 
+const publicPrivateCard = publicClassicCard;
+
 module.exports = {
   CARD_DEFINITION_BY_ID,
   INSTANCE_ID_PATTERN,
   assertInstanceId,
   clonePrivateCardInstance,
   createClassicPrivateCardInstances,
+  createPrivateCardInstances,
   createPrivateCardInstance,
   getClassicCardDefinition,
+  getPrivateCardDefinition: getPrivateCardDefinitionById,
+  publicPrivateCard,
   publicClassicCard
 };

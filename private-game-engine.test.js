@@ -4,14 +4,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { CARD_DEFINITIONS, resolveRound } = require('./game-rules');
 const { createClassicPrivateCardInstances } = require('./private-card-instances');
-const { createClassicPrivateRuleset } = require('./private-ruleset');
+const { createClassicPrivateRuleset, createExpandedPrivateRuleset } = require('./private-ruleset');
 const {
   applyPrivateRound,
   assertPrivateGameState,
   createClassicPrivateGameState,
+  createExpandedPrivateGameState,
   isTerminalPrivateGameState,
   legalPrivateCardInstanceIds,
-  privateMatchScore
+  privateMatchScore,
+  resolvePrivateRound
 } = require('./private-game-engine');
 
 function instanceIdFor(state, seat, definitionId) {
@@ -108,4 +110,59 @@ test('Privateクラシックはスコア到達でも現行どおり即座に終�
   assert.equal(result.terminal, true);
   assert.equal(result.state.p1.score, 10);
   assert.equal(result.matchScore, 1);
+});
+
+test('クラシックPrivate状態へ追加通常札を注入しても、既存ルールの境界で拒否する', () => {
+  const state = createClassicPrivateGameState({ instanceNamespace: 'classic-injection' });
+  state.p1.hand[0].definitionId = 'ten';
+  assert.throws(() => assertPrivateGameState(state), /unknown private card definition/);
+});
+
+test('拡張Privateは追加通常札をcanonical比較へ接続し、総ラウンド数で終了できる', () => {
+  const rules = createExpandedPrivateRuleset({ roundLimit: 3, scoreTarget: null });
+  const state = createExpandedPrivateGameState({
+    rules,
+    instanceNamespace: 'expanded-round-limit',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'ten', copies: 1 },
+      { definitionId: 'nine', copies: 1 },
+      { definitionId: 'eight', copies: 1 }
+    ]
+  });
+  assert.equal(resolvePrivateRound(
+    { definitionId: 'ten' },
+    { definitionId: 'nine' }
+  ), 'p1');
+  let next = applyPrivateRound(state, instanceIdFor(state, 'p1', 'ten'), instanceIdFor(state, 'p2', 'nine')).state;
+  next = applyPrivateRound(next, instanceIdFor(next, 'p1', 'ace'), instanceIdFor(next, 'p2', 'king')).state;
+  const result = applyPrivateRound(next, instanceIdFor(next, 'p1', 'eight'), instanceIdFor(next, 'p2', 'ten'));
+  assert.equal(result.terminal, true);
+  assert.equal(result.terminalReason, 'round-limit');
+  assert.equal(result.state.p1.hand.length, 2);
+  assert.equal(result.matchScore, 1);
+});
+
+test('拡張Privateの即時勝利は設定された獲得枚数で終了し、凍結済みデッキの改ざんを拒否する', () => {
+  const state = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: 2 }),
+    instanceNamespace: 'expanded-score-target',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'ten', copies: 1 }
+    ]
+  });
+  const result = applyPrivateRound(state, instanceIdFor(state, 'p1', 'ace'), instanceIdFor(state, 'p2', 'ten'));
+  assert.equal(result.terminal, true);
+  assert.equal(result.terminalReason, 'score-target');
+  assert.equal(result.state.p1.score, 2);
+  assert.equal(result.state.p1.hand.length, 4);
+
+  const forged = structuredClone(result.state);
+  forged.deck[0].copies = 2;
+  assert.throws(() => assertPrivateGameState(forged), /deck snapshot|deck does not match/);
 });

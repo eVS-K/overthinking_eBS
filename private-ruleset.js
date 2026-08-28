@@ -11,10 +11,17 @@ const { CARD_DEFINITIONS } = require('./game-rules');
 
 const PRIVATE_RULESET_VERSION = 'private-rules-v1';
 const CLASSIC_PRIVATE_RULESET_ID = 'classic-v1';
+const EXPANDED_PRIVATE_RULESET_ID = 'private-expanded-v1';
 const CLASSIC_ROUND_LIMIT = CARD_DEFINITIONS.length;
 const CLASSIC_SCORE_TARGET = 9;
 const PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS = Object.freeze([60_000, 90_000, 120_000]);
 const PRIVATE_TURN_TIME_LIMIT_OPTION_SET = new Set(PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS);
+const EXPANDED_TIMEOUT_POLICIES = Object.freeze([
+  'random-legal-then-blank',
+  'blank-on-timeout'
+]);
+const EXPANDED_TIMEOUT_POLICY_SET = new Set(EXPANDED_TIMEOUT_POLICIES);
+const EXPANDED_PRIVATE_FEATURES = Object.freeze(['public-cards-v1']);
 
 // Expansion work must remain bounded before it is ever connected to a room.
 // These are intentionally conservative hard limits, not client-configurable
@@ -35,6 +42,17 @@ const CLASSIC_PRIVATE_RULESET = Object.freeze({
   timeoutPolicy: 'random-legal'
 });
 
+// Expanded rooms are not connected to Socket.IO yet.  This snapshot is only
+// for the pure engine, and deliberately keeps an explicit round cap and an
+// optional early-win score instead of inferring either from deck size.
+const EXPANDED_PRIVATE_RULESET = Object.freeze({
+  ruleset: EXPANDED_PRIVATE_RULESET_ID,
+  turnTimeLimitMs: 90_000,
+  roundLimit: CLASSIC_ROUND_LIMIT,
+  scoreTarget: CLASSIC_SCORE_TARGET,
+  timeoutPolicy: 'random-legal-then-blank'
+});
+
 function isSupportedPrivateTurnTimeLimit(value) {
   return Number.isSafeInteger(value) && PRIVATE_TURN_TIME_LIMIT_OPTION_SET.has(value);
 }
@@ -50,6 +68,34 @@ function createClassicPrivateRuleset(settings = {}) {
     ...CLASSIC_PRIVATE_RULESET,
     turnTimeLimitMs
   };
+}
+
+function isSupportedExpandedTimeoutPolicy(value) {
+  return typeof value === 'string' && EXPANDED_TIMEOUT_POLICY_SET.has(value);
+}
+
+function normalizeExpandedScoreTarget(value) {
+  // A room may deliberately disable early victory and decide the match only
+  // after its configured total round count.  `null`, not a magic number,
+  // represents that choice in a frozen rules snapshot.
+  if (value === null) return null;
+  return Number.isSafeInteger(value) ? value : EXPANDED_PRIVATE_RULESET.scoreTarget;
+}
+
+function createExpandedPrivateRuleset(settings = {}) {
+  const turnTimeLimitMs = isSupportedPrivateTurnTimeLimit(settings?.turnTimeLimitMs)
+    ? settings.turnTimeLimitMs
+    : EXPANDED_PRIVATE_RULESET.turnTimeLimitMs;
+  const roundLimit = Number.isSafeInteger(settings?.roundLimit)
+    ? settings.roundLimit
+    : EXPANDED_PRIVATE_RULESET.roundLimit;
+  const scoreTarget = normalizeExpandedScoreTarget(settings?.scoreTarget);
+  const timeoutPolicy = isSupportedExpandedTimeoutPolicy(settings?.timeoutPolicy)
+    ? settings.timeoutPolicy
+    : EXPANDED_PRIVATE_RULESET.timeoutPolicy;
+  const ruleset = { ruleset: EXPANDED_PRIVATE_RULESET_ID, turnTimeLimitMs, roundLimit, scoreTarget, timeoutPolicy };
+  assertExpandedPrivateRuleset(ruleset);
+  return ruleset;
 }
 
 function assertClassicPrivateRuleset(ruleset) {
@@ -69,6 +115,40 @@ function assertClassicPrivateRuleset(ruleset) {
     throw new RangeError('classic private timeout policy is immutable');
   }
   return ruleset;
+}
+
+function assertExpandedPrivateRuleset(ruleset) {
+  if (!ruleset || typeof ruleset !== 'object' || Array.isArray(ruleset)) {
+    throw new TypeError('private ruleset must be an object');
+  }
+  if (ruleset.ruleset !== EXPANDED_PRIVATE_RULESET_ID) {
+    throw new RangeError('unsupported private expanded ruleset');
+  }
+  if (!isSupportedPrivateTurnTimeLimit(ruleset.turnTimeLimitMs)) {
+    throw new RangeError('unsupported private turn time limit');
+  }
+  if (!Number.isSafeInteger(ruleset.roundLimit) || ruleset.roundLimit < 1 || ruleset.roundLimit > MAX_PRIVATE_ROUNDS) {
+    throw new RangeError('expanded private round limit is outside the supported range');
+  }
+  if (ruleset.scoreTarget !== null
+    && (!Number.isSafeInteger(ruleset.scoreTarget) || ruleset.scoreTarget < 1 || ruleset.scoreTarget > MAX_PRIVATE_CARD_INSTANCES)) {
+    throw new RangeError('expanded private score target is outside the supported range');
+  }
+  if (!isSupportedExpandedTimeoutPolicy(ruleset.timeoutPolicy)) {
+    throw new RangeError('unsupported expanded private timeout policy');
+  }
+  return ruleset;
+}
+
+function assertPrivateRuleset(ruleset) {
+  if (ruleset?.ruleset === CLASSIC_PRIVATE_RULESET_ID) return assertClassicPrivateRuleset(ruleset);
+  if (ruleset?.ruleset === EXPANDED_PRIVATE_RULESET_ID) return assertExpandedPrivateRuleset(ruleset);
+  throw new RangeError('unsupported private ruleset');
+}
+
+function getPrivateRulesetFeatures(ruleset) {
+  assertPrivateRuleset(ruleset);
+  return ruleset.ruleset === EXPANDED_PRIVATE_RULESET_ID ? EXPANDED_PRIVATE_FEATURES : Object.freeze([]);
 }
 
 function assertPrivateExpansionLimits({
@@ -108,6 +188,10 @@ module.exports = {
   CLASSIC_PRIVATE_RULESET_ID,
   CLASSIC_ROUND_LIMIT,
   CLASSIC_SCORE_TARGET,
+  EXPANDED_PRIVATE_FEATURES,
+  EXPANDED_PRIVATE_RULESET,
+  EXPANDED_PRIVATE_RULESET_ID,
+  EXPANDED_TIMEOUT_POLICIES,
   MAX_PRIVATE_CARD_INSTANCES,
   MAX_PRIVATE_EFFECT_STEPS_PER_ROUND,
   MAX_PRIVATE_EXPANSION_SPECTATORS,
@@ -118,7 +202,12 @@ module.exports = {
   PRIVATE_RULESET_VERSION,
   PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS,
   assertClassicPrivateRuleset,
+  assertExpandedPrivateRuleset,
   assertPrivateExpansionLimits,
+  assertPrivateRuleset,
   createClassicPrivateRuleset,
+  createExpandedPrivateRuleset,
+  getPrivateRulesetFeatures,
+  isSupportedExpandedTimeoutPolicy,
   isSupportedPrivateTurnTimeLimit
 };
