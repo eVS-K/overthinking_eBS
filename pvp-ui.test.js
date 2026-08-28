@@ -117,12 +117,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v25/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v25/);
+  assert.match(html, /style\.css\?v=pvp-v26/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v26/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v25/);
+  assert.match(loader, /main\.js\?v=pvp-v26/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -215,7 +215,9 @@ test('Privateの設定担当は対戦者へ安全に譲れ、受け取った側�
   const css = read('style.css');
 
   assert.match(html, /id="transfer-private-settings-owner-btn"/);
-  assert.match(html, /現在の設定は変えずに、対戦相手へ編集権限を渡せます。/);
+  assert.match(html, /設定を変えずに編集権限を相手へ渡せます。/);
+  assert.match(html, /id="room-rules-owner-actions"/);
+  assert.match(html, /設定担当を譲る/);
   assert.match(client, /function requestPrivateSettingsOwnershipTransfer\(/);
   assert.match(client, /transfer_private_settings_owner/);
   assert.match(client, /socket\.on\('settings_owner_changed'/);

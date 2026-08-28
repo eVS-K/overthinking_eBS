@@ -11,9 +11,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
   <script src="page-redirect.js?v=security-v4"></script>
-  <link rel="stylesheet" href="style.css?v=pvp-v25">
+  <link rel="stylesheet" href="style.css?v=pvp-v26">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v25"></script>
+  <script src="socket-loader.js?v=pvp-v26"></script>
 </head>
 <body>
   <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
@@ -203,7 +203,10 @@
           <section id="room-rules-panel" class="room-rules-panel" aria-labelledby="room-rules-title">
             <div class="room-rules-heading">
               <div><span class="section-label" id="room-rules-title">この部屋のルール</span><strong id="room-rules-mode">クラシック</strong></div>
-              <span id="room-rules-state" class="room-rules-state">設定を確認できます</span>
+              <div id="room-rules-owner-actions" class="room-rules-owner-actions">
+                <span id="room-rules-state" class="room-rules-state">設定を確認できます</span>
+                <button id="transfer-private-settings-owner-btn" class="transfer-private-settings-owner-button hidden" type="button">設定担当を譲る</button>
+              </div>
             </div>
             <p id="room-rules-summary" class="room-rules-summary">7枚の共通手札で、7ラウンドの読み合いを行います。</p>
             <details class="room-rules-details">
@@ -219,9 +222,8 @@
                 <div>
                   <span id="private-settings-owner-title" class="section-label">設定担当</span>
                   <strong id="private-settings-owner-name">あなた</strong>
-                  <small>現在の設定は変えずに、対戦相手へ編集権限を渡せます。</small>
+                  <small>設定を変えずに編集権限を相手へ渡せます。上の「設定担当を譲る」から操作してください。</small>
                 </div>
-                <button id="transfer-private-settings-owner-btn" class="transfer-private-settings-owner-button" type="button">相手へ譲る</button>
               </section>
               <label for="private-ruleset-select">
                 <span>ルールセット</span>

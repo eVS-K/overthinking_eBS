@@ -814,13 +814,15 @@ function renderRoomRules(room) {
     : '時間切れ時は、残った合法な手札からサーバーが1枚をランダムに選びます。');
 
   elements.privateSettingsControls.classList.toggle('hidden', !canEdit);
+  elements.transferPrivateSettingsOwnerButton.classList.toggle('hidden', !canEdit);
   if (!canEdit) return;
   const transferTarget = room?.players?.find((player) => player.id !== socket?.id) || null;
   const canTransferOwnership = Boolean(transferTarget?.connected && !isPending && socket?.connected);
   setText(elements.privateSettingsOwnerName, 'あなた');
-  setText(
-    elements.transferPrivateSettingsOwnerButton,
-    transferTarget ? `${transferTarget.name} さんへ譲る` : '相手へ譲る'
+  setText(elements.transferPrivateSettingsOwnerButton, '設定担当を譲る');
+  elements.transferPrivateSettingsOwnerButton.setAttribute(
+    'aria-label',
+    transferTarget ? `${transferTarget.name} さんへ設定担当を譲る` : '設定担当を譲る'
   );
   elements.transferPrivateSettingsOwnerButton.disabled = !canTransferOwnership;
   const selectableTurnTime = PRIVATE_TURN_TIME_OPTIONS_MS.has(rules.turnTimeLimitMs)
