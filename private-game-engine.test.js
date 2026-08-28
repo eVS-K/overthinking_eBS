@@ -232,3 +232,40 @@ test('Blankが無効な拡張設定では、仮想Blankを選択・確定でき�
   assert.equal(legalPrivateCardInstanceIds(state, 'p1').includes(VIRTUAL_BLANK_SELECTION_ID), false);
   assert.throws(() => applyPrivateRound(state, VIRTUAL_BLANK_SELECTION_ID, instanceIdFor(state, 'p2', 'ace')), /not legal/);
 });
+
+test('条件型Tarotの強さは履歴へ確定保存され、改ざんされた強さは次の手の前に拒否される', () => {
+  const rules = createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null });
+  let state = createExpandedPrivateGameState({
+    rules,
+    instanceNamespace: 'conditional-tarot',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'death', copies: 1 }
+    ]
+  });
+  const first = applyPrivateRound(
+    state,
+    instanceIdFor(state, 'p1', 'death'),
+    instanceIdFor(state, 'p2', 'ace')
+  );
+  assert.equal(first.canonicalResult, 'p2');
+  assert.equal(first.p1Strength, 13);
+  assert.equal(first.p2Strength, 14);
+  state = first.state;
+
+  const second = applyPrivateRound(
+    state,
+    instanceIdFor(state, 'p1', 'ace'),
+    instanceIdFor(state, 'p2', 'death')
+  );
+  assert.equal(second.canonicalResult, 'p1');
+  assert.equal(second.p1Strength, 14);
+  assert.equal(second.p2Strength, 0);
+
+  const forged = structuredClone(second.state);
+  forged.history[0].p1Strength = 0;
+  assert.throws(() => assertPrivateGameState(forged), /history strength/);
+});

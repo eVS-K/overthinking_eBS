@@ -9,6 +9,7 @@ const MAX_RENDERED_CHAT_MESSAGES = 100;
 const CARD_MARKS = Object.freeze({
   ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'Jk', three: '3', two: '2',
   ten: '10', nine: '9', eight: '8', seven: '7', six: '6', five: '5', four: '4',
+  death: 'XIII', temperance: 'XIV', 'the-devil': 'XV', 'the-tower': 'XVI',
   blank: '—', 'virtual-blank': '—'
 });
 const CLASSIC_PRIVATE_RULESET_ID = 'classic-v1';
@@ -117,6 +118,7 @@ const elements = {
   selectedCardPanel: document.getElementById('selected-card-panel'),
   selectedCardSuit: document.getElementById('selected-card-suit'),
   selectedCardName: document.getElementById('selected-card-name'),
+  selectedCardStrength: document.getElementById('selected-card-strength'),
   selectedCardDescription: document.getElementById('selected-card-description'),
   opponentName: document.getElementById('opp-name'),
   opponentSideLabel: document.getElementById('opp-side-label'),
@@ -701,13 +703,18 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
   elements.expandedDeckList.replaceChildren();
   catalog.forEach((card) => {
     const row = document.createElement('article');
-    row.className = 'expanded-deck-card';
+    row.className = `expanded-deck-card${card.category === 'tarot' ? ' expanded-deck-card-tarot' : ''}`;
     const copy = document.createElement('div');
     const name = document.createElement('strong');
     name.textContent = card.name;
+    const type = document.createElement('span');
+    type.className = 'expanded-deck-card-type';
+    type.textContent = card.category === 'tarot' ? '条件型 TAROT' : '';
     const description = document.createElement('small');
     description.textContent = card.desc || '能力なし';
-    copy.append(name, description);
+    copy.append(name);
+    if (type.textContent) copy.append(type);
+    copy.append(description);
     const controls = document.createElement('div');
     controls.className = 'expanded-deck-card-controls';
     const minus = document.createElement('button');
@@ -772,8 +779,9 @@ function renderRoomRules(room) {
 
   const deckCount = isExpanded ? deckCardCount(rules.deck) : 7;
   const immediateText = rules.scoreTarget === null ? '即時勝利なし' : `${rules.scoreTarget}枚獲得で即時決着`;
+  const cardNames = new Map((rules.deckCatalog || []).map((card) => [card.id, card.name]));
   const deckText = isExpanded
-    ? rules.deck.map((entry) => `${entry.definitionId} ×${entry.copies}`).join(' / ')
+    ? rules.deck.map((entry) => `${cardNames.get(entry.definitionId) || entry.definitionId} ×${entry.copies}`).join(' / ')
     : '両者とも A / K / Q / J / Joker / 3 / 2 を1枚ずつ使用します。';
   setText(elements.roomRulesMode, !isPrivateRoom ? 'ランダムマッチ・固定ルール' : isExpanded ? 'プライベート対戦・拡張デッキ' : 'プライベート対戦・クラシック');
   setText(
@@ -913,7 +921,9 @@ function createCard(card, suitType, isInteractive) {
   // 両プレイヤーは同じIDのカードを持つため、選択状態は操作できる自分の手札だけに適用する。
   const isSelected = isInteractive && card.id === mySelectedCardId;
   const isCommitting = isInteractive && card.id === committedCardId;
-  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
+  const cardMark = CARD_MARKS[card.definitionId] || CARD_MARKS[card.id] || '?';
+  const isTarot = card.category === 'tarot';
+  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isTarot ? ' card-tarot' : ''}${card.roundInfo?.conditional ? ' card-conditional' : ''}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.dataset.cardId = card.id;
   cardElement.setAttribute(
     'aria-label',
@@ -971,7 +981,7 @@ function createCard(card, suitType, isInteractive) {
   center.className = 'card-center-suit';
   const rankMark = document.createElement('span');
   rankMark.className = 'card-rank-mark';
-  rankMark.textContent = CARD_MARKS[card.id] || '?';
+  rankMark.textContent = cardMark;
   rankMark.setAttribute('aria-hidden', 'true');
   const suitMark = document.createElement('span');
   suitMark.className = 'card-suit-mark';
@@ -986,7 +996,7 @@ function createCard(card, suitType, isInteractive) {
   cornerPip.className = 'card-corner-pip';
   cornerPip.setAttribute('aria-hidden', 'true');
   const cornerRank = document.createElement('span');
-  cornerRank.textContent = CARD_MARKS[card.id] || '?';
+  cornerRank.textContent = cardMark;
   const cornerSuit = document.createElement('span');
   cornerSuit.textContent = suit.textContent;
   cornerPip.append(cornerRank, cornerSuit);
@@ -1017,12 +1027,22 @@ function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'sp
   elements.selectedCardPanel.classList.toggle('hidden', !shouldShow);
   if (!shouldShow) {
     setText(elements.selectedCardName, '—');
+    setText(elements.selectedCardStrength, '');
+    elements.selectedCardStrength.classList.add('hidden');
     setText(elements.selectedCardDescription, '');
     return;
   }
   setText(elements.selectedCardSuit, suitType === 'heart' ? '♥' : '♠');
   setText(elements.selectedCardName, selectedCard.name);
-  setText(elements.selectedCardDescription, `能力：${selectedCard.desc}`);
+  const strengthText = Number.isSafeInteger(selectedCard.roundInfo?.strength)
+    ? `このラウンドの強さ：${selectedCard.roundInfo.strength}`
+    : selectedCard.definitionId === 'joker'
+      ? 'このラウンドの強さ：相手のカードに合わせます'
+      : '';
+  setText(elements.selectedCardStrength, strengthText);
+  elements.selectedCardStrength.classList.toggle('hidden', !strengthText);
+  const conditionDetail = selectedCard.roundInfo?.detail ? `　${selectedCard.roundInfo.detail}` : '';
+  setText(elements.selectedCardDescription, `能力：${selectedCard.desc || '能力なし'}${conditionDetail}`);
 }
 
 function updateScore(element, player) {
@@ -1137,7 +1157,7 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   const secondOwner = currentRoom?.viewer?.isSpectator
     ? getSeatOwnerLabel(currentRoom, 'p2', '♥側')
     : firstOwner === 'あなた' ? '相手' : 'あなた';
-  const first = createRevealCard(lastRound.p1Card, firstOwner, 'p1');
+  const first = createRevealCard(lastRound.p1Card, firstOwner, 'p1', lastRound.p1Strength);
   first.classList.add('left');
   const versus = document.createElement('div');
   versus.className = 'reveal-versus';
@@ -1149,7 +1169,7 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     ? `引き分け · 持ち越し +${Array.isArray(currentRoom?.stack) ? currentRoom.stack.length : 0}`
     : `獲得 ${awardText}`;
   versus.append(versusMark, winner);
-  const second = createRevealCard(lastRound.p2Card, secondOwner, 'p2');
+  const second = createRevealCard(lastRound.p2Card, secondOwner, 'p2', lastRound.p2Strength);
   second.classList.add('right');
   result.append(outcome, first, versus, second);
   elements.revealArea.replaceChildren(result);
@@ -1267,15 +1287,25 @@ function playResultEffects(outcomeClass) {
   window.setTimeout(() => elements.gameScreen.classList.remove(`impact-${outcomeClass}`), 720);
 }
 
-function createRevealCard(card, owner, seat = '') {
+function createRevealCard(card, owner, seat = '', strength = undefined) {
   const node = document.createElement('div');
   node.className = `reveal-card${seat === 'p1' ? ' reveal-spade' : seat === 'p2' ? ' reveal-heart' : ''}`;
   const cardName = document.createElement('strong');
   cardName.textContent = card.name;
+  const power = document.createElement('span');
+  power.className = 'reveal-card-strength';
+  power.textContent = Number.isSafeInteger(strength) ? `強さ ${strength}` : '';
   const label = document.createElement('span');
   label.textContent = owner;
-  node.append(cardName, label);
+  node.append(cardName);
+  if (power.textContent) node.append(power);
+  node.append(label);
   return node;
+}
+
+function formatRoundCardLabel(card, strength) {
+  const name = card?.name || '不明なカード';
+  return Number.isSafeInteger(strength) ? `${name}（強さ${strength}）` : name;
 }
 
 function renderHistory(history) {
@@ -1304,7 +1334,7 @@ function renderHistory(history) {
       ? '引き分け · 持ち越し'
       : `${getSeatOwnerLabel(currentRoom, winnerSeat, winnerName)} が獲得`;
     const cards = document.createElement('span');
-    cards.textContent = `${round.p1Card.name}  対  ${round.p2Card.name}`;
+    cards.textContent = `${formatRoundCardLabel(round.p1Card, round.p1Strength)}  対  ${formatRoundCardLabel(round.p2Card, round.p2Strength)}`;
     detail.append(winner, cards);
     item.append(number, detail);
     elements.history.append(item);

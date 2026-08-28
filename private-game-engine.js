@@ -27,6 +27,7 @@ const {
   getPrivateCardDefinition
 } = require('./private-card-instances');
 const { expandPrivateDeckEntries, normalizePrivateDeckEntries } = require('./private-deck');
+const { resolvePrivateRoundWithContext } = require('./private-card-effects');
 const {
   VIRTUAL_BLANK_SELECTION_ID,
   createVirtualBlankCard,
@@ -199,8 +200,24 @@ function assertPrivateGameState(state) {
       }
       historicalInstanceIds.add(card.instanceId);
     }
-    const canonicalResult = resolvePrivateRound(p1Card, p2Card);
+    const historicalContext = {
+      round: record.round,
+      p1: { score: reconstructedP1Score },
+      p2: { score: reconstructedP2Score },
+      stack: Array.from({ length: reconstructedStack })
+    };
+    const resolution = resolvePrivateRoundWithContext(historicalContext, p1Card, p2Card);
+    const canonicalResult = resolution.canonicalResult;
     if (record.canonicalResult !== canonicalResult) throw new RangeError('private history outcome does not match canonical rules');
+    const hasStrengthSnapshot = record.p1Strength !== undefined || record.p2Strength !== undefined;
+    if (hasStrengthSnapshot && (
+      !Number.isSafeInteger(record.p1Strength)
+      || !Number.isSafeInteger(record.p2Strength)
+      || record.p1Strength !== resolution.p1.resolvedStrength
+      || record.p2Strength !== resolution.p2.resolvedStrength
+    )) {
+      throw new RangeError('private history strength does not match the round context');
+    }
     const expectedWinnerSeat = canonicalResult === 'p1' ? 'p1' : canonicalResult === 'p2' ? 'p2' : null;
     const physicalPlayedCards = [p1Card, p2Card].filter((card) => !isVirtualBlankCard(card));
     const expectedAwardedCards = expectedWinnerSeat ? physicalPlayedCards.length + reconstructedStack : 0;
@@ -351,7 +368,8 @@ function applyPrivateRound(state, p1InstanceId, p2InstanceId) {
   const next = clonePrivateGameState(state);
   const p1Card = p1IsVirtualBlank ? createVirtualBlankCard() : next.p1.hand.splice(p1Index, 1)[0];
   const p2Card = p2IsVirtualBlank ? createVirtualBlankCard() : next.p2.hand.splice(p2Index, 1)[0];
-  const canonicalResult = resolvePrivateRound(p1Card, p2Card);
+  const resolution = resolvePrivateRoundWithContext(state, p1Card, p2Card);
+  const canonicalResult = resolution.canonicalResult;
   const physicalPlayedCards = [p1Card, p2Card].filter((card) => !isVirtualBlankCard(card));
   const awardedCards = physicalPlayedCards.length + next.stack.length;
   let winnerSeat = null;
@@ -372,6 +390,8 @@ function applyPrivateRound(state, p1InstanceId, p2InstanceId) {
     p1Card: clonePlayedPrivateCard(p1Card),
     p2Card: clonePlayedPrivateCard(p2Card),
     canonicalResult,
+    p1Strength: resolution.p1.resolvedStrength,
+    p2Strength: resolution.p2.resolvedStrength,
     winnerSeat,
     awardedCards: winnerSeat ? awardedCards : 0
   };

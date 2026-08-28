@@ -291,6 +291,50 @@ test('BlankなしのPrivate拡張は、Blankを選択肢やタイムアウト候
   assert.equal(finishGameByForfeit(room, room.players[0]), true);
 });
 
+test('条件型TarotはPrivate拡張の手札へ現在の強さを公開し、結果履歴へ確定値を保存する', () => {
+  const room = createRoom('expanded-conditional-tarot-room');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '先手', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+  assert.equal(updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: room.configRevision,
+    ruleset: 'private-expanded-v1',
+    roundLimit: 3,
+    scoreTarget: null,
+    blankEnabled: false,
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'death', copies: 1 }
+    ]
+  }).ok, true);
+  room.startAgreements.add('host-client');
+  room.startAgreements.add('guest-client');
+  assert.equal(startWhenBothPlayersAgree(room), true);
+
+  const death = room.players[0].hand.find((card) => card.definitionId === 'death');
+  const ace = room.players[1].hand.find((card) => card.definitionId === 'ace');
+  assert.deepEqual(death.roundInfo, {
+    strength: 13,
+    detail: '現在の獲得札は 0枚 ≤ 相手 0枚のため、強さ13です。',
+    conditional: true
+  });
+  room.selections = { p1: death.id, p2: ace.id };
+  processTurn(room);
+  assert.equal(room.lastRound.p1Strength, 13);
+  assert.equal(room.lastRound.p2Strength, 14);
+  assert.equal(room.lastRound.winnerSeat, 'p2');
+  const view = createRoomView(room, 'p1');
+  assert.equal(view.history[0].p1Strength, 13);
+  assert.equal(view.lastRound.p2Strength, 14);
+  assert.equal(finishGameByForfeit(room, room.players[0]), true);
+});
+
 test('room viewは設定の公開情報だけを返し、ホスト退室後に残った対戦者へ管理権限を移せる', () => {
   const room = createRoom('private-host-view');
   room.players = [

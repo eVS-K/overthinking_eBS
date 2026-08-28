@@ -62,3 +62,20 @@ test('Private拡張デッキは未実装カード、無効な枚数、未到達�
   ], expandedRules({ scoreTarget: 11 })), /score target/);
   assert.throws(() => normalizePrivateDeckEntries([{ definitionId: 'ace', copies: 5 }], createClassicPrivateRuleset()), /only for the expanded/);
 });
+
+test('条件型TarotはPrivate拡張へ1枚だけ入れられ、同名の重複は拒否する', () => {
+  const deck = normalizePrivateDeckEntries([
+    { definitionId: 'ace', copies: 1 },
+    { definitionId: 'king', copies: 1 },
+    { definitionId: 'queen', copies: 1 },
+    { definitionId: 'jack', copies: 1 },
+    { definitionId: 'death', copies: 1 }
+  ], expandedRules());
+  assert.equal(deck.find((entry) => entry.definitionId === 'death')?.copies, 1);
+  assert.throws(() => normalizePrivateDeckEntries([
+    { definitionId: 'ace', copies: 1 },
+    { definitionId: 'king', copies: 1 },
+    { definitionId: 'queen', copies: 1 },
+    { definitionId: 'death', copies: 2 }
+  ], expandedRules()), /copy limit/);
+});

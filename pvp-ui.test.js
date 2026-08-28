@@ -32,6 +32,7 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
 
   assert.match(html, /id="selected-card-panel"[^>]*aria-live="polite"/);
   assert.match(html, /id="selected-card-name"/);
+  assert.match(html, /id="selected-card-strength"/);
   assert.match(html, /id="selected-card-description"/);
   assert.ok(
     html.indexOf('id="my-hand"') < html.indexOf('id="selected-card-panel"')
@@ -39,7 +40,8 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
     '選択中カードの詳細は、手札の直下かつ最終結果パネルの前に表示する'
   );
   assert.match(client, /function renderSelectedCardDetails\(/);
-  assert.match(client, /setText\(elements\.selectedCardDescription, `能力：\$\{selectedCard\.desc\}`\);/);
+  assert.match(client, /setText\(elements\.selectedCardStrength, strengthText\);/);
+  assert.match(client, /selectedCard\.roundInfo\?\.detail/);
   assert.match(client, /renderSelectedCardDetails\(displayedBottomHand, \{ isInteractive, suitType: 'spade' \}\);/);
   assert.doesNotMatch(client, /description\.className = 'card-desc'/);
   assert.match(css, /\.selected-card-panel\s*\{/);
@@ -115,12 +117,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v23/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v23/);
+  assert.match(html, /style\.css\?v=pvp-v24/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v24/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v23/);
+  assert.match(loader, /main\.js\?v=pvp-v24/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -201,8 +203,23 @@ test('Private拡張では共通デッキ・終了条件・Blankを待機中だ�
   assert.match(server, /function getSelectableCardIds\(/);
   assert.match(server, /crypto\.randomInt\(options\.length\)/);
   assert.match(server, /function processExpandedPrivateTurn\(/);
+  assert.match(server, /getPrivateCardRoundPreview/);
   assert.match(css, /\.expanded-private-settings\s*\{/);
   assert.match(css, /\.card-virtual-blank\s*\{/);
+});
+
+test('条件型Tarotは選択時・公開済み履歴でだけ現在ラウンドの強さを確認できる', () => {
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(client, /death: 'XIII'/);
+  assert.match(client, /temperance: 'XIV'/);
+  assert.match(client, /function formatRoundCardLabel\(/);
+  assert.match(client, /createRevealCard\(lastRound\.p1Card, firstOwner, 'p1', lastRound\.p1Strength\)/);
+  assert.match(client, /round\.p1Strength/);
+  assert.match(css, /\.card-tarot\s*\{/);
+  assert.match(css, /\.selected-card-strength\s*\{/);
+  assert.match(css, /\.expanded-deck-card-tarot\s*\{/);
 });
 
 test('チャットとゲーム案内には個人情報・差別的表現の注意、および通信中断の案内を明示する', () => {

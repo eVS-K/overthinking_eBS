@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  AVAILABLE_CONDITIONAL_TAROT_IDS,
   getClassicPrivateCardDefinition,
   getPrivateCardDefinition
 } = require('./private-card-definitions');
@@ -23,4 +24,15 @@ test('Blankは仮想札としてengine-ready、Tarotは仕様済みでもデッ�
   assert.equal(blank.requiresFeatures.includes('blank-semantics-v1'), true);
   assert.equal(world.status, 'specified');
   assert.equal(world.desc, '相手の獲得札を奪い、そのコピーを手札へ加える');
+});
+
+test('初期導入の4枚の条件型TarotだけはPrivate拡張デッキへ入れられる状態である', () => {
+  assert.deepEqual([...AVAILABLE_CONDITIONAL_TAROT_IDS], ['death', 'temperance', 'the-devil', 'the-tower']);
+  for (const definitionId of AVAILABLE_CONDITIONAL_TAROT_IDS) {
+    const card = getPrivateCardDefinition(definitionId);
+    assert.equal(card.status, 'available');
+    assert.equal(card.category, 'tarot');
+    assert.equal(card.maxCopiesPerDeck, 1);
+    assert.equal(card.requiresFeatures.includes('conditional-strength-v1'), true);
+  }
 });

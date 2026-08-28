@@ -26,6 +26,12 @@ const PRIVATE_CARD_STATUSES = Object.freeze([
   'available',
   'retired'
 ]);
+const AVAILABLE_CONDITIONAL_TAROT_IDS = new Set([
+  'death',
+  'temperance',
+  'the-devil',
+  'the-tower'
+]);
 
 function freezeDefinition(definition) {
   return Object.freeze({
@@ -135,19 +141,19 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
     requiresFeatures: ['target-selection-v1', 'card-generation-v1'], excludesTags: []
   },
   {
-    id: 'death', name: 'Death', strength: null, desc: '獲得枚数が相手以下なら13、そうでなければ0', category: 'tarot',
+    id: 'death', name: 'Death', strength: null, desc: '獲得札が相手以下なら13、上回ると0', category: 'tarot',
     requiresFeatures: ['conditional-strength-v1'], excludesTags: []
   },
   {
-    id: 'temperance', name: 'Temperance', strength: null, desc: '奇数ラウンドなら14、偶数なら0', category: 'tarot',
+    id: 'temperance', name: 'Temperance', strength: null, desc: '奇数ラウンドは14、偶数ラウンドは0', category: 'tarot',
     requiresFeatures: ['conditional-strength-v1'], excludesTags: []
   },
   {
-    id: 'the-devil', name: 'The Devil', strength: null, desc: 'スタックがあれば15、なければ0', category: 'tarot',
+    id: 'the-devil', name: 'The Devil', strength: null, desc: '持ち越し札があれば15、なければ0', category: 'tarot',
     requiresFeatures: ['conditional-strength-v1'], excludesTags: []
   },
   {
-    id: 'the-tower', name: 'The Tower', strength: null, desc: '現在ラウンド数×2の強さ', category: 'tarot',
+    id: 'the-tower', name: 'The Tower', strength: null, desc: '現在ラウンド数 × 2 の強さ', category: 'tarot',
     requiresFeatures: ['conditional-strength-v1'], excludesTags: []
   },
   {
@@ -172,7 +178,11 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   }
 ].map((definition) => freezeDefinition({
   ...definition,
-  status: definition.id === 'blank' ? 'engine-ready' : 'specified',
+  status: definition.id === 'blank'
+    ? 'engine-ready'
+    : AVAILABLE_CONDITIONAL_TAROT_IDS.has(definition.id)
+      ? 'available'
+      : 'specified',
   availability: [EXPANDED_PRIVATE_RULESET_ID],
   maxCopiesPerDeck: definition.category === 'tarot' ? 1 : 3,
   visibilityModel: definition.id === 'the-star' ? 'recipient-specific' : 'public'
@@ -212,6 +222,7 @@ module.exports = {
   PRIVATE_CARD_CATALOG,
   PRIVATE_CARD_DEFINITION_BY_ID,
   PRIVATE_CARD_STATUSES,
+  AVAILABLE_CONDITIONAL_TAROT_IDS,
   getClassicPrivateCardDefinition,
   getPrivateCardDefinition
 };

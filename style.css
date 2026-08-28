@@ -299,12 +299,19 @@ input::placeholder { color: #65708b; }
 .card-heart .card-center-suit { color: rgba(255, 119, 143, .21); }
 .card-spade .card-corner-pip { color: var(--gold); }
 .card-heart .card-corner-pip { color: var(--heart); }
+.card-tarot { border-color: rgba(169, 145, 255, .68); background: linear-gradient(145deg, rgba(68, 58, 116, .92), rgba(31, 27, 61, .98)); }
+.card-tarot::before { border-color: rgba(197, 181, 255, .24); }
+.card-tarot .card-rank-mark { font-size: clamp(27px, 3.7vw, 43px); letter-spacing: -.045em; }
+.card-tarot .card-center-suit { color: rgba(205, 186, 255, .3); }
+.card-tarot.card-spade .card-center-suit { color: rgba(242, 189, 105, .25); }
+.card-tarot.card-heart .card-center-suit { color: rgba(255, 119, 143, .25); }
 .opponent-hand .card { background: linear-gradient(145deg, rgba(83, 49, 75, .83), rgba(40, 27, 49, .95)); }
 
 .selected-card-panel { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; margin: -1px 2px 5px; padding: 9px 11px; overflow: hidden; border: 1px solid rgba(242, 189, 105, .44); border-inline-start: 3px solid var(--gold-bright); color: #edf2ff; background: linear-gradient(100deg, rgba(106, 83, 48, .34), rgba(32, 39, 67, .56) 42%, rgba(13, 21, 43, .72)); box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 8px 18px rgba(0, 0, 0, .12); animation: selected-card-enter .26s cubic-bezier(.19,.82,.3,1.1) both; }
 .selected-card-suit { display: grid; place-items: center; width: 38px; aspect-ratio: 1; border: 1px solid rgba(242, 189, 105, .55); border-radius: 50%; color: var(--gold-bright); background: rgba(242, 189, 105, .09); box-shadow: 0 0 16px rgba(242, 189, 105, .18); font-family: var(--serif); font-size: 22px; line-height: 1; }
 .selected-card-copy { display: grid; gap: 2px; min-width: 0; }
 .selected-card-copy strong { overflow: hidden; color: #fff3ce; font-family: var(--serif); font-size: 18px; font-weight: 400; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; }
+.selected-card-strength { min-height: 14px; overflow-wrap: anywhere; color: #fff0bf; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .04em; line-height: 1.35; }
 .selected-card-copy p { margin: 0; overflow-wrap: anywhere; color: #c8d4eb; font-size: 11px; line-height: 1.45; }
 
 .table-center { margin: 0 calc(clamp(16px, 3vw, 30px) * -1); padding: 16px clamp(16px, 3vw, 30px) 14px; border-block: 1px solid var(--line); background: rgba(3, 7, 18, .36); }
@@ -351,6 +358,7 @@ input::placeholder { color: #65708b; }
 .reveal-card.reveal-heart { color: #ff9daf; }
 .reveal-card strong { overflow: hidden; max-width: 100%; font-family: var(--serif); font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }
 .reveal-card span { max-width: 100%; overflow: hidden; color: currentColor; font-family: var(--mono); font-size: 9px; letter-spacing: .08em; opacity: .74; text-overflow: ellipsis; white-space: nowrap; }
+.reveal-card .reveal-card-strength { color: #fff0bf; font-size: 9px; font-weight: 700; letter-spacing: .06em; opacity: 1; }
 .reveal-versus { display: grid; min-width: 0; justify-items: center; gap: 5px; }
 .reveal-versus b { color: var(--gold); font-family: var(--serif); font-size: 20px; font-weight: 400; }
 .reveal-versus span { max-width: 100%; overflow: hidden; color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .1em; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
@@ -440,6 +448,8 @@ input::placeholder { color: #65708b; }
 .expanded-deck-card > div:first-child { display: grid; min-width: 0; gap: 2px; }
 .expanded-deck-card strong { overflow: hidden; color: #e8efff; font-family: var(--serif); font-size: 13px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .expanded-deck-card small { overflow: hidden; color: #9facca; font-size: 8px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.expanded-deck-card-tarot { border-color: rgba(169, 145, 255, .4); background: linear-gradient(135deg, rgba(87, 67, 139, .17), rgba(5, 11, 25, .34)); }
+.expanded-deck-card-type { color: #d4c5ff; font-family: var(--mono); font-size: 7px; font-weight: 700; letter-spacing: .1em; }
 .expanded-deck-card-controls { display: grid; grid-template-columns: 30px 24px 30px; align-items: center; gap: 3px; flex: 0 0 auto; }
 .deck-count-button { min-height: 30px; padding: 0; border: 1px solid rgba(242, 189, 105, .55); color: var(--gold-bright); background: rgba(16, 24, 48, .86); font-family: var(--mono); font-size: 16px; line-height: 1; cursor: pointer; }
 .deck-count-button:hover:not(:disabled) { border-color: #fff3ce; color: #fff3ce; background: rgba(102, 80, 48, .65); }
@@ -581,6 +591,7 @@ input::placeholder { color: #65708b; }
   .selected-card-panel { grid-template-columns: 36px minmax(0, 1fr); gap: 8px; margin-inline: 0; padding: 8px 9px; }
   .selected-card-suit { width: 33px; font-size: 19px; }
   .selected-card-copy strong { font-size: 16px; }
+  .selected-card-strength { font-size: 9px; }
   .selected-card-copy p { font-size: 10px; }
   .table-center { margin-inline: 0; padding-inline: 0; }
   .round-dashboard { grid-template-columns: 1fr 1.25fr 1fr; gap: 8px; }

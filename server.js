@@ -20,6 +20,7 @@ const {
   createExpandedPrivateGameState,
   legalPrivateCardInstanceIds
 } = require('./private-game-engine');
+const { getPrivateCardRoundPreview } = require('./private-card-effects');
 const { publicPrivateCard } = require('./private-card-instances');
 const { PRIVATE_CARD_CATALOG } = require('./private-card-definitions');
 const {
@@ -715,15 +716,38 @@ function refreshPrivateRoomIdleExpiry(room, now = Date.now()) {
   schedulePrivateRoomIdleExpiry(room);
 }
 
-function publicExpandedCard(card) {
-  if (card?.virtual === true) return publicVirtualBlankCard();
+function publicExpandedCard(card, state = null, seat = '') {
+  if (card?.virtual === true) {
+    return {
+      ...publicVirtualBlankCard(),
+      category: 'blank',
+      ...(state && seat ? {
+        roundInfo: {
+          strength: 0,
+          detail: '',
+          conditional: false
+        }
+      } : {})
+    };
+  }
   const publicCard = publicPrivateCard(card);
+  const preview = state && (seat === 'p1' || seat === 'p2')
+    ? getPrivateCardRoundPreview(state, seat, card)
+    : null;
   return {
     id: publicCard.instanceId,
     definitionId: publicCard.definitionId,
     name: publicCard.name,
     desc: publicCard.desc,
-    state: { ...publicCard.state }
+    category: preview?.category || '',
+    state: { ...publicCard.state },
+    ...(preview ? {
+      roundInfo: {
+        strength: preview.displayStrength,
+        detail: preview.conditionDetail,
+        conditional: preview.isConditional
+      }
+    } : {})
   };
 }
 
@@ -731,8 +755,8 @@ function syncExpandedPrivateStateToRoom(room) {
   const state = room?.privateGameState;
   if (!state || room.players.length !== 2) return false;
   const [firstPlayer, secondPlayer] = room.players;
-  firstPlayer.hand = state.p1.hand.map(publicExpandedCard);
-  secondPlayer.hand = state.p2.hand.map(publicExpandedCard);
+  firstPlayer.hand = state.p1.hand.map((card) => publicExpandedCard(card, state, 'p1'));
+  secondPlayer.hand = state.p2.hand.map((card) => publicExpandedCard(card, state, 'p2'));
   firstPlayer.score = state.p1.score;
   secondPlayer.score = state.p2.score;
   room.round = state.round;
@@ -749,7 +773,9 @@ function syncExpandedPrivateStateToRoom(room) {
         : 'Draw',
     winnerSeat: record.winnerSeat,
     awardedCards: record.awardedCards,
-    canonicalResult: record.canonicalResult
+    canonicalResult: record.canonicalResult,
+    p1Strength: record.p1Strength,
+    p2Strength: record.p2Strength
   }));
   room.lastRound = room.history.at(-1) || null;
   return true;
