@@ -3,9 +3,9 @@
 /**
  * Private拡張用の純粋ゲーム状態遷移。
  *
- * 現段階ではクラシック preset を instanceId 化して再現するだけで、
- * server.js の現行対局フローへはまだ接続しない。これにより追加カード
- * やTarotを実装する前に、複製札・不変条件・終了判定を独立して検証できる。
+ * 追加通常札・仮想Blankを含むPrivate設定を、既存クラシックとは別の
+ * immutable stateとして扱う。UIやSocket.IOはここに入れず、複製札・
+ * Blank・得点・終了判定を独立して検証できるようにする。
  */
 const { CARD_DEFINITIONS, resolveRound } = require('./game-rules');
 const {
@@ -27,12 +27,22 @@ const {
   getPrivateCardDefinition
 } = require('./private-card-instances');
 const { expandPrivateDeckEntries, normalizePrivateDeckEntries } = require('./private-deck');
+const {
+  VIRTUAL_BLANK_SELECTION_ID,
+  createVirtualBlankCard,
+  isVirtualBlankCard,
+  isVirtualBlankSelectionId
+} = require('./private-blank');
 
 const CLASSIC_DEFINITION_IDS = Object.freeze(CARD_DEFINITIONS.map((card) => card.id));
 
 function cloneHand(hand) {
   if (!Array.isArray(hand)) throw new TypeError('private hand must be an array');
   return hand.map(clonePrivateCardInstance);
+}
+
+function clonePlayedPrivateCard(card) {
+  return isVirtualBlankCard(card) ? createVirtualBlankCard() : clonePrivateCardInstance(card);
 }
 
 function clonePrivateGameState(state) {
@@ -47,8 +57,8 @@ function clonePrivateGameState(state) {
     stack: cloneHand(state.stack),
     history: state.history.map((record) => ({
       ...record,
-      p1Card: clonePrivateCardInstance(record.p1Card),
-      p2Card: clonePrivateCardInstance(record.p2Card)
+      p1Card: clonePlayedPrivateCard(record.p1Card),
+      p2Card: clonePlayedPrivateCard(record.p2Card)
     }))
   };
 }
@@ -61,6 +71,12 @@ function resolvePrivateRound(p1Card, p2Card) {
 }
 
 function assertCardIsAllowedByRuleset(card, ruleset) {
+  if (isVirtualBlankCard(card)) {
+    if (ruleset.ruleset !== EXPANDED_PRIVATE_RULESET_ID || ruleset.blankEnabled !== true) {
+      throw new RangeError('virtual Blank is not enabled for this private ruleset');
+    }
+    return createVirtualBlankCard();
+  }
   const normalized = clonePrivateCardInstance(card);
   if (ruleset.ruleset === EXPANDED_PRIVATE_RULESET_ID) {
     getPrivateCardDefinition(normalized.definitionId);
@@ -76,9 +92,9 @@ function getPrivateTerminalReasonUnchecked(state) {
     && (state.p1.score >= state.rules.scoreTarget || state.p2.score >= state.rules.scoreTarget)) {
     return 'score-target';
   }
-  const playedRounds = state.initialCardsPerSide - state.p1.hand.length;
+  const playedRounds = state.history.length;
   if (playedRounds >= state.rules.roundLimit) return 'round-limit';
-  if (state.p1.hand.length === 0) return 'hand-exhausted';
+  if (state.p1.hand.length === 0 || state.p2.hand.length === 0) return 'hand-exhausted';
   return null;
 }
 
@@ -137,8 +153,12 @@ function assertPrivateGameState(state) {
       throw new RangeError(`invalid private ${seat} cards or score`);
     }
   }
-  if (state.p1.hand.length !== state.p2.hand.length || !Array.isArray(state.stack) || state.stack.length % 2 !== 0) {
-    throw new RangeError('private hands must be balanced and stack must be even');
+  if (!Array.isArray(state.stack)) {
+    throw new TypeError('private stack must be an array');
+  }
+  if (state.rules.ruleset !== EXPANDED_PRIVATE_RULESET_ID
+    && (state.p1.hand.length !== state.p2.hand.length || state.stack.length % 2 !== 0)) {
+    throw new RangeError('classic private hands must be balanced and stack must be even');
   }
   if (!Array.isArray(state.history) || state.history.length > MAX_PRIVATE_HISTORY_RECORDS) {
     throw new RangeError('invalid private history');
@@ -147,12 +167,14 @@ function assertPrivateGameState(state) {
   const activeHandInstanceIds = new Set();
   for (const card of [...state.p1.hand, ...state.p2.hand]) {
     const normalized = assertCardIsAllowedByRuleset(card, state.rules);
+    if (isVirtualBlankCard(normalized)) throw new RangeError('virtual Blank cannot be held in a hand');
     if (activeHandInstanceIds.has(normalized.instanceId)) throw new RangeError('duplicate private card instance');
     activeHandInstanceIds.add(normalized.instanceId);
   }
   const stackInstanceIds = new Set();
   for (const card of state.stack) {
     const normalized = assertCardIsAllowedByRuleset(card, state.rules);
+    if (isVirtualBlankCard(normalized)) throw new RangeError('virtual Blank cannot enter the stack');
     if (activeHandInstanceIds.has(normalized.instanceId) || stackInstanceIds.has(normalized.instanceId)) {
       throw new RangeError('duplicate private card instance');
     }
@@ -171,6 +193,7 @@ function assertPrivateGameState(state) {
     const p1Card = assertCardIsAllowedByRuleset(record.p1Card, state.rules);
     const p2Card = assertCardIsAllowedByRuleset(record.p2Card, state.rules);
     for (const card of [p1Card, p2Card]) {
+      if (isVirtualBlankCard(card)) continue;
       if (activeHandInstanceIds.has(card.instanceId) || historicalInstanceIds.has(card.instanceId)) {
         throw new RangeError('duplicate private card instance');
       }
@@ -179,7 +202,8 @@ function assertPrivateGameState(state) {
     const canonicalResult = resolvePrivateRound(p1Card, p2Card);
     if (record.canonicalResult !== canonicalResult) throw new RangeError('private history outcome does not match canonical rules');
     const expectedWinnerSeat = canonicalResult === 'p1' ? 'p1' : canonicalResult === 'p2' ? 'p2' : null;
-    const expectedAwardedCards = expectedWinnerSeat ? 2 + reconstructedStack : 0;
+    const physicalPlayedCards = [p1Card, p2Card].filter((card) => !isVirtualBlankCard(card));
+    const expectedAwardedCards = expectedWinnerSeat ? physicalPlayedCards.length + reconstructedStack : 0;
     if (record.winnerSeat !== expectedWinnerSeat || record.awardedCards !== expectedAwardedCards) {
       throw new RangeError('private history award is inconsistent');
     }
@@ -190,17 +214,17 @@ function assertPrivateGameState(state) {
       reconstructedP2Score += expectedAwardedCards;
       reconstructedStack = 0;
     } else {
-      reconstructedStack += 2;
-      unresolvedStackInstanceIds.add(p1Card.instanceId);
-      unresolvedStackInstanceIds.add(p2Card.instanceId);
+      reconstructedStack += physicalPlayedCards.length;
+      for (const card of physicalPlayedCards) unresolvedStackInstanceIds.add(card.instanceId);
     }
     if (expectedWinnerSeat) unresolvedStackInstanceIds = new Set();
   }
 
-  const playedPerSide = state.initialCardsPerSide - state.p1.hand.length;
+  const p1PhysicalPlayed = state.initialCardsPerSide - state.p1.hand.length;
+  const p2PhysicalPlayed = state.initialCardsPerSide - state.p2.hand.length;
+  const playedPhysicalCards = p1PhysicalPlayed + p2PhysicalPlayed;
   const accountedCards = state.p1.score + state.p2.score + state.stack.length;
-  if (accountedCards !== playedPerSide * 2
-    || state.history.length !== playedPerSide
+  if (accountedCards !== playedPhysicalCards
     || reconstructedP1Score !== state.p1.score
     || reconstructedP2Score !== state.p2.score
     || reconstructedStack !== state.stack.length
@@ -208,15 +232,25 @@ function assertPrivateGameState(state) {
     || [...unresolvedStackInstanceIds].some((instanceId) => !stackInstanceIds.has(instanceId))) {
     throw new RangeError('private score and stack do not account for played cards');
   }
+  if (state.rules.ruleset !== EXPANDED_PRIVATE_RULESET_ID
+    && (p1PhysicalPlayed !== p2PhysicalPlayed || state.history.length !== p1PhysicalPlayed)) {
+    throw new RangeError('classic private history must consume one card per side per round');
+  }
   if (state.rules.ruleset === EXPANDED_PRIVATE_RULESET_ID) {
-    const p1DeckCards = [...state.p1.hand, ...state.history.map((record) => record.p1Card)];
-    const p2DeckCards = [...state.p2.hand, ...state.history.map((record) => record.p2Card)];
+    const p1DeckCards = [
+      ...state.p1.hand,
+      ...state.history.map((record) => record.p1Card).filter((card) => !isVirtualBlankCard(card))
+    ];
+    const p2DeckCards = [
+      ...state.p2.hand,
+      ...state.history.map((record) => record.p2Card).filter((card) => !isVirtualBlankCard(card))
+    ];
     if (!matchesDeckSnapshot(p1DeckCards, state.deck) || !matchesDeckSnapshot(p2DeckCards, state.deck)) {
       throw new RangeError('expanded private cards do not match the frozen deck snapshot');
     }
   }
   const terminal = getPrivateTerminalReasonUnchecked(state) !== null;
-  const expectedRound = terminal ? playedPerSide : playedPerSide + 1;
+  const expectedRound = terminal ? state.history.length : state.history.length + 1;
   if (state.round !== expectedRound) throw new RangeError('private round does not match the game state');
   return state;
 }
@@ -283,9 +317,12 @@ function findLegalCardIndex(hand, instanceId) {
 function legalPrivateCardInstanceIds(state, seat) {
   assertPrivateGameState(state);
   if (seat !== 'p1' && seat !== 'p2') throw new RangeError('unknown private seat');
-  return state[seat].hand
+  const legalHandIds = state[seat].hand
     .filter((card) => card.state.locked !== true)
     .map((card) => card.instanceId);
+  return state.rules.ruleset === EXPANDED_PRIVATE_RULESET_ID && state.rules.blankEnabled
+    ? [...legalHandIds, VIRTUAL_BLANK_SELECTION_ID]
+    : legalHandIds;
 }
 
 function privateMatchScore(state) {
@@ -300,15 +337,23 @@ function applyPrivateRound(state, p1InstanceId, p2InstanceId) {
   assertPrivateGameState(state);
   if (isTerminalPrivateGameState(state)) throw new Error('cannot apply a private round to a terminal state');
 
-  const p1Index = findLegalCardIndex(state.p1.hand, p1InstanceId);
-  const p2Index = findLegalCardIndex(state.p2.hand, p2InstanceId);
-  if (p1Index < 0 || p2Index < 0) throw new RangeError('selected private card is not legal');
+  const p1IsVirtualBlank = isVirtualBlankSelectionId(p1InstanceId);
+  const p2IsVirtualBlank = isVirtualBlankSelectionId(p2InstanceId);
+  const p1Index = p1IsVirtualBlank ? -1 : findLegalCardIndex(state.p1.hand, p1InstanceId);
+  const p2Index = p2IsVirtualBlank ? -1 : findLegalCardIndex(state.p2.hand, p2InstanceId);
+  if ((p1IsVirtualBlank && !state.rules.blankEnabled)
+    || (p2IsVirtualBlank && !state.rules.blankEnabled)
+    || (!p1IsVirtualBlank && p1Index < 0)
+    || (!p2IsVirtualBlank && p2Index < 0)) {
+    throw new RangeError('selected private card is not legal');
+  }
 
   const next = clonePrivateGameState(state);
-  const [p1Card] = next.p1.hand.splice(p1Index, 1);
-  const [p2Card] = next.p2.hand.splice(p2Index, 1);
+  const p1Card = p1IsVirtualBlank ? createVirtualBlankCard() : next.p1.hand.splice(p1Index, 1)[0];
+  const p2Card = p2IsVirtualBlank ? createVirtualBlankCard() : next.p2.hand.splice(p2Index, 1)[0];
   const canonicalResult = resolvePrivateRound(p1Card, p2Card);
-  const awardedCards = 2 + next.stack.length;
+  const physicalPlayedCards = [p1Card, p2Card].filter((card) => !isVirtualBlankCard(card));
+  const awardedCards = physicalPlayedCards.length + next.stack.length;
   let winnerSeat = null;
   if (canonicalResult === 'p1') {
     next.p1.score += awardedCards;
@@ -319,13 +364,13 @@ function applyPrivateRound(state, p1InstanceId, p2InstanceId) {
     next.stack = [];
     winnerSeat = 'p2';
   } else {
-    next.stack.push(p1Card, p2Card);
+    next.stack.push(...physicalPlayedCards);
   }
 
   const record = {
     round: state.round,
-    p1Card: clonePrivateCardInstance(p1Card),
-    p2Card: clonePrivateCardInstance(p2Card),
+    p1Card: clonePlayedPrivateCard(p1Card),
+    p2Card: clonePlayedPrivateCard(p2Card),
     canonicalResult,
     winnerSeat,
     awardedCards: winnerSeat ? awardedCards : 0

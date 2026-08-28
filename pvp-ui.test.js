@@ -40,7 +40,7 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
   );
   assert.match(client, /function renderSelectedCardDetails\(/);
   assert.match(client, /setText\(elements\.selectedCardDescription, `能力：\$\{selectedCard\.desc\}`\);/);
-  assert.match(client, /renderSelectedCardDetails\(displayedBottomPlayer\.hand, \{ isInteractive, suitType: 'spade' \}\);/);
+  assert.match(client, /renderSelectedCardDetails\(displayedBottomHand, \{ isInteractive, suitType: 'spade' \}\);/);
   assert.doesNotMatch(client, /description\.className = 'card-desc'/);
   assert.match(css, /\.selected-card-panel\s*\{/);
   assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.selected-card-panel\s*\{/);
@@ -82,6 +82,7 @@ test('モバイルPvPは画面全体を横に広げず、ヘッダーと手札�
   assert.match(css, /\.card-row\s*\{[^}]*inline-size:\s*100%;/);
   assert.match(css, /\.card\s*\{[\s\S]*?flex:\s*0 0 clamp\(100px, 12\.5%, 124px\);/);
   assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.card\s*\{\s*flex:\s*0 0 100px;/);
+  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.deck-count-button\s*\{\s*min-height:\s*44px;/);
   assert.match(css, /@media \(max-width: 390px\) \{[\s\S]*?\.card\s*\{\s*flex-basis:\s*94px;/);
 });
 
@@ -114,12 +115,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v21/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v21/);
+  assert.match(html, /style\.css\?v=pvp-v23/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v23/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v21/);
+  assert.match(loader, /main\.js\?v=pvp-v23/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -178,6 +179,30 @@ test('Private対戦のルール概要と制限時間設定は、現在の設定�
   assert.match(client, /\(remainingMs \/ turnTimeLimitMs\) \* 100/);
   assert.match(css, /\.room-rules-panel\s*\{/);
   assert.match(css, /\.private-settings-controls\s*\{/);
+});
+
+test('Private拡張では共通デッキ・終了条件・Blankを待機中だけ編集し、Blankを選択札として描画する', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const server = read('server.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="private-ruleset-select"/);
+  assert.match(html, /id="expanded-deck-list"/);
+  assert.match(html, /id="expanded-round-limit-input"/);
+  assert.match(html, /id="expanded-score-target-enabled"/);
+  assert.match(html, /id="expanded-blank-enabled"/);
+  assert.match(client, /function renderExpandedDeckEditor\(/);
+  assert.match(client, /function requestPrivateSettingsChange\(/);
+  assert.match(client, /const nextDeck = entry\s*\? deck[\s\S]*?: \[\{ definitionId, copies: nextCopies \}, \.\.\.deck\];/);
+  assert.match(client, /VIRTUAL_BLANK_CARD_ID/);
+  assert.match(client, /getSelectableDisplayHand\(/);
+  assert.match(client, /random-legal-with-blank/);
+  assert.match(server, /function getSelectableCardIds\(/);
+  assert.match(server, /crypto\.randomInt\(options\.length\)/);
+  assert.match(server, /function processExpandedPrivateTurn\(/);
+  assert.match(css, /\.expanded-private-settings\s*\{/);
+  assert.match(css, /\.card-virtual-blank\s*\{/);
 });
 
 test('チャットとゲーム案内には個人情報・差別的表現の注意、および通信中断の案内を明示する', () => {

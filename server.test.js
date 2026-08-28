@@ -12,12 +12,14 @@ const {
   PRIVATE_ROOM_IDLE_TTL_MS,
   areRandomMatchEntriesCompatible,
   app,
+  buildPrivateSettingsUpdate,
   buildDefaultAllowedOrigins,
   consumeChatIpQuota,
   createRoom,
   createRoomView,
   ensurePrivateRoomHost,
   finishGameByForfeit,
+  getSelectableCardIds,
   getRoomTurnTimeLimitMs,
   isPrivateRoomIdleExpired,
   normalizeJoinPreferences,
@@ -62,6 +64,29 @@ test('Originの既定値はNODE_ENV未設定・productionでlocalhostを許可�
   }
   assert.equal(buildDefaultAllowedOrigins({ NODE_ENV: 'development' }).includes('http://localhost:3000'), true);
   assert.equal(buildDefaultAllowedOrigins({ NODE_ENV: 'test' }).includes('http://127.0.0.1:3000'), true);
+});
+
+test('Private設定イベントは拡張ルールの全フィールドを権威的な更新関数へ渡す', () => {
+  const payload = {
+    roomId: 'ignored-at-this-boundary',
+    configRevision: 4,
+    ruleset: 'private-expanded-v1',
+    turnTimeLimitMs: 120_000,
+    roundLimit: 8,
+    scoreTarget: null,
+    blankEnabled: true,
+    deck: [{ definitionId: 'ace', copies: 2 }]
+  };
+  assert.deepEqual(buildPrivateSettingsUpdate(payload, 'server-player'), {
+    clientId: 'server-player',
+    configRevision: 4,
+    ruleset: 'private-expanded-v1',
+    turnTimeLimitMs: 120_000,
+    roundLimit: 8,
+    scoreTarget: null,
+    blankEnabled: true,
+    deck: [{ definitionId: 'ace', copies: 2 }]
+  });
 });
 
 test('観戦参加・空席への参加は明示的なboolean opt-inだけを受け入れる', () => {
@@ -152,7 +177,7 @@ test('Private設定はホスト・待機/終了状態だけに限定され、開
   });
   assert.equal(invalidValue.ok, false);
 
-  room.privateConfig.turnTimeLimitMs = 120_000;
+  room.privateConfig = { ...room.privateConfig, turnTimeLimitMs: 120_000 };
   room.activePrivateConfig = { ...room.privateConfig, turnTimeLimitMs: 60_000 };
   room.gameState = 'playing';
   assert.equal(getRoomTurnTimeLimitMs(room), 60_000);
@@ -193,6 +218,76 @@ test('選択したPrivateの制限時間は開始時に凍結され、対局タ�
   assert.equal(room.activePrivateConfig.turnTimeLimitMs, 120_000);
   assert.equal(room.pausedRemainingMs, 120_000);
   assert.equal(getRoomTurnTimeLimitMs(room), 120_000);
+  assert.equal(finishGameByForfeit(room, room.players[0]), true);
+});
+
+test('Private拡張ではBlankを手札外の選択肢として公開し、処理後も手札を消費しない', () => {
+  const room = createRoom('expanded-blank-room');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '先手', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+  const configured = updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: room.configRevision,
+    ruleset: 'private-expanded-v1',
+    turnTimeLimitMs: 90_000,
+    roundLimit: 3,
+    scoreTarget: null,
+    blankEnabled: true,
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'ten', copies: 1 }
+    ]
+  });
+  assert.equal(configured.ok, true);
+  room.startAgreements.add('host-client');
+  room.startAgreements.add('guest-client');
+  assert.equal(startWhenBothPlayersAgree(room), true);
+  assert.equal(room.activePrivateConfig.ruleset, 'private-expanded-v1');
+  assert.equal(getSelectableCardIds(room, room.players[0]).includes('virtual-blank'), true);
+  assert.equal(room.players[0].hand.length, 5);
+
+  room.selections = { p1: 'virtual-blank', p2: room.players[1].hand.find((card) => card.definitionId === 'ace').id };
+  processTurn(room);
+  assert.equal(room.players[0].hand.length, 5);
+  assert.equal(room.players[1].hand.length, 4);
+  assert.equal(room.players[1].score, 1);
+  assert.equal(room.lastRound.p1Card.id, 'virtual-blank');
+  assert.equal(room.lastRound.awardedCards, 1);
+  assert.equal(finishGameByForfeit(room, room.players[0]), true);
+});
+
+test('BlankなしのPrivate拡張は、Blankを選択肢やタイムアウト候補として公開しない', () => {
+  const room = createRoom('expanded-no-blank-room');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '先手', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+  assert.equal(updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: room.configRevision,
+    ruleset: 'private-expanded-v1',
+    roundLimit: 3,
+    scoreTarget: null,
+    blankEnabled: false,
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'ten', copies: 1 }
+    ]
+  }).ok, true);
+  room.startAgreements.add('host-client');
+  room.startAgreements.add('guest-client');
+  assert.equal(startWhenBothPlayersAgree(room), true);
+  assert.equal(getSelectableCardIds(room, room.players[0]).includes('virtual-blank'), false);
   assert.equal(finishGameByForfeit(room, room.players[0]), true);
 });
 

@@ -11,9 +11,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
   <script src="page-redirect.js?v=security-v4"></script>
-  <link rel="stylesheet" href="style.css?v=pvp-v21">
+  <link rel="stylesheet" href="style.css?v=pvp-v23">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v21"></script>
+  <script src="socket-loader.js?v=pvp-v23"></script>
 </head>
 <body>
   <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
@@ -214,6 +214,13 @@
               </ul>
             </details>
             <div id="private-settings-controls" class="private-settings-controls hidden">
+              <label for="private-ruleset-select">
+                <span>ルールセット</span>
+                <select id="private-ruleset-select" aria-describedby="private-settings-feedback">
+                  <option value="classic-v1">クラシック（標準）</option>
+                  <option value="private-expanded-v1">拡張デッキ（Private限定）</option>
+                </select>
+              </label>
               <label for="private-turn-time-select">
                 <span>1ラウンドの制限時間</span>
                 <select id="private-turn-time-select" aria-describedby="private-settings-feedback">
@@ -222,6 +229,19 @@
                   <option value="120000">120秒</option>
                 </select>
               </label>
+              <section id="expanded-private-settings" class="expanded-private-settings hidden" aria-labelledby="expanded-private-settings-title">
+                <div class="expanded-private-settings-heading">
+                  <div><span class="section-label" id="expanded-private-settings-title">拡張デッキ</span><p>両者は同じ構成の手札を使います。</p></div>
+                  <strong id="expanded-deck-total">0 / 14枚</strong>
+                </div>
+                <div id="expanded-deck-list" class="expanded-deck-list" aria-label="使用カードと枚数"></div>
+                <div class="expanded-rule-inputs">
+                  <label for="expanded-round-limit-input"><span>総ラウンド数</span><input id="expanded-round-limit-input" type="number" min="1" max="20" inputmode="numeric"></label>
+                  <label class="expanded-immediate-toggle" for="expanded-score-target-enabled"><input id="expanded-score-target-enabled" type="checkbox"><span>即時勝利を使う</span></label>
+                  <label id="expanded-score-target-label" for="expanded-score-target-input"><span>即時勝利の獲得枚数</span><input id="expanded-score-target-input" type="number" min="1" max="28" inputmode="numeric"></label>
+                  <label class="expanded-blank-toggle" for="expanded-blank-enabled"><input id="expanded-blank-enabled" type="checkbox"><span><strong>Blankを使う</strong><small id="expanded-blank-note">手札外のBlankを選択でき、時間切れ時の抽選にも入ります。</small></span></label>
+                </div>
+              </section>
               <p id="private-settings-feedback" class="private-settings-feedback" role="status">現在の設定担当者は、対局開始前に変更できます。</p>
             </div>
           </section>

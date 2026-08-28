@@ -32,7 +32,11 @@ function freezeDefinition(definition) {
     ...definition,
     availability: Object.freeze([...(definition.availability || [])]),
     requiresFeatures: Object.freeze([...(definition.requiresFeatures || [])]),
-    excludesTags: Object.freeze([...(definition.excludesTags || [])])
+    excludesTags: Object.freeze([...(definition.excludesTags || [])]),
+    // This is deliberately descriptive metadata, not client-provided rule
+    // code. It lets the preset require a virtual Blank fallback only when a
+    // selected card could leave a player with no legal hand selection.
+    mayPreventAllLegalPlays: definition.mayPreventAllLegalPlays === true
   });
 }
 
@@ -69,9 +73,10 @@ const EXTRA_NORMAL_CARD_CATALOG = Object.freeze([
   visibilityModel: 'public'
 })));
 
-// Blank and Tarot records are deliberately catalogued before their effects are
-// implemented.  Their status and feature requirements ensure they cannot be
-// smuggled into the first expanded preset through a forged deck payload.
+// Blank is implemented as a virtual, hand-external choice rather than a deck
+// entry. Tarot records are catalogued before their effects are implemented;
+// their status and feature requirements ensure they cannot be smuggled into
+// the first expanded preset through a forged deck payload.
 const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   {
     id: 'blank', name: 'Blank', strength: 0, desc: '能力なし', category: 'blank',
@@ -91,7 +96,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   },
   {
     id: 'the-empress', name: 'The Empress', strength: 3, desc: '勝利時、相手の非Tarot札を全てロック', category: 'tarot',
-    requiresFeatures: ['lock-state-v1'], excludesTags: []
+    requiresFeatures: ['lock-state-v1'], excludesTags: [], mayPreventAllLegalPlays: true
   },
   {
     id: 'the-emperor', name: 'The Emperor', strength: 0, desc: 'Tarot効果を無効化して勝利', category: 'tarot',
@@ -123,7 +128,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   },
   {
     id: 'justice', name: 'Justice', strength: 11, desc: '勝利時、相手札1枚をロック', category: 'tarot',
-    requiresFeatures: ['target-selection-v1', 'lock-state-v1'], excludesTags: []
+    requiresFeatures: ['target-selection-v1', 'lock-state-v1'], excludesTags: [], mayPreventAllLegalPlays: true
   },
   {
     id: 'the-hanged-man', name: 'The Hanged Man', strength: 12, desc: '敗北時、相手が望む札を相手手札へ加える', category: 'tarot',
@@ -155,7 +160,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   },
   {
     id: 'the-sun', name: 'The Sun', strength: 19, desc: '自分札を1枚選び破壊', category: 'tarot',
-    requiresFeatures: ['target-selection-v1', 'destroy-card-v1'], excludesTags: []
+    requiresFeatures: ['target-selection-v1', 'destroy-card-v1'], excludesTags: [], mayPreventAllLegalPlays: true
   },
   {
     id: 'judgement', name: 'Judgement', strength: 0, desc: '過去に出した全札のコピーを加える', category: 'tarot',
@@ -167,7 +172,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   }
 ].map((definition) => freezeDefinition({
   ...definition,
-  status: 'specified',
+  status: definition.id === 'blank' ? 'engine-ready' : 'specified',
   availability: [EXPANDED_PRIVATE_RULESET_ID],
   maxCopiesPerDeck: definition.category === 'tarot' ? 1 : 3,
   visibilityModel: definition.id === 'the-star' ? 'recipient-specific' : 'public'

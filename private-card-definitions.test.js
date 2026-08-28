@@ -16,10 +16,10 @@ test('追加通常札はPrivate拡張の公開済みカードとして定義さ�
   assert.throws(() => getClassicPrivateCardDefinition('ten'), /unknown/);
 });
 
-test('BlankとTarotは仕様済みでも、効果エンジン完成前にはデッキへ入れられない状態を保つ', () => {
+test('Blankは仮想札としてengine-ready、Tarotは仕様済みでもデッキへ入れられない状態を保つ', () => {
   const blank = getPrivateCardDefinition('blank');
   const world = getPrivateCardDefinition('the-world');
-  assert.equal(blank.status, 'specified');
+  assert.equal(blank.status, 'engine-ready');
   assert.equal(blank.requiresFeatures.includes('blank-semantics-v1'), true);
   assert.equal(world.status, 'specified');
   assert.equal(world.desc, '相手の獲得札を奪い、そのコピーを手札へ加える');

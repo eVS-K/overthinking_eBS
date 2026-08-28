@@ -5,13 +5,26 @@ const crypto = require('crypto');
 const { Server } = require('socket.io');
 const { createInitialHand, resolveRound } = require('./game-rules');
 const {
-  CLASSIC_PRIVATE_RULESET_ID: CLASSIC_RULESET_VERSION,
+  CLASSIC_PRIVATE_RULESET_ID,
   CLASSIC_ROUND_LIMIT,
   CLASSIC_SCORE_TARGET,
-  PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS,
-  createClassicPrivateRuleset,
-  isSupportedPrivateTurnTimeLimit
+  EXPANDED_PRIVATE_RULESET_ID,
+  PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS
 } = require('./private-ruleset');
+const {
+  createPrivateRoomConfig,
+  isExpandedPrivateRoomConfig
+} = require('./private-room-config');
+const {
+  applyPrivateRound,
+  createExpandedPrivateGameState,
+  legalPrivateCardInstanceIds
+} = require('./private-game-engine');
+const { publicPrivateCard } = require('./private-card-instances');
+const { PRIVATE_CARD_CATALOG } = require('./private-card-definitions');
+const {
+  publicVirtualBlankCard
+} = require('./private-blank');
 const { createFixedWindowLimiter, getClientIp, readPositiveInteger } = require('./security');
 const { MAX_CHAT_MESSAGES_PER_SESSION, appendChatMessage } = require('./chat');
 const { RandomMatchQueue } = require('./matchmaking');
@@ -271,8 +284,43 @@ function normalizeJoinPreferences(payload) {
 
 function isPrivateSettingsPayload(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
-  const supportedFields = new Set(['roomId', 'configRevision', 'turnTimeLimitMs']);
-  return Object.keys(payload).every((key) => supportedFields.has(key));
+  const supportedFields = new Set([
+    'roomId',
+    'configRevision',
+    'ruleset',
+    'turnTimeLimitMs',
+    'roundLimit',
+    'scoreTarget',
+    'blankEnabled',
+    'deck'
+  ]);
+  if (!Object.keys(payload).every((key) => supportedFields.has(key))) return false;
+  if (payload.deck !== undefined) {
+    if (!Array.isArray(payload.deck) || payload.deck.length > 32) return false;
+    for (const entry of payload.deck) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)
+        || !Object.keys(entry).every((key) => key === 'definitionId' || key === 'copies')) return false;
+    }
+  }
+  return true;
+}
+
+// Keep the Socket.IO boundary deliberately explicit.  The browser is allowed
+// to request only these setup values, and every value is revalidated by
+// updatePrivateRoomSettings before it can affect a room.  Having this small
+// mapper also prevents a newly added configuration field from being silently
+// dropped between the public event and the authoritative room update.
+function buildPrivateSettingsUpdate(payload, clientId) {
+  return {
+    clientId,
+    configRevision: payload.configRevision,
+    ruleset: payload.ruleset,
+    turnTimeLimitMs: payload.turnTimeLimitMs,
+    roundLimit: payload.roundLimit,
+    scoreTarget: payload.scoreTarget,
+    blankEnabled: payload.blankEnabled,
+    deck: payload.deck
+  };
 }
 
 function createPlayer({ id, clientId, name }, seatIndex) {
@@ -288,14 +336,11 @@ function createPlayer({ id, clientId, name }, seatIndex) {
 }
 
 function createDefaultPrivateRoomConfig() {
-  return createClassicPrivateRuleset();
+  return createPrivateRoomConfig();
 }
 
 function clonePrivateRoomConfig(config) {
-  // The module accepts only the allow-listed timer. Client-supplied ruleset,
-  // score, deck, and timeout-policy fields are ignored until a complete
-  // expanded preset exists and has been audited.
-  return createClassicPrivateRuleset(config);
+  return createPrivateRoomConfig(config);
 }
 
 function isPrivateConfigLocked(room) {
@@ -320,8 +365,14 @@ function getRoomTurnTimeLimitMs(room) {
 
 function getPublicRoomRules(room) {
   const config = getRoomPrivateConfig(room) || createDefaultPrivateRoomConfig();
+  const expandedDeckCatalog = isExpandedPrivateRoomConfig(config)
+    ? PRIVATE_CARD_CATALOG
+      .filter((definition) => definition.status === 'available' && definition.availability.includes(config.ruleset))
+      .map(({ id, name, desc, category, maxCopiesPerDeck }) => ({ id, name, desc, category, maxCopiesPerDeck }))
+    : [];
   return {
     ...config,
+    deckCatalog: expandedDeckCatalog,
     // Config revisions only apply to private-room setup. It is still safe and
     // useful to expose a stable zero to legacy/Random clients.
     configRevision: room?.matchType === 'private' && Number.isSafeInteger(room.configRevision)
@@ -343,7 +394,12 @@ function ensurePrivateRoomHost(room) {
 function updatePrivateRoomSettings(room, {
   clientId,
   configRevision,
-  turnTimeLimitMs
+  ruleset,
+  turnTimeLimitMs,
+  roundLimit,
+  scoreTarget,
+  blankEnabled,
+  deck
 } = {}) {
   if (!room || room.matchType !== 'private') {
     return { ok: false, message: 'この設定はPrivate PvPでのみ変更できます。' };
@@ -363,12 +419,42 @@ function updatePrivateRoomSettings(room, {
       settings: getPublicRoomRules(room)
     };
   }
-  if (!isSupportedPrivateTurnTimeLimit(turnTimeLimitMs)) {
+  if (ruleset !== undefined && ruleset !== CLASSIC_PRIVATE_RULESET_ID && ruleset !== EXPANDED_PRIVATE_RULESET_ID) {
+    return { ok: false, message: '選べるルールセットを確認してください。' };
+  }
+  if (turnTimeLimitMs !== undefined && !PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS.includes(turnTimeLimitMs)) {
     return { ok: false, message: '制限時間は60秒・90秒・120秒から選択してください。' };
+  }
+  if (roundLimit !== undefined && !Number.isSafeInteger(roundLimit)) {
+    return { ok: false, message: '総ラウンド数を確認してください。' };
+  }
+  if (scoreTarget !== undefined && scoreTarget !== null && !Number.isSafeInteger(scoreTarget)) {
+    return { ok: false, message: '即時勝利の枚数を確認してください。' };
+  }
+  if (blankEnabled !== undefined && typeof blankEnabled !== 'boolean') {
+    return { ok: false, message: 'Blankの設定を確認してください。' };
   }
 
   const currentConfig = getRoomPrivateConfig(room);
-  if (currentConfig.turnTimeLimitMs === turnTimeLimitMs) {
+  const requestedSettings = {
+    ...currentConfig,
+    ...(ruleset !== undefined ? { ruleset } : {}),
+    ...(turnTimeLimitMs !== undefined ? { turnTimeLimitMs } : {}),
+    ...(roundLimit !== undefined ? { roundLimit } : {}),
+    ...(scoreTarget !== undefined ? { scoreTarget } : {}),
+    ...(blankEnabled !== undefined ? { blankEnabled } : {}),
+    ...(deck !== undefined ? { deck } : {})
+  };
+  let nextConfig;
+  try {
+    nextConfig = clonePrivateRoomConfig(requestedSettings);
+  } catch {
+    return {
+      ok: false,
+      message: 'ルール設定を確認してください。制限時間・ラウンド数・即時勝利・Blank・デッキの組合せが無効です。'
+    };
+  }
+  if (JSON.stringify(currentConfig) === JSON.stringify(nextConfig)) {
     return {
       ok: true,
       changed: false,
@@ -377,7 +463,7 @@ function updatePrivateRoomSettings(room, {
     };
   }
 
-  room.privateConfig = clonePrivateRoomConfig({ ...currentConfig, turnTimeLimitMs });
+  room.privateConfig = nextConfig;
   // A finished match no longer has a live frozen configuration. Clearing this
   // snapshot makes the lobby show the next match's selected duration.
   room.activePrivateConfig = null;
@@ -513,7 +599,10 @@ function createRoom(id, { matchType = 'private', allowedRandomClientIds = [], cr
     hostClientId: '',
     privateConfig: normalizedMatchType === 'private' ? createDefaultPrivateRoomConfig() : null,
     activePrivateConfig: null,
-    configRevision: normalizedMatchType === 'private' ? 1 : 0
+    configRevision: normalizedMatchType === 'private' ? 1 : 0,
+    // Expanded matches use the isolated pure engine.  Classic/Random continue
+    // to use the long-standing room fields and canonical legacy resolver.
+    privateGameState: null
   };
 }
 
@@ -626,6 +715,64 @@ function refreshPrivateRoomIdleExpiry(room, now = Date.now()) {
   schedulePrivateRoomIdleExpiry(room);
 }
 
+function publicExpandedCard(card) {
+  if (card?.virtual === true) return publicVirtualBlankCard();
+  const publicCard = publicPrivateCard(card);
+  return {
+    id: publicCard.instanceId,
+    definitionId: publicCard.definitionId,
+    name: publicCard.name,
+    desc: publicCard.desc,
+    state: { ...publicCard.state }
+  };
+}
+
+function syncExpandedPrivateStateToRoom(room) {
+  const state = room?.privateGameState;
+  if (!state || room.players.length !== 2) return false;
+  const [firstPlayer, secondPlayer] = room.players;
+  firstPlayer.hand = state.p1.hand.map(publicExpandedCard);
+  secondPlayer.hand = state.p2.hand.map(publicExpandedCard);
+  firstPlayer.score = state.p1.score;
+  secondPlayer.score = state.p2.score;
+  room.round = state.round;
+  room.stack = state.stack.map(publicExpandedCard);
+  room.history = state.history.map((record) => ({
+    id: `expanded-${room.id}-${record.round}`,
+    round: record.round,
+    p1Card: publicExpandedCard(record.p1Card),
+    p2Card: publicExpandedCard(record.p2Card),
+    winner: record.winnerSeat === 'p1'
+      ? firstPlayer.name
+      : record.winnerSeat === 'p2'
+        ? secondPlayer.name
+        : 'Draw',
+    winnerSeat: record.winnerSeat,
+    awardedCards: record.awardedCards,
+    canonicalResult: record.canonicalResult
+  }));
+  room.lastRound = room.history.at(-1) || null;
+  return true;
+}
+
+function isExpandedPrivateGame(room) {
+  return Boolean(
+    room?.matchType === 'private'
+      && room.privateGameState
+      && isExpandedPrivateRoomConfig(room.activePrivateConfig)
+  );
+}
+
+function initializeExpandedPrivateGame(room, config) {
+  const instanceNamespace = `expanded-${crypto.randomBytes(8).toString('hex')}`;
+  room.privateGameState = createExpandedPrivateGameState({
+    rules: config,
+    deck: config.deck,
+    instanceNamespace
+  });
+  syncExpandedPrivateStateToRoom(room);
+}
+
 function resetGame(room) {
   clearTurnTimer(room.id);
   room.round = 1;
@@ -639,10 +786,18 @@ function resetGame(room) {
   room.winnerSeat = null;
   room.finishReason = null;
   room.startAgreements = new Set();
-  room.players.forEach((player) => {
-    player.hand = createInitialHand();
-    player.score = 0;
-  });
+  const activeConfig = room.matchType === 'private'
+    ? (room.activePrivateConfig || getRoomPrivateConfig(room))
+    : null;
+  if (activeConfig && isExpandedPrivateRoomConfig(activeConfig)) {
+    initializeExpandedPrivateGame(room, activeConfig);
+  } else {
+    room.privateGameState = null;
+    room.players.forEach((player) => {
+      player.hand = createInitialHand();
+      player.score = 0;
+    });
+  }
 }
 
 function startNewGame(room) {
@@ -663,6 +818,19 @@ function startNewGame(room) {
   }
 }
 
+function getSelectableCardIds(room, player) {
+  if (!player) return [];
+  if (!isExpandedPrivateGame(room)) return player.hand.map((card) => card.id);
+  const seat = room.players[0]?.id === player.id ? 'p1' : room.players[1]?.id === player.id ? 'p2' : null;
+  return seat ? legalPrivateCardInstanceIds(room.privateGameState, seat) : [];
+}
+
+function chooseTimeoutSelection(room, player) {
+  const options = getSelectableCardIds(room, player);
+  if (options.length === 0) return null;
+  return options[crypto.randomInt(options.length)];
+}
+
 function startTurnTimer(room, durationMs) {
   clearTurnTimer(room.id);
   if (room.gameState !== 'playing' || room.players.length !== 2 || !room.players.every((player) => player.connected)) return;
@@ -678,9 +846,9 @@ function startTurnTimer(room, durationMs) {
     if (!latestRoom || latestRoom.gameState !== 'playing') return;
 
     latestRoom.players.forEach((player) => {
-      if (!latestRoom.selections[player.id] && player.hand.length > 0) {
-        const index = Math.floor(Math.random() * player.hand.length);
-        latestRoom.selections[player.id] = player.hand[index].id;
+      if (!latestRoom.selections[player.id]) {
+        const selection = chooseTimeoutSelection(latestRoom, player);
+        if (selection) latestRoom.selections[player.id] = selection;
       }
     });
     processTurn(latestRoom);
@@ -1151,9 +1319,54 @@ function replyToChat(acknowledge, result) {
   if (typeof acknowledge === 'function') acknowledge(result);
 }
 
+function finishExpandedPrivateGame(room, result) {
+  const [firstPlayer, secondPlayer] = room.players;
+  const isDraw = result.matchScore === 0.5;
+  room.gameState = 'finished';
+  room.winnerSeat = isDraw ? null : result.matchScore === 1 ? 'p1' : 'p2';
+  room.winner = isDraw
+    ? '引き分け'
+    : room.winnerSeat === 'p1' ? firstPlayer.name : secondPlayer.name;
+  room.finishReason = {
+    id: `expanded-completed-${room.round}-${Date.now()}`,
+    type: result.terminalReason === 'score-target' ? 'score-limit' : 'round-limit',
+    terminalReason: result.terminalReason
+  };
+  refreshPrivateRoomIdleExpiry(room);
+}
+
+function processExpandedPrivateTurn(room) {
+  const [firstPlayer, secondPlayer] = room.players;
+  const firstSelectionId = room.selections[firstPlayer.id];
+  const secondSelectionId = room.selections[secondPlayer.id];
+  let result;
+  try {
+    result = applyPrivateRound(room.privateGameState, firstSelectionId, secondSelectionId);
+  } catch {
+    // A stale/replayed selection must not consume any card. Clear both picks
+    // and resume the same deadline policy rather than guessing a substitute.
+    room.selections = {};
+    startTurnTimer(room);
+    broadcastRoom(room);
+    return;
+  }
+
+  room.privateGameState = result.state;
+  syncExpandedPrivateStateToRoom(room);
+  room.selections = {};
+  room.deadline = 0;
+  if (result.terminal) finishExpandedPrivateGame(room, result);
+  else startTurnTimer(room);
+  broadcastRoom(room);
+}
+
 function processTurn(room) {
   clearTurnTimer(room.id);
   if (room.gameState !== 'playing' || room.players.length !== 2) return;
+  if (isExpandedPrivateGame(room)) {
+    processExpandedPrivateTurn(room);
+    return;
+  }
 
   const [firstPlayer, secondPlayer] = room.players;
   const firstCardId = room.selections[firstPlayer.id];
@@ -1615,8 +1828,9 @@ io.on('connection', (socket) => {
 
     const player = room.players.find((candidate) => candidate.id === socket.id);
     if (!player || !player.connected || room.selections[player.id]) return;
-    const cardId = normalizeText(payload.cardId, 40);
-    if (!cardId || !player.hand.some((card) => card.id === cardId)) {
+    const cardId = normalizeText(payload.cardId, 96);
+    const legalCardIds = getSelectableCardIds(room, player);
+    if (!cardId || !legalCardIds.includes(cardId)) {
       emitError(socket, 'そのカードは選択できません。もう一度選んでください。');
       return;
     }
@@ -1648,11 +1862,7 @@ io.on('connection', (socket) => {
       reject('観戦者はルール設定を変更できません。');
       return;
     }
-    const result = updatePrivateRoomSettings(room, {
-      clientId: player.clientId,
-      configRevision: payload.configRevision,
-      turnTimeLimitMs: payload.turnTimeLimitMs
-    });
+    const result = updatePrivateRoomSettings(room, buildPrivateSettingsUpdate(payload, player.clientId));
     if (!result.ok) {
       emitError(socket, result.message);
       replyToChat(acknowledge, result);
@@ -1787,12 +1997,14 @@ module.exports = {
   PRIVATE_ROOM_IDLE_TTL_MS,
   areRandomMatchEntriesCompatible,
   app,
+  buildPrivateSettingsUpdate,
   buildDefaultAllowedOrigins,
   createRoomView,
   consumeChatIpQuota,
   createRoom,
   ensurePrivateRoomHost,
   finishGameByForfeit,
+  getSelectableCardIds,
   getRoomTurnTimeLimitMs,
   isPrivateRoomIdleExpired,
   io,

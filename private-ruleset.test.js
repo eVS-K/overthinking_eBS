@@ -77,15 +77,16 @@ test('Private拡張presetは総ラウンド・任意の即時勝利・タイム�
     turnTimeLimitMs: 120_000,
     roundLimit: 10,
     scoreTarget: null,
-    timeoutPolicy: 'blank-on-timeout',
+    blankEnabled: true,
     forged: 'ignored'
   });
   assert.equal(rules.ruleset, EXPANDED_PRIVATE_RULESET_ID);
   assert.equal(rules.turnTimeLimitMs, 120_000);
   assert.equal(rules.roundLimit, 10);
   assert.equal(rules.scoreTarget, null);
-  assert.equal(rules.timeoutPolicy, 'blank-on-timeout');
+  assert.equal(rules.blankEnabled, true);
+  assert.equal(rules.timeoutPolicy, 'random-legal-with-blank');
   assert.throws(() => createExpandedPrivateRuleset({ roundLimit: 0 }), /round limit/);
   assert.throws(() => createExpandedPrivateRuleset({ scoreTarget: -1 }), /score target/);
-  assert.equal(createExpandedPrivateRuleset({ timeoutPolicy: 'forged' }).timeoutPolicy, 'random-legal-then-blank');
+  assert.equal(createExpandedPrivateRuleset({ timeoutPolicy: 'forged' }).timeoutPolicy, 'random-legal');
 });

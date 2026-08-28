@@ -6,7 +6,26 @@ const TURN_TIME_LIMIT_MS = 90_000;
 const PRIVATE_TURN_TIME_OPTIONS_MS = new Set([60_000, 90_000, 120_000]);
 const CHAT_MESSAGE_LIMIT = 50;
 const MAX_RENDERED_CHAT_MESSAGES = 100;
-const CARD_MARKS = Object.freeze({ ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'Jk', three: '3', two: '2' });
+const CARD_MARKS = Object.freeze({
+  ace: 'A', king: 'K', queen: 'Q', jack: 'J', joker: 'Jk', three: '3', two: '2',
+  ten: '10', nine: '9', eight: '8', seven: '7', six: '6', five: '5', four: '4',
+  blank: '—', 'virtual-blank': '—'
+});
+const CLASSIC_PRIVATE_RULESET_ID = 'classic-v1';
+const EXPANDED_PRIVATE_RULESET_ID = 'private-expanded-v1';
+const VIRTUAL_BLANK_CARD_ID = 'virtual-blank';
+const MIN_EXPANDED_DECK_SIZE = 5;
+const MAX_EXPANDED_DECK_SIZE = 14;
+const MAX_EXPANDED_CARD_COPIES = 3;
+const DEFAULT_EXPANDED_DECK = Object.freeze([
+  { definitionId: 'ace', copies: 1 },
+  { definitionId: 'king', copies: 1 },
+  { definitionId: 'queen', copies: 1 },
+  { definitionId: 'jack', copies: 1 },
+  { definitionId: 'joker', copies: 1 },
+  { definitionId: 'three', copies: 1 },
+  { definitionId: 'two', copies: 1 }
+]);
 
 const socket = window.io
   ? window.io(GAME_SERVER_URL, {
@@ -118,10 +137,21 @@ const elements = {
   roomRulesMode: document.getElementById('room-rules-mode'),
   roomRulesState: document.getElementById('room-rules-state'),
   roomRulesSummary: document.getElementById('room-rules-summary'),
+  roomRulesDeck: document.getElementById('room-rules-deck'),
   roomRulesEnd: document.getElementById('room-rules-end'),
   roomRulesTimeout: document.getElementById('room-rules-timeout'),
   privateSettingsControls: document.getElementById('private-settings-controls'),
+  privateRulesetSelect: document.getElementById('private-ruleset-select'),
   privateTurnTimeSelect: document.getElementById('private-turn-time-select'),
+  expandedPrivateSettings: document.getElementById('expanded-private-settings'),
+  expandedDeckTotal: document.getElementById('expanded-deck-total'),
+  expandedDeckList: document.getElementById('expanded-deck-list'),
+  expandedRoundLimitInput: document.getElementById('expanded-round-limit-input'),
+  expandedScoreTargetEnabled: document.getElementById('expanded-score-target-enabled'),
+  expandedScoreTargetLabel: document.getElementById('expanded-score-target-label'),
+  expandedScoreTargetInput: document.getElementById('expanded-score-target-input'),
+  expandedBlankEnabled: document.getElementById('expanded-blank-enabled'),
+  expandedBlankNote: document.getElementById('expanded-blank-note'),
   privateSettingsFeedback: document.getElementById('private-settings-feedback'),
   history: document.getElementById('history-list'),
   spectatorCount: document.getElementById('spectator-count'),
@@ -511,10 +541,31 @@ function getRoomRules(room) {
   const source = room?.rules && typeof room.rules === 'object' ? room.rules : {};
   const configuredTurnTime = Number(source.turnTimeLimitMs);
   const configuredRoundLimit = Number(source.roundLimit);
-  const configuredScoreTarget = Number(source.scoreTarget ?? source.scoreLimit);
+  const rawScoreTarget = source.scoreTarget ?? source.scoreLimit;
+  const configuredScoreTarget = Number(rawScoreTarget);
   const configuredRevision = Number(source.configRevision ?? room?.configRevision);
+  const deck = Array.isArray(source.deck)
+    ? source.deck
+      .filter((entry) => entry && typeof entry.definitionId === 'string' && Number.isSafeInteger(entry.copies) && entry.copies > 0)
+      .map((entry) => ({ definitionId: entry.definitionId, copies: entry.copies }))
+    : [];
+  const deckCatalog = Array.isArray(source.deckCatalog)
+    ? source.deckCatalog
+      .filter((card) => card && typeof card.id === 'string' && typeof card.name === 'string')
+      .map((card) => ({
+        id: card.id,
+        name: card.name,
+        desc: typeof card.desc === 'string' ? card.desc : '',
+        category: typeof card.category === 'string' ? card.category : '',
+        maxCopiesPerDeck: Number.isSafeInteger(card.maxCopiesPerDeck) ? card.maxCopiesPerDeck : MAX_EXPANDED_CARD_COPIES
+      }))
+    : [];
+  const ruleset = source.ruleset === EXPANDED_PRIVATE_RULESET_ID
+    ? EXPANDED_PRIVATE_RULESET_ID
+    : CLASSIC_PRIVATE_RULESET_ID;
+  const blankEnabled = ruleset === EXPANDED_PRIVATE_RULESET_ID && source.blankEnabled === true;
   return {
-    ruleset: typeof source.ruleset === 'string' && source.ruleset ? source.ruleset : 'classic-v1',
+    ruleset,
     turnTimeLimitMs: Number.isSafeInteger(configuredTurnTime)
       && configuredTurnTime >= 15_000
       && configuredTurnTime <= 120_000
@@ -525,15 +576,18 @@ function getRoomRules(room) {
       && configuredRoundLimit <= 99
       ? configuredRoundLimit
       : 7,
-    scoreTarget: Number.isSafeInteger(configuredScoreTarget)
-      && configuredScoreTarget >= 1
-      && configuredScoreTarget <= 99
-      ? configuredScoreTarget
-      : 9,
-    // The server deliberately keeps the classic timeout policy fixed.  Do
-    // not let a future/malformed room view make the client describe a rule
-    // that the canonical game never applied.
-    timeoutPolicy: 'random-legal',
+    scoreTarget: rawScoreTarget === null
+      ? null
+      : Number.isSafeInteger(configuredScoreTarget)
+        && configuredScoreTarget >= 1
+        && configuredScoreTarget <= 99
+        ? configuredScoreTarget
+        : 9,
+    blankEnabled,
+    blankRequired: ruleset === EXPANDED_PRIVATE_RULESET_ID && source.blankRequired === true,
+    timeoutPolicy: blankEnabled ? 'random-legal-with-blank' : 'random-legal',
+    deck,
+    deckCatalog,
     configRevision: Number.isSafeInteger(configuredRevision) && configuredRevision >= 0 ? configuredRevision : 0,
     locked: source.locked === true || ['playing', 'reconnecting'].includes(room?.gameState)
   };
@@ -575,27 +629,153 @@ function applyPrivateSettingsAcknowledgement(result, roomId, { clearStartAgreeme
   return true;
 }
 
+function cloneDeckEntries(deck) {
+  return (deck || []).map((entry) => ({ definitionId: entry.definitionId, copies: entry.copies }));
+}
+
+function deckCardCount(deck) {
+  return (deck || []).reduce((total, entry) => total + entry.copies, 0);
+}
+
+function getExpandedDeckForEditing(rules) {
+  return rules.ruleset === EXPANDED_PRIVATE_RULESET_ID && rules.deck.length > 0
+    ? cloneDeckEntries(rules.deck)
+    : cloneDeckEntries(DEFAULT_EXPANDED_DECK);
+}
+
+function privateSettingsMatch(rules, request) {
+  if (!rules || !request || rules.ruleset !== request.ruleset || rules.turnTimeLimitMs !== request.turnTimeLimitMs) return false;
+  if (rules.ruleset !== EXPANDED_PRIVATE_RULESET_ID) return true;
+  return rules.roundLimit === request.roundLimit
+    && rules.scoreTarget === request.scoreTarget
+    && rules.blankEnabled === request.blankEnabled
+    && JSON.stringify(rules.deck) === JSON.stringify(request.deck);
+}
+
+function buildPrivateSettingsRequest(rules, changes = {}) {
+  const ruleset = changes.ruleset === EXPANDED_PRIVATE_RULESET_ID
+    ? EXPANDED_PRIVATE_RULESET_ID
+    : changes.ruleset === CLASSIC_PRIVATE_RULESET_ID
+      ? CLASSIC_PRIVATE_RULESET_ID
+      : rules.ruleset;
+  const request = {
+    ruleset,
+    turnTimeLimitMs: changes.turnTimeLimitMs ?? rules.turnTimeLimitMs
+  };
+  if (ruleset === EXPANDED_PRIVATE_RULESET_ID) {
+    request.deck = cloneDeckEntries(changes.deck ?? getExpandedDeckForEditing(rules));
+    request.roundLimit = changes.roundLimit ?? rules.roundLimit;
+    request.scoreTarget = changes.scoreTarget !== undefined ? changes.scoreTarget : rules.scoreTarget;
+    request.blankEnabled = changes.blankEnabled ?? rules.blankEnabled;
+  }
+  return request;
+}
+
+function validateExpandedSettingsForClient(request) {
+  const totalCards = deckCardCount(request.deck);
+  if (totalCards < MIN_EXPANDED_DECK_SIZE || totalCards > MAX_EXPANDED_DECK_SIZE) {
+    return 'デッキは1人あたり5〜14枚にしてください。';
+  }
+  if (!Number.isSafeInteger(request.roundLimit) || request.roundLimit < 1 || request.roundLimit > totalCards) {
+    return '総ラウンド数は、デッキ枚数以内にしてください。';
+  }
+  if (request.scoreTarget !== null
+    && (!Number.isSafeInteger(request.scoreTarget) || request.scoreTarget < 1 || request.scoreTarget > request.roundLimit * 2)) {
+    return '即時勝利の枚数は、総ラウンド数で獲得できる範囲にしてください。';
+  }
+  return '';
+}
+
+function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
+  if (!elements.expandedPrivateSettings) return;
+  const isExpanded = rules.ruleset === EXPANDED_PRIVATE_RULESET_ID;
+  elements.expandedPrivateSettings.classList.toggle('hidden', !isExpanded);
+  if (!isExpanded) return;
+
+  const deck = getExpandedDeckForEditing(rules);
+  const totalCards = deckCardCount(deck);
+  const copiesById = new Map(deck.map((entry) => [entry.definitionId, entry.copies]));
+  const catalog = rules.deckCatalog || [];
+  const disabled = !canEdit || !socket?.connected || isPending;
+  setText(elements.expandedDeckTotal, `${totalCards} / ${MAX_EXPANDED_DECK_SIZE}枚`);
+  elements.expandedDeckList.replaceChildren();
+  catalog.forEach((card) => {
+    const row = document.createElement('article');
+    row.className = 'expanded-deck-card';
+    const copy = document.createElement('div');
+    const name = document.createElement('strong');
+    name.textContent = card.name;
+    const description = document.createElement('small');
+    description.textContent = card.desc || '能力なし';
+    copy.append(name, description);
+    const controls = document.createElement('div');
+    controls.className = 'expanded-deck-card-controls';
+    const minus = document.createElement('button');
+    minus.type = 'button';
+    minus.className = 'deck-count-button';
+    minus.textContent = '−';
+    minus.dataset.deckAction = 'decrement';
+    minus.dataset.definitionId = card.id;
+    const count = document.createElement('output');
+    count.textContent = String(copiesById.get(card.id) || 0);
+    const plus = document.createElement('button');
+    plus.type = 'button';
+    plus.className = 'deck-count-button';
+    plus.textContent = '+';
+    plus.dataset.deckAction = 'increment';
+    plus.dataset.definitionId = card.id;
+    const currentCopies = copiesById.get(card.id) || 0;
+    minus.disabled = disabled || currentCopies <= 0 || totalCards <= MIN_EXPANDED_DECK_SIZE;
+    plus.disabled = disabled || currentCopies >= (card.maxCopiesPerDeck || MAX_EXPANDED_CARD_COPIES) || totalCards >= MAX_EXPANDED_DECK_SIZE;
+    controls.append(minus, count, plus);
+    row.append(copy, controls);
+    elements.expandedDeckList.append(row);
+  });
+
+  elements.expandedRoundLimitInput.value = String(rules.roundLimit);
+  elements.expandedRoundLimitInput.min = '1';
+  elements.expandedRoundLimitInput.max = String(totalCards);
+  elements.expandedRoundLimitInput.disabled = disabled;
+  elements.expandedScoreTargetEnabled.checked = rules.scoreTarget !== null;
+  elements.expandedScoreTargetEnabled.disabled = disabled;
+  elements.expandedScoreTargetInput.value = String(rules.scoreTarget ?? Math.min(9, rules.roundLimit * 2));
+  elements.expandedScoreTargetInput.min = '1';
+  elements.expandedScoreTargetInput.max = String(rules.roundLimit * 2);
+  elements.expandedScoreTargetInput.disabled = disabled || rules.scoreTarget === null;
+  elements.expandedScoreTargetLabel.classList.toggle('is-disabled', rules.scoreTarget === null);
+  elements.expandedBlankEnabled.checked = rules.blankEnabled;
+  elements.expandedBlankEnabled.disabled = disabled || rules.blankRequired;
+  setText(
+    elements.expandedBlankNote,
+    rules.blankRequired
+      ? 'このデッキには選択不能な状態を作り得るカードがあるため、Blankは必須です。'
+      : '有効にすると、手札外のBlankを選択でき、時間切れ時の抽選にも入ります。'
+  );
+}
+
 function renderRoomRules(room) {
   if (!elements.roomRulesPanel) return;
   const rules = getRoomRules(room);
   const isPrivateRoom = room?.matchType !== 'random';
+  const isExpanded = isPrivateRoom && rules.ruleset === EXPANDED_PRIVATE_RULESET_ID;
   const canEdit = Boolean(
     isPrivateRoom
     && isRoomHost(room)
     && ['waiting', 'finished'].includes(room?.gameState)
   );
   let isPending = privateSettingsPending?.roomId === room?.id;
-
-  // A room update is authoritative. Only now do we mark an asynchronous
-  // settings request as saved, preventing a stale select value from looking
-  // like a successful change after a reconnect or a competing host update.
-  if (isPending && rules.turnTimeLimitMs === privateSettingsPending.turnTimeLimitMs) {
+  if (isPending && privateSettingsMatch(rules, privateSettingsPending)) {
     clearPrivateSettingsPending();
     privateSettingsFeedback = '設定を反映しました。両者の開始同意はリセットされています。';
     isPending = false;
   }
 
-  setText(elements.roomRulesMode, isPrivateRoom ? 'プライベート対戦・クラシック' : 'ランダムマッチ・固定ルール');
+  const deckCount = isExpanded ? deckCardCount(rules.deck) : 7;
+  const immediateText = rules.scoreTarget === null ? '即時勝利なし' : `${rules.scoreTarget}枚獲得で即時決着`;
+  const deckText = isExpanded
+    ? rules.deck.map((entry) => `${entry.definitionId} ×${entry.copies}`).join(' / ')
+    : '両者とも A / K / Q / J / Joker / 3 / 2 を1枚ずつ使用します。';
+  setText(elements.roomRulesMode, !isPrivateRoom ? 'ランダムマッチ・固定ルール' : isExpanded ? 'プライベート対戦・拡張デッキ' : 'プライベート対戦・クラシック');
   setText(
     elements.roomRulesState,
     !isPrivateRoom
@@ -606,28 +786,25 @@ function renderRoomRules(room) {
           ? '現在の設定担当者 — 変更できます'
           : '現在の設定担当者が変更できます'
   );
-  setText(
-    elements.roomRulesSummary,
-    `共通の7枚で最大${rules.roundLimit}ラウンド。1ラウンド ${formatTurnTime(rules.turnTimeLimitMs)}、${rules.scoreTarget}枚獲得で即時決着です。`
-  );
-  setText(
-    elements.roomRulesEnd,
-    `${rules.scoreTarget}枚獲得、または第${rules.roundLimit}ラウンド終了時に獲得枚数が多い側の勝ちです。`
-  );
-  setText(
-    elements.roomRulesTimeout,
-    '時間切れ時は、残った手札からサーバーが1枚をランダムに選びます。'
-  );
+  setText(elements.roomRulesSummary, `共通の${deckCount}枚で最大${rules.roundLimit}ラウンド。1ラウンド ${formatTurnTime(rules.turnTimeLimitMs)}、${immediateText}です。`);
+  setText(elements.roomRulesDeck, deckText);
+  setText(elements.roomRulesEnd, rules.scoreTarget === null
+    ? `第${rules.roundLimit}ラウンド終了時に、獲得枚数が多い側の勝ちです。`
+    : `${rules.scoreTarget}枚獲得、または第${rules.roundLimit}ラウンド終了時に獲得枚数が多い側の勝ちです。`);
+  setText(elements.roomRulesTimeout, rules.blankEnabled
+    ? '時間切れ時は、合法な手札と手札外のBlankからサーバーが1つをランダムに選びます。'
+    : '時間切れ時は、残った合法な手札からサーバーが1枚をランダムに選びます。');
 
   elements.privateSettingsControls.classList.toggle('hidden', !canEdit);
   if (!canEdit) return;
-
   const selectableTurnTime = PRIVATE_TURN_TIME_OPTIONS_MS.has(rules.turnTimeLimitMs)
     ? rules.turnTimeLimitMs
     : TURN_TIME_LIMIT_MS;
-  const displayTurnTime = isPending ? privateSettingsPending.turnTimeLimitMs : selectableTurnTime;
-  elements.privateTurnTimeSelect.value = String(displayTurnTime);
+  elements.privateRulesetSelect.value = rules.ruleset;
+  elements.privateRulesetSelect.disabled = !socket?.connected || isPending;
+  elements.privateTurnTimeSelect.value = String(selectableTurnTime);
   elements.privateTurnTimeSelect.disabled = !socket?.connected || isPending;
+  renderExpandedDeckEditor(rules, { canEdit, isPending });
   setText(
     elements.privateSettingsFeedback,
     isPending
@@ -636,27 +813,31 @@ function renderRoomRules(room) {
   );
 }
 
-function requestPrivateTurnTimeChange(turnTimeLimitMs) {
+function requestPrivateSettingsChange(changes) {
   if (!socket?.connected || !currentRoom || !currentRoomId || currentRoom.matchType === 'random') return;
   if (!isRoomHost(currentRoom) || !['waiting', 'finished'].includes(currentRoom.gameState)) return;
-  if (!PRIVATE_TURN_TIME_OPTIONS_MS.has(turnTimeLimitMs)) {
+  const rules = getRoomRules(currentRoom);
+  const requestSettings = buildPrivateSettingsRequest(rules, changes);
+  if (!PRIVATE_TURN_TIME_OPTIONS_MS.has(requestSettings.turnTimeLimitMs)) {
     privateSettingsFeedback = '選べる制限時間は60秒・90秒・120秒です。';
     renderRoomRules(currentRoom);
     return;
   }
-
-  const rules = getRoomRules(currentRoom);
-  if (rules.turnTimeLimitMs === turnTimeLimitMs) {
-    privateSettingsFeedback = 'この部屋はすでにその制限時間です。';
-    renderRoomRules(currentRoom);
-    return;
+  if (requestSettings.ruleset === EXPANDED_PRIVATE_RULESET_ID) {
+    const validationMessage = validateExpandedSettingsForClient(requestSettings);
+    if (validationMessage) {
+      privateSettingsFeedback = validationMessage;
+      renderRoomRules(currentRoom);
+      return;
+    }
   }
+  if (privateSettingsMatch(rules, requestSettings)) return;
 
   clearPrivateSettingsPending();
   const pendingRequest = {
     roomId: currentRoomId,
     configRevision: rules.configRevision,
-    turnTimeLimitMs
+    ...requestSettings
   };
   privateSettingsPending = pendingRequest;
   privateSettingsFeedback = '';
@@ -673,9 +854,6 @@ function requestPrivateTurnTimeChange(turnTimeLimitMs) {
     if (!result?.ok) {
       clearPrivateSettingsPending();
       privateSettingsFeedback = result?.message || '設定を変更できませんでした。';
-      // A rejected request may carry only a newer configuration revision.
-      // It is not proof that this viewer's own start consent changed, so do
-      // not erase that local state while resynchronising the selector.
       if (applyPrivateSettingsAcknowledgement(result, pendingRequest.roomId)) {
         renderRoom(currentRoom);
       } else if (currentRoom?.id === pendingRequest.roomId) {
@@ -683,10 +861,6 @@ function requestPrivateTurnTimeChange(turnTimeLimitMs) {
       }
       return;
     }
-
-    // Prefer the following room_updated event for the full new view. If the
-    // server returns settings in its acknowledgement, it is also
-    // authoritative and lets a slow broadcast keep this host informed.
     if (applyPrivateSettingsAcknowledgement(result, pendingRequest.roomId, { clearStartAgreement: true })) {
       clearPrivateSettingsPending();
       privateSettingsFeedback = '設定を反映しました。両者の開始同意はリセットされています。';
@@ -711,12 +885,35 @@ function renderTimer(room) {
   timerInterval = window.setInterval(updateTimer, 300);
 }
 
+function createVirtualBlankDisplayCard() {
+  return {
+    id: VIRTUAL_BLANK_CARD_ID,
+    definitionId: 'blank',
+    name: 'Blank',
+    desc: '手札を消費しないBlank。獲得札・持ち越し札にはなりません。',
+    virtual: true
+  };
+}
+
+function getSelectableDisplayHand(hand, room, isInteractive) {
+  const cards = Array.isArray(hand) ? [...hand] : [];
+  return isInteractive && getRoomRules(room).blankEnabled
+    ? [...cards, createVirtualBlankDisplayCard()]
+    : cards;
+}
+
+function getCurrentInteractiveHand() {
+  const me = currentRoom?.players?.find((player) => player.id === socket?.id);
+  const canChoose = Boolean(me && currentRoom?.gameState === 'playing' && !currentRoom.viewer?.hasConfirmedSelection);
+  return getSelectableDisplayHand(me?.hand, currentRoom, canChoose);
+}
+
 function createCard(card, suitType, isInteractive) {
   const cardElement = document.createElement('div');
   // 両プレイヤーは同じIDのカードを持つため、選択状態は操作できる自分の手札だけに適用する。
   const isSelected = isInteractive && card.id === mySelectedCardId;
   const isCommitting = isInteractive && card.id === committedCardId;
-  cardElement.className = `card card-${suitType} card-${card.id}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
+  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.dataset.cardId = card.id;
   cardElement.setAttribute(
     'aria-label',
@@ -734,13 +931,13 @@ function createCard(card, suitType, isInteractive) {
       committedCardId = null;
       renderHand(
         elements.myHand,
-        currentRoom?.players.find((player) => player.id === socket?.id)?.hand || [],
+        getCurrentInteractiveHand(),
         'spade',
         true,
         { focusCardId: card.id }
       );
       renderSelectedCardDetails(
-        currentRoom?.players.find((player) => player.id === socket?.id)?.hand || [],
+        getCurrentInteractiveHand(),
         { isInteractive: true, suitType: 'spade' }
       );
       updateConfirmButton();
@@ -924,7 +1121,10 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     : me ? (isMyWin ? 'あなたの勝ち' : '相手の勝ち') : `${roundWinnerName} の勝ち`;
   const outcomeDetail = document.createElement('p');
   if (isDraw) {
-    outcomeDetail.textContent = '引き分け — この2枚は次の勝負へ持ち越し';
+    const carriedCards = Array.isArray(currentRoom?.stack) ? currentRoom.stack.length : 0;
+    outcomeDetail.textContent = carriedCards > 0
+      ? `引き分け — 実カード ${carriedCards}枚を次の勝負へ持ち越し`
+      : '引き分け — 持ち越し札はありません';
   } else {
     const awardText = Number.isFinite(lastRound.awardedCards) ? `${lastRound.awardedCards}枚` : '場のカード';
     outcomeDetail.textContent = `${roundWinnerName} が ${awardText} を獲得`;
@@ -946,7 +1146,7 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   const winner = document.createElement('span');
   const awardText = Number.isFinite(lastRound.awardedCards) ? `+${lastRound.awardedCards}枚` : '場のカード';
   winner.textContent = isDraw
-    ? '引き分け · 持ち越し +2'
+    ? `引き分け · 持ち越し +${Array.isArray(currentRoom?.stack) ? currentRoom.stack.length : 0}`
     : `獲得 ${awardText}`;
   versus.append(versusMark, winner);
   const second = createRevealCard(lastRound.p2Card, secondOwner, 'p2');
@@ -1030,11 +1230,11 @@ function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
     const forfeitedName = getSeatDisplayName(room, forfeitedSeat, room.finishReason.forfeitedBy || '対戦者');
     detail.textContent = `${forfeitedName} の降参により決着しました。`;
   } else if (room.finishReason?.type === 'score-limit') {
-    detail.textContent = '9枚以上を先取して決着しました。';
+    detail.textContent = `${getRoomRules(room).scoreTarget ?? '設定された'}枚以上を先取して決着しました。`;
   } else if (isDraw) {
-    detail.textContent = '7ラウンド終了。獲得枚数は同じです。';
+    detail.textContent = `${getRoomRules(room).roundLimit}ラウンド終了。獲得枚数は同じです。`;
   } else {
-    detail.textContent = `第7ラウンド終了。${winnerName} が最終勝者です。`;
+    detail.textContent = `第${getRoomRules(room).roundLimit}ラウンド終了。${winnerName} が最終勝者です。`;
   }
   panel.replaceChildren(kicker, title, score, scoreCaption, detail);
 
@@ -1418,18 +1618,19 @@ function renderRoom(room) {
   const displayedBottomPlayer = isSpectator ? spadePlayer : me;
   const displayedTopPlayer = isSpectator ? heartPlayer : opponent;
   const isInteractive = Boolean(me && !roomView.viewer.isSpectator && roomView.gameState === 'playing' && !roomView.viewer.hasConfirmedSelection);
+  const displayedBottomHand = getSelectableDisplayHand(displayedBottomPlayer?.hand, roomView, isInteractive);
   if (isSpectator) {
     mySelectedCardId = null;
     committedCardId = null;
   }
 
   if (displayedBottomPlayer) {
-    if (!isSpectator && !displayedBottomPlayer.hand.some((card) => card.id === mySelectedCardId)) mySelectedCardId = null;
-    if (!isSpectator && !displayedBottomPlayer.hand.some((card) => card.id === committedCardId)) committedCardId = null;
+    if (!isSpectator && !displayedBottomHand.some((card) => card.id === mySelectedCardId)) mySelectedCardId = null;
+    if (!isSpectator && !displayedBottomHand.some((card) => card.id === committedCardId)) committedCardId = null;
     setText(elements.myName, displayedBottomPlayer.name);
     updateScore(elements.myScore, displayedBottomPlayer);
-    renderHand(elements.myHand, displayedBottomPlayer.hand, 'spade', isInteractive);
-    renderSelectedCardDetails(displayedBottomPlayer.hand, { isInteractive, suitType: 'spade' });
+    renderHand(elements.myHand, displayedBottomHand, 'spade', isInteractive);
+    renderSelectedCardDetails(displayedBottomHand, { isInteractive, suitType: 'spade' });
   } else {
     mySelectedCardId = null;
     setText(elements.myName, isSpectator ? '♠側を待機中' : 'あなた');
@@ -1553,7 +1754,7 @@ elements.confirmButton.addEventListener('click', () => {
     committedCardId = null;
     const me = currentRoom?.players.find((player) => player.id === socket?.id);
     const canChoose = Boolean(me && currentRoom?.gameState === 'playing' && !currentRoom.viewer.hasConfirmedSelection);
-    if (me) renderHand(elements.myHand, me.hand, 'spade', canChoose);
+    if (me) renderHand(elements.myHand, getSelectableDisplayHand(me.hand, currentRoom, canChoose), 'spade', canChoose);
   }, 620);
 });
 
@@ -1645,9 +1846,71 @@ elements.spectatorAutoJoinToggle.addEventListener('change', () => {
   }, 3_500);
 });
 
+elements.privateRulesetSelect.addEventListener('change', () => {
+  const ruleset = elements.privateRulesetSelect.value === EXPANDED_PRIVATE_RULESET_ID
+    ? EXPANDED_PRIVATE_RULESET_ID
+    : CLASSIC_PRIVATE_RULESET_ID;
+  requestPrivateSettingsChange({ ruleset });
+});
+
 elements.privateTurnTimeSelect.addEventListener('change', () => {
-  const turnTimeLimitMs = Number(elements.privateTurnTimeSelect.value);
-  requestPrivateTurnTimeChange(turnTimeLimitMs);
+  requestPrivateSettingsChange({ turnTimeLimitMs: Number(elements.privateTurnTimeSelect.value) });
+});
+
+elements.expandedDeckList.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-deck-action][data-definition-id]');
+  if (!button || !currentRoom) return;
+  const rules = getRoomRules(currentRoom);
+  if (rules.ruleset !== EXPANDED_PRIVATE_RULESET_ID) return;
+  const action = button.dataset.deckAction;
+  const definitionId = button.dataset.definitionId;
+  const catalogCard = rules.deckCatalog.find((card) => card.id === definitionId);
+  if (!catalogCard) return;
+  const deck = getExpandedDeckForEditing(rules);
+  const entry = deck.find((candidate) => candidate.definitionId === definitionId);
+  const currentCopies = entry?.copies || 0;
+  const totalCards = deckCardCount(deck);
+  let nextCopies = currentCopies;
+  if (action === 'increment') {
+    if (totalCards >= MAX_EXPANDED_DECK_SIZE || currentCopies >= (catalogCard.maxCopiesPerDeck || MAX_EXPANDED_CARD_COPIES)) return;
+    nextCopies += 1;
+  } else if (action === 'decrement') {
+    if (currentCopies < 1 || totalCards <= MIN_EXPANDED_DECK_SIZE) return;
+    nextCopies -= 1;
+  } else {
+    return;
+  }
+  const nextDeck = entry
+    ? deck
+      .map((candidate) => candidate.definitionId === definitionId ? { ...candidate, copies: nextCopies } : candidate)
+      .filter((candidate) => candidate.copies > 0)
+    : [{ definitionId, copies: nextCopies }, ...deck];
+  const nextTotal = deckCardCount(nextDeck);
+  const nextRoundLimit = Math.min(rules.roundLimit, nextTotal);
+  const nextScoreTarget = rules.scoreTarget === null ? null : Math.min(rules.scoreTarget, nextRoundLimit * 2);
+  requestPrivateSettingsChange({ deck: nextDeck, roundLimit: nextRoundLimit, scoreTarget: nextScoreTarget });
+});
+
+elements.expandedRoundLimitInput.addEventListener('change', () => {
+  requestPrivateSettingsChange({ roundLimit: Number(elements.expandedRoundLimitInput.value) });
+});
+
+elements.expandedScoreTargetEnabled.addEventListener('change', () => {
+  const rules = currentRoom ? getRoomRules(currentRoom) : null;
+  if (!rules || rules.ruleset !== EXPANDED_PRIVATE_RULESET_ID) return;
+  requestPrivateSettingsChange({
+    scoreTarget: elements.expandedScoreTargetEnabled.checked
+      ? Math.min(rules.roundLimit * 2, rules.scoreTarget ?? 9)
+      : null
+  });
+});
+
+elements.expandedScoreTargetInput.addEventListener('change', () => {
+  requestPrivateSettingsChange({ scoreTarget: Number(elements.expandedScoreTargetInput.value) });
+});
+
+elements.expandedBlankEnabled.addEventListener('change', () => {
+  requestPrivateSettingsChange({ blankEnabled: elements.expandedBlankEnabled.checked === true });
 });
 
 elements.chatInput.addEventListener('input', () => {

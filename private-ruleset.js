@@ -4,8 +4,8 @@
  * Private PvP の拡張用設定境界。
  *
  * ここは将来の拡張カード用の土台であり、game-rules.js のクラシック
- * ルールを置き換えない。現段階で選べるのは既存ルールと
- * 60 / 90 / 120 秒の制限時間だけである。
+ * ルールを置き換えない。クラシックでは60 / 90 / 120秒の制限時間、
+ * 拡張Privateでは凍結済みのデッキ・終了条件・仮想Blankを扱う。
  */
 const { CARD_DEFINITIONS } = require('./game-rules');
 
@@ -17,8 +17,8 @@ const CLASSIC_SCORE_TARGET = 9;
 const PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS = Object.freeze([60_000, 90_000, 120_000]);
 const PRIVATE_TURN_TIME_LIMIT_OPTION_SET = new Set(PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS);
 const EXPANDED_TIMEOUT_POLICIES = Object.freeze([
-  'random-legal-then-blank',
-  'blank-on-timeout'
+  'random-legal',
+  'random-legal-with-blank'
 ]);
 const EXPANDED_TIMEOUT_POLICY_SET = new Set(EXPANDED_TIMEOUT_POLICIES);
 const EXPANDED_PRIVATE_FEATURES = Object.freeze(['public-cards-v1']);
@@ -42,15 +42,17 @@ const CLASSIC_PRIVATE_RULESET = Object.freeze({
   timeoutPolicy: 'random-legal'
 });
 
-// Expanded rooms are not connected to Socket.IO yet.  This snapshot is only
-// for the pure engine, and deliberately keeps an explicit round cap and an
-// optional early-win score instead of inferring either from deck size.
+// Blank is a reusable virtual card, not a deck entry.  When enabled it can be
+// selected deliberately and is included in server-side timeout selection.
+// The exact timeout policy is derived from this boolean so a client cannot
+// claim a display rule the game engine did not apply.
 const EXPANDED_PRIVATE_RULESET = Object.freeze({
   ruleset: EXPANDED_PRIVATE_RULESET_ID,
   turnTimeLimitMs: 90_000,
   roundLimit: CLASSIC_ROUND_LIMIT,
   scoreTarget: CLASSIC_SCORE_TARGET,
-  timeoutPolicy: 'random-legal-then-blank'
+  blankEnabled: false,
+  timeoutPolicy: 'random-legal'
 });
 
 function isSupportedPrivateTurnTimeLimit(value) {
@@ -90,10 +92,16 @@ function createExpandedPrivateRuleset(settings = {}) {
     ? settings.roundLimit
     : EXPANDED_PRIVATE_RULESET.roundLimit;
   const scoreTarget = normalizeExpandedScoreTarget(settings?.scoreTarget);
-  const timeoutPolicy = isSupportedExpandedTimeoutPolicy(settings?.timeoutPolicy)
-    ? settings.timeoutPolicy
-    : EXPANDED_PRIVATE_RULESET.timeoutPolicy;
-  const ruleset = { ruleset: EXPANDED_PRIVATE_RULESET_ID, turnTimeLimitMs, roundLimit, scoreTarget, timeoutPolicy };
+  const blankEnabled = settings?.blankEnabled === true;
+  const timeoutPolicy = blankEnabled ? 'random-legal-with-blank' : 'random-legal';
+  const ruleset = {
+    ruleset: EXPANDED_PRIVATE_RULESET_ID,
+    turnTimeLimitMs,
+    roundLimit,
+    scoreTarget,
+    blankEnabled,
+    timeoutPolicy
+  };
   assertExpandedPrivateRuleset(ruleset);
   return ruleset;
 }
@@ -133,6 +141,13 @@ function assertExpandedPrivateRuleset(ruleset) {
   if (ruleset.scoreTarget !== null
     && (!Number.isSafeInteger(ruleset.scoreTarget) || ruleset.scoreTarget < 1 || ruleset.scoreTarget > MAX_PRIVATE_CARD_INSTANCES)) {
     throw new RangeError('expanded private score target is outside the supported range');
+  }
+  if (typeof ruleset.blankEnabled !== 'boolean') {
+    throw new RangeError('expanded private blank setting must be boolean');
+  }
+  const expectedTimeoutPolicy = ruleset.blankEnabled ? 'random-legal-with-blank' : 'random-legal';
+  if (ruleset.timeoutPolicy !== expectedTimeoutPolicy) {
+    throw new RangeError('expanded private timeout policy must match the blank setting');
   }
   if (!isSupportedExpandedTimeoutPolicy(ruleset.timeoutPolicy)) {
     throw new RangeError('unsupported expanded private timeout policy');

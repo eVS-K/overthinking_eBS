@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const { CARD_DEFINITIONS, resolveRound } = require('./game-rules');
 const { createClassicPrivateCardInstances } = require('./private-card-instances');
 const { createClassicPrivateRuleset, createExpandedPrivateRuleset } = require('./private-ruleset');
+const { VIRTUAL_BLANK_SELECTION_ID } = require('./private-blank');
 const {
   applyPrivateRound,
   assertPrivateGameState,
@@ -165,4 +166,69 @@ test('拡張Privateの即時勝利は設定された獲得枚数で終了し、�
   const forged = structuredClone(result.state);
   forged.deck[0].copies = 2;
   assert.throws(() => assertPrivateGameState(forged), /deck snapshot|deck does not match/);
+});
+
+test('有効なBlankは手札を消費せず、相手が勝っても仮想札そのものを獲得させない', () => {
+  const state = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null, blankEnabled: true }),
+    instanceNamespace: 'blank-win',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'ten', copies: 1 }
+    ]
+  });
+  assert.equal(legalPrivateCardInstanceIds(state, 'p1').includes(VIRTUAL_BLANK_SELECTION_ID), true);
+  const result = applyPrivateRound(state, VIRTUAL_BLANK_SELECTION_ID, instanceIdFor(state, 'p2', 'ace'));
+  assert.equal(result.canonicalResult, 'p2');
+  assert.equal(result.awardedCards, 1);
+  assert.equal(result.state.p1.hand.length, 5);
+  assert.equal(result.state.p2.hand.length, 4);
+  assert.equal(result.state.p2.score, 1);
+  assert.equal(result.state.stack.length, 0);
+  assert.equal(result.p1Card.virtual, true);
+  assert.doesNotThrow(() => assertPrivateGameState(result.state));
+});
+
+test('BlankとJokerの引き分けは実カードだけを持ち越し、次の勝者がその一枚を得る', () => {
+  const state = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 3, scoreTarget: null, blankEnabled: true }),
+    instanceNamespace: 'blank-draw',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'joker', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'ten', copies: 1 }
+    ]
+  });
+  const draw = applyPrivateRound(state, VIRTUAL_BLANK_SELECTION_ID, instanceIdFor(state, 'p2', 'joker'));
+  assert.equal(draw.canonicalResult, 'draw');
+  assert.equal(draw.state.stack.length, 1);
+  const win = applyPrivateRound(
+    draw.state,
+    instanceIdFor(draw.state, 'p1', 'ace'),
+    instanceIdFor(draw.state, 'p2', 'king')
+  );
+  assert.equal(win.awardedCards, 3);
+  assert.equal(win.state.p1.score, 3);
+  assert.equal(win.state.stack.length, 0);
+});
+
+test('Blankが無効な拡張設定では、仮想Blankを選択・確定できない', () => {
+  const state = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null, blankEnabled: false }),
+    instanceNamespace: 'blank-disabled',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'ten', copies: 1 }
+    ]
+  });
+  assert.equal(legalPrivateCardInstanceIds(state, 'p1').includes(VIRTUAL_BLANK_SELECTION_ID), false);
+  assert.throws(() => applyPrivateRound(state, VIRTUAL_BLANK_SELECTION_ID, instanceIdFor(state, 'p2', 'ace')), /not legal/);
 });
