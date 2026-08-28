@@ -143,6 +143,8 @@ const elements = {
   roomRulesEnd: document.getElementById('room-rules-end'),
   roomRulesTimeout: document.getElementById('room-rules-timeout'),
   privateSettingsControls: document.getElementById('private-settings-controls'),
+  privateSettingsOwnerName: document.getElementById('private-settings-owner-name'),
+  transferPrivateSettingsOwnerButton: document.getElementById('transfer-private-settings-owner-btn'),
   privateRulesetSelect: document.getElementById('private-ruleset-select'),
   privateTurnTimeSelect: document.getElementById('private-turn-time-select'),
   expandedPrivateSettings: document.getElementById('expanded-private-settings'),
@@ -609,6 +611,14 @@ function clearPrivateSettingsPending() {
   privateSettingsPending = null;
 }
 
+function highlightPrivateSettingsOwnership() {
+  const controls = elements.privateSettingsControls;
+  if (!controls || controls.classList.contains('hidden')) return;
+  controls.classList.remove('settings-owner-arrived');
+  window.requestAnimationFrame(() => controls.classList.add('settings-owner-arrived'));
+  window.setTimeout(() => controls.classList.remove('settings-owner-arrived'), 1_300);
+}
+
 function applyPrivateSettingsAcknowledgement(result, roomId, { clearStartAgreement = false } = {}) {
   if (!result?.settings || typeof result.settings !== 'object' || currentRoom?.id !== roomId) return false;
   const revision = Number.isSafeInteger(result.configRevision)
@@ -805,6 +815,14 @@ function renderRoomRules(room) {
 
   elements.privateSettingsControls.classList.toggle('hidden', !canEdit);
   if (!canEdit) return;
+  const transferTarget = room?.players?.find((player) => player.id !== socket?.id) || null;
+  const canTransferOwnership = Boolean(transferTarget?.connected && !isPending && socket?.connected);
+  setText(elements.privateSettingsOwnerName, 'あなた');
+  setText(
+    elements.transferPrivateSettingsOwnerButton,
+    transferTarget ? `${transferTarget.name} さんへ譲る` : '相手へ譲る'
+  );
+  elements.transferPrivateSettingsOwnerButton.disabled = !canTransferOwnership;
   const selectableTurnTime = PRIVATE_TURN_TIME_OPTIONS_MS.has(rules.turnTimeLimitMs)
     ? rules.turnTimeLimitMs
     : TURN_TIME_LIMIT_MS;
@@ -876,6 +894,30 @@ function requestPrivateSettingsChange(changes) {
     } else {
       privateSettingsFeedback = '設定を確認しています…';
     }
+  });
+}
+
+function requestPrivateSettingsOwnershipTransfer() {
+  if (!socket?.connected || !currentRoom || !currentRoomId || currentRoom.matchType === 'random') return;
+  if (!isRoomHost(currentRoom) || !['waiting', 'finished'].includes(currentRoom.gameState)) return;
+  const transferTarget = currentRoom.players?.find((player) => player.id !== socket.id && player.connected);
+  if (!transferTarget) {
+    privateSettingsFeedback = '接続中の対戦相手がいるときだけ、設定担当を譲れます。';
+    renderRoomRules(currentRoom);
+    return;
+  }
+  if (!window.confirm(`設定内容は変えずに、${transferTarget.name} さんへ編集権限を譲ります。よろしいですか？`)) return;
+  elements.transferPrivateSettingsOwnerButton.disabled = true;
+  const requestedRoomId = currentRoomId;
+  socket.emit('transfer_private_settings_owner', { roomId: requestedRoomId }, (result) => {
+    if (currentRoomId !== requestedRoomId) return;
+    if (!result?.ok) {
+      privateSettingsFeedback = result?.message || '設定担当を譲れませんでした。';
+      renderRoomRules(currentRoom);
+      return;
+    }
+    privateSettingsFeedback = `${result.settingsOwnerName || transferTarget.name} さんへ設定担当を譲りました。`;
+    renderRoomRules(currentRoom);
   });
 }
 
@@ -1887,6 +1929,10 @@ elements.privateTurnTimeSelect.addEventListener('change', () => {
   requestPrivateSettingsChange({ turnTimeLimitMs: Number(elements.privateTurnTimeSelect.value) });
 });
 
+elements.transferPrivateSettingsOwnerButton.addEventListener('click', () => {
+  requestPrivateSettingsOwnershipTransfer();
+});
+
 elements.expandedDeckList.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-deck-action][data-definition-id]');
   if (!button || !currentRoom) return;
@@ -2117,6 +2163,15 @@ if (socket) {
     elements.joinButton.disabled = false;
     setLoginMessage('');
     renderRoom(room);
+  });
+
+  socket.on('settings_owner_changed', (payload = {}) => {
+    if (!currentRoom || payload.roomId !== currentRoomId || !isRoomHost(currentRoom)) return;
+    clearPrivateSettingsPending();
+    privateSettingsFeedback = payload.message || '設定担当を引き継ぎました。ルールやデッキを変更できます。';
+    renderRoomRules(currentRoom);
+    highlightPrivateSettingsOwnership();
+    setText(elements.status, privateSettingsFeedback);
   });
 
   socket.on('random_match_interrupted', (payload) => {

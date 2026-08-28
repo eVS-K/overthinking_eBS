@@ -27,6 +27,7 @@ const {
   promoteVolunteerSpectators,
   setSpectatorAutoJoin,
   startWhenBothPlayersAgree,
+  transferPrivateRoomSettingsOwner,
   updatePrivateRoomSettings
 } = require('./server');
 
@@ -196,6 +197,43 @@ test('Private設定はホスト・待機/終了状態だけに限定され、開
     configRevision: 0,
     turnTimeLimitMs: 120_000
   }).ok, false);
+});
+
+test('Privateの設定担当は接続中の対戦相手へだけ譲れ、旧担当の編集権限は直ちに失効する', () => {
+  const room = createRoom('private-settings-owner-transfer');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '作成者', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '参加者', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+  const revision = room.configRevision;
+
+  const transfer = transferPrivateRoomSettingsOwner(room, 'host-client');
+  assert.deepEqual(transfer, {
+    ok: true,
+    previousOwnerName: '作成者',
+    settingsOwnerName: '参加者'
+  });
+  assert.equal(room.hostClientId, 'guest-client');
+  assert.equal(room.configRevision, revision, '設定内容を変えない移譲ではrevisionを消費しない');
+  assert.equal(createRoomView(room, 'p1').viewer.isRoomHost, false);
+  assert.equal(createRoomView(room, 'p2').viewer.isRoomHost, true);
+  assert.equal(updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: revision,
+    turnTimeLimitMs: 60_000
+  }).ok, false);
+  assert.equal(updatePrivateRoomSettings(room, {
+    clientId: 'guest-client',
+    configRevision: revision,
+    turnTimeLimitMs: 60_000
+  }).ok, true);
+
+  room.gameState = 'playing';
+  assert.equal(transferPrivateRoomSettingsOwner(room, 'guest-client').ok, false);
+  room.gameState = 'waiting';
+  room.players[0].connected = false;
+  assert.equal(transferPrivateRoomSettingsOwner(room, 'guest-client').ok, false);
 });
 
 test('選択したPrivateの制限時間は開始時に凍結され、対局タイマーへ引き継がれる', () => {

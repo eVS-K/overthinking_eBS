@@ -306,6 +306,16 @@ function isPrivateSettingsPayload(payload) {
   return true;
 }
 
+function isPrivateSettingsOwnerTransferPayload(payload) {
+  return Boolean(
+    payload
+      && typeof payload === 'object'
+      && !Array.isArray(payload)
+      && Object.keys(payload).length === 1
+      && typeof payload.roomId === 'string'
+  );
+}
+
 // Keep the Socket.IO boundary deliberately explicit.  The browser is allowed
 // to request only these setup values, and every value is revalidated by
 // updatePrivateRoomSettings before it can affect a room.  Having this small
@@ -478,6 +488,33 @@ function updatePrivateRoomSettings(room, {
     changed: true,
     configRevision: room.configRevision,
     settings: getPublicRoomRules(room)
+  };
+}
+
+// The transfer request deliberately carries no recipient identifier. A private
+// room has exactly one other player, and the server derives that player from
+// the authenticated Socket.IO room membership. This prevents a browser from
+// assigning edit authority to a spectator or an unrelated client.
+function transferPrivateRoomSettingsOwner(room, clientId) {
+  if (!room || room.matchType !== 'private') {
+    return { ok: false, message: '設定担当の引き継ぎはPrivate PvPでのみ行えます。' };
+  }
+  if (!['waiting', 'finished'].includes(room.gameState)) {
+    return { ok: false, message: '対局中は設定担当を引き継げません。対局終了後に行ってください。' };
+  }
+  if (!clientId || room.hostClientId !== clientId) {
+    return { ok: false, message: '設定担当を譲れるのは、現在の設定担当者だけです。' };
+  }
+  const previousOwner = room.players.find((player) => player.clientId === clientId);
+  const nextOwner = room.players.find((player) => player.clientId !== clientId && player.connected);
+  if (!previousOwner || !nextOwner) {
+    return { ok: false, message: '接続中の対戦相手がいるときだけ、設定担当を譲れます。' };
+  }
+  room.hostClientId = nextOwner.clientId;
+  return {
+    ok: true,
+    previousOwnerName: previousOwner.name,
+    settingsOwnerName: nextOwner.name
   };
 }
 
@@ -955,6 +992,19 @@ function broadcastRoom(room) {
   members.forEach((socketId) => {
     const member = io.sockets.sockets.get(socketId);
     if (member) member.emit('room_updated', createRoomView(room, socketId));
+  });
+}
+
+// A settings-owner hand-off is intentionally a direct, recipient-only event.
+// The regular room update contains the resulting capability, while this event
+// provides an accessible cue without exposing a host/client identifier.
+function emitSettingsOwnerChanged(room, targetPlayer, message) {
+  if (!room || room.matchType !== 'private' || !targetPlayer?.id) return;
+  const targetSocket = io.sockets.sockets.get(targetPlayer.id);
+  if (!targetSocket?.connected) return;
+  targetSocket.emit('settings_owner_changed', {
+    roomId: room.id,
+    message
   });
 }
 
@@ -1537,6 +1587,8 @@ function requeueRemainingRandomPlayer(room, departingPlayer) {
 
 function resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators = false } = {}) {
   const [departingPlayer] = room.players.splice(playerIndex, 1);
+  const shouldNotifyNewSettingsOwner = room.matchType === 'private'
+    && departingPlayer?.clientId === room.hostClientId;
   if (room.matchType === 'random' && !moveToSpectators) {
     return requeueRemainingRandomPlayer(room, departingPlayer);
   }
@@ -1568,6 +1620,14 @@ function resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators = false
   if (removeEmptyRoom(room)) return false;
   refreshPrivateRoomIdleExpiry(room);
   broadcastRoom(room);
+  if (shouldNotifyNewSettingsOwner) {
+    const nextOwner = room.players.find((player) => player.clientId === room.hostClientId);
+    emitSettingsOwnerChanged(
+      room,
+      nextOwner,
+      '前の設定担当者が退出したため、設定担当を引き継ぎました。ルールやデッキを変更できます。'
+    );
+  }
   return true;
 }
 
@@ -1899,6 +1959,43 @@ io.on('connection', (socket) => {
     replyToChat(acknowledge, result);
   });
 
+  socket.on('transfer_private_settings_owner', (payload = {}, acknowledge) => {
+    const reject = (message) => {
+      emitError(socket, message);
+      replyToChat(acknowledge, { ok: false, message });
+    };
+    if (!isPrivateSettingsOwnerTransferPayload(payload)) {
+      reject('設定担当の引き継ぎ内容を確認してから、もう一度お試しください。');
+      return;
+    }
+    const room = getBoundRoom(socket, payload.roomId);
+    if (!room) {
+      reject('現在の部屋を確認できませんでした。画面を更新して再試行してください。');
+      return;
+    }
+    const player = room.players.find((candidate) => candidate.id === socket.id);
+    if (!player || !player.connected) {
+      reject('観戦者は設定担当を引き継げません。');
+      return;
+    }
+    const result = transferPrivateRoomSettingsOwner(room, player.clientId);
+    if (!result.ok) {
+      reject(result.message);
+      return;
+    }
+    const nextOwner = room.players.find((candidate) => candidate.clientId === room.hostClientId);
+    broadcastRoom(room);
+    // Notify only the newly appointed player. The room view already tells
+    // everyone else who may edit, while this direct event gives the recipient
+    // an accessible, visible hand-off cue without exposing a client id.
+    emitSettingsOwnerChanged(
+      room,
+      nextOwner,
+      `${result.previousOwnerName} さんから設定担当を引き継ぎました。ルールやデッキを変更できます。`
+    );
+    replyToChat(acknowledge, result);
+  });
+
   const agreeToStart = (payload = {}) => {
     const room = getBoundRoom(socket, payload.roomId);
     if (!room || !['waiting', 'finished'].includes(room.gameState)) return;
@@ -2040,6 +2137,7 @@ module.exports = {
   setSpectatorAutoJoin,
   startWhenBothPlayersAgree,
   updatePrivateRoomSettings,
+  transferPrivateRoomSettingsOwner,
   rankedDeadlineSweeper,
   rankedRuntime
 };

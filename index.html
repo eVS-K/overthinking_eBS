@@ -11,9 +11,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
   <script src="page-redirect.js?v=security-v4"></script>
-  <link rel="stylesheet" href="style.css?v=pvp-v24">
+  <link rel="stylesheet" href="style.css?v=pvp-v25">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v24"></script>
+  <script src="socket-loader.js?v=pvp-v25"></script>
 </head>
 <body>
   <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
@@ -215,6 +215,14 @@
               </ul>
             </details>
             <div id="private-settings-controls" class="private-settings-controls hidden">
+              <section class="private-settings-owner" aria-labelledby="private-settings-owner-title">
+                <div>
+                  <span id="private-settings-owner-title" class="section-label">設定担当</span>
+                  <strong id="private-settings-owner-name">あなた</strong>
+                  <small>現在の設定は変えずに、対戦相手へ編集権限を渡せます。</small>
+                </div>
+                <button id="transfer-private-settings-owner-btn" class="transfer-private-settings-owner-button" type="button">相手へ譲る</button>
+              </section>
               <label for="private-ruleset-select">
                 <span>ルールセット</span>
                 <select id="private-ruleset-select" aria-describedby="private-settings-feedback">

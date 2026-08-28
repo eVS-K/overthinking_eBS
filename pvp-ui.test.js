@@ -117,12 +117,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v24/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v24/);
+  assert.match(html, /style\.css\?v=pvp-v25/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v25/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v24/);
+  assert.match(loader, /main\.js\?v=pvp-v25/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -206,6 +206,26 @@ test('Private拡張では共通デッキ・終了条件・Blankを待機中だ�
   assert.match(server, /getPrivateCardRoundPreview/);
   assert.match(css, /\.expanded-private-settings\s*\{/);
   assert.match(css, /\.card-virtual-blank\s*\{/);
+});
+
+test('Privateの設定担当は対戦者へ安全に譲れ、受け取った側へ編集可能な通知を出す', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const server = read('server.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="transfer-private-settings-owner-btn"/);
+  assert.match(html, /現在の設定は変えずに、対戦相手へ編集権限を渡せます。/);
+  assert.match(client, /function requestPrivateSettingsOwnershipTransfer\(/);
+  assert.match(client, /transfer_private_settings_owner/);
+  assert.match(client, /socket\.on\('settings_owner_changed'/);
+  assert.match(client, /highlightPrivateSettingsOwnership/);
+  assert.match(server, /function transferPrivateRoomSettingsOwner\(/);
+  assert.match(server, /function isPrivateSettingsOwnerTransferPayload\(/);
+  assert.match(server, /player\.clientId !== clientId && player\.connected/);
+  assert.match(server, /settings_owner_changed/);
+  assert.match(css, /\.transfer-private-settings-owner-button\s*\{/);
+  assert.match(css, /\.private-settings-controls\.settings-owner-arrived/);
 });
 
 test('条件型Tarotは選択時・公開済み履歴でだけ現在ラウンドの強さを確認できる', () => {
