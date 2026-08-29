@@ -3,7 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  AVAILABLE_TAROT_DISPLAY_ORDER,
   AVAILABLE_TAROT_IDS,
+  PRIVATE_CARD_CATALOG,
   TAROT_GREEK_MARKS_BY_ID,
   getClassicPrivateCardDefinition,
   getPrivateCardDefinition
@@ -40,6 +42,22 @@ test('安全に解決できる6枚のTarotだけはPrivate拡張デッキへ入�
   }
   assert.equal(getPrivateCardDefinition('the-chariot').requiresFeatures.includes('compare-override-v1'), true);
   assert.equal(getPrivateCardDefinition('strength').requiresFeatures.includes('scaled-strength-v1'), true);
+});
+
+test('デッキ編集の表示順は基本札、αからζの使用可能Tarot、追加通常札である', () => {
+  assert.deepEqual(AVAILABLE_TAROT_DISPLAY_ORDER, [
+    'death', 'temperance', 'the-devil', 'the-tower', 'the-chariot', 'strength'
+  ]);
+  assert.deepEqual(
+    PRIVATE_CARD_CATALOG
+      .filter((definition) => definition.status === 'available')
+      .map((definition) => definition.id),
+    [
+      'ace', 'king', 'queen', 'jack', 'joker', 'three', 'two',
+      'death', 'temperance', 'the-devil', 'the-tower', 'the-chariot', 'strength',
+      'ten', 'nine', 'eight', 'seven', 'six', 'five', 'four'
+    ]
+  );
 });
 
 test('Tarotの表示記号は実装順にαから始まるギリシャ文字である', () => {

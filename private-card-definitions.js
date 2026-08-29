@@ -29,7 +29,10 @@ const PRIVATE_CARD_STATUSES = Object.freeze([
 // A Tarot glyph is a private-expansion identifier, not the original major
 // arcana number.  The first playable Tarot therefore begins at α; later
 // additions keep their assigned glyph so existing room history stays legible.
-const AVAILABLE_TAROT_IDS = new Set([
+// Keep the playable Tarot in Greek-glyph order.  This array is also the
+// deck-editor order: newly added cards must not jump ahead of an earlier
+// playable Tarot simply because their implementation landed first.
+const AVAILABLE_TAROT_DISPLAY_ORDER = Object.freeze([
   'death',
   'temperance',
   'the-devil',
@@ -37,6 +40,7 @@ const AVAILABLE_TAROT_IDS = new Set([
   'the-chariot',
   'strength'
 ]);
+const AVAILABLE_TAROT_IDS = new Set(AVAILABLE_TAROT_DISPLAY_ORDER);
 // The display sequence reflects the order in which the Private expansion
 // makes the cards playable. It deliberately starts with the first available
 // card instead of the original major arcana's Roman-numeral positions.
@@ -223,10 +227,22 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   visibilityModel: definition.id === 'the-star' ? 'recipient-specific' : 'public'
 })));
 
+const FUTURE_PRIVATE_CARD_DEFINITION_BY_ID = new Map(
+  FUTURE_PRIVATE_CARD_CATALOG.map((definition) => [definition.id, definition])
+);
+
+// The same catalog order drives both the deck editor and canonical deck
+// summaries.  Put the familiar base deck first, playable Tarot in α–ζ order,
+// then the optional no-ability Four–Ten cards that are less commonly used.
+// Unavailable designs remain in the catalog after those visible choices so
+// they cannot alter a live deck's presentation before implementation.
 const PRIVATE_CARD_CATALOG = Object.freeze([
   ...CLASSIC_PRIVATE_CARD_CATALOG,
+  ...AVAILABLE_TAROT_DISPLAY_ORDER.map((definitionId) => (
+    FUTURE_PRIVATE_CARD_DEFINITION_BY_ID.get(definitionId)
+  )),
   ...EXTRA_NORMAL_CARD_CATALOG,
-  ...FUTURE_PRIVATE_CARD_CATALOG
+  ...FUTURE_PRIVATE_CARD_CATALOG.filter((definition) => !AVAILABLE_TAROT_IDS.has(definition.id))
 ]);
 const PRIVATE_CARD_DEFINITION_BY_ID = new Map(
   PRIVATE_CARD_CATALOG.map((definition) => [definition.id, definition])
@@ -257,6 +273,7 @@ module.exports = {
   PRIVATE_CARD_CATALOG,
   PRIVATE_CARD_DEFINITION_BY_ID,
   PRIVATE_CARD_STATUSES,
+  AVAILABLE_TAROT_DISPLAY_ORDER,
   AVAILABLE_TAROT_IDS,
   TAROT_GREEK_MARKS_BY_ID,
   getClassicPrivateCardDefinition,
