@@ -117,12 +117,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v29/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v29/);
+  assert.match(html, /style\.css\?v=pvp-v30/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v30/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v29/);
+  assert.match(loader, /main\.js\?v=pvp-v30/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -268,18 +268,62 @@ test('Tarotはギリシャ文字で表示し、観戦者も対局の下で使用
   assert.match(client, /temperance: 'β'/);
   assert.doesNotMatch(client, /death: 'XIII'/);
   assert.match(html, /id="spectator-tarot-guide"/);
+  assert.match(html, />使用中のタロット</);
+  assert.doesNotMatch(html, /観戦者用・使用中のタロット/);
   assert.match(html, /id="spectator-tarot-list"/);
   assert.match(html, /class="spectator-utilities"/);
   assert.ok(html.indexOf('id="spectator-seat-panel"') > html.indexOf('id="my-zone"'));
   assert.ok(html.indexOf('id="spectator-tarot-guide"') > html.indexOf('id="my-zone"'));
   assert.match(client, /function renderSpectatorTarotGuide\(/);
   assert.match(client, /getActiveSpectatorTarotCards/);
+  assert.doesNotMatch(client, /room\?\.viewer\?\.isSpectator \? getActiveSpectatorTarotCards/);
   assert.match(client, /selected-card-no-ability/);
   assert.match(client, /hasNonTarotAbilityCard/);
   assert.match(css, /\.spectator-tarot-guide\s*\{/);
   assert.match(css, /\.spectator-utilities\s*\{/);
   assert.match(css, /\.card-no-ability\s*\{/);
   assert.match(css, /\.card-has-ability\s*\{/);
+});
+
+test('Private設定プリセットは任意ログインで保存し、適用時は既存のサーバー権威設定経路を使う', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="private-preset-panel"/);
+  assert.match(html, /id="private-preset-login-google"/);
+  assert.match(html, /ログインしなくても、これまでどおり対戦できます/);
+  assert.match(html, /id="private-preset-select"/);
+  assert.match(html, /id="private-preset-save-btn"/);
+  assert.match(html, /id="private-preset-load-btn"/);
+  assert.match(client, /function loadPrivatePresetAccount\(/);
+  assert.match(client, /function privatePresetApi\(/);
+  assert.match(client, /credentials: 'same-origin'/);
+  assert.match(client, /requestPrivateSettingsChange\(selectedPreset\.config\)/);
+  assert.match(client, /returnTo', '\/'/);
+  assert.match(css, /\.private-preset-panel\s*\{/);
+  assert.match(css, /\.private-preset-actions button\s*\{/);
+});
+
+test('Joker・2・3の能力カードは可読性を保った穏やかなエメラルド配色を使う', () => {
+  const css = read('style.css');
+
+  assert.match(css, /\.card-has-ability\s*\{[^}]*rgba\(67, 113, 102/);
+  assert.match(css, /\.selected-card-panel\.selected-card-has-ability\s*\{[^}]*rgba\(74, 129, 115/);
+  assert.match(css, /\.expanded-deck-card-has-ability\s*\{[^}]*rgba\(74, 129, 115/);
+});
+
+test('切断中の対局は10秒間停止し、復帰期限を参加者へ明示する', () => {
+  const client = read('main.js');
+  const server = read('server.js');
+
+  assert.match(client, /const RECONNECT_GRACE_MS = 10_000;/);
+  assert.match(client, /room\.gameState === 'reconnecting'/);
+  assert.match(client, /対戦相手の再接続を待っています。あと \$\{remainingSeconds\} 秒で対局を終了します。制限時間は停止中です。/);
+  assert.match(server, /const RECONNECT_GRACE_MS = 10_000;/);
+  assert.match(server, /reconnectDeadline: room\.gameState === 'reconnecting'/);
+  assert.match(server, /pauseForReconnect\(room\);/);
+  assert.match(server, /resumeAfterReconnect\(room\);/);
 });
 
 test('チャットとゲーム案内には個人情報・差別的表現の注意、および通信中断の案内を明示する', () => {

@@ -132,6 +132,22 @@ Public leaderboard responses use a separate safe handle and public profile id;
 they never return email addresses, provider subjects, internal auth UUIDs,
 session hashes, or an unrevealed Ranked seed.
 
+## Saved Private-room presets
+
+- Guest Private PvP remains account-free. Signing in is optional and is used
+  only to save and retrieve a player's own room-setting presets.
+- A profile may store at most ten named presets. The API accepts only the
+  reviewed Classic or Private Expanded setting shapes, validates them through
+  the canonical Private-room configuration factory, and never accepts game or
+  room state from the browser.
+- Presets are owner-scoped in both the service query and database constraints.
+  Their list/create/update/delete endpoints require the existing session,
+  state-change endpoints additionally require exact Origin and CSRF checks,
+  and responses do not expose internal user ids or preset slots.
+- OAuth login initiated from this panel may return only to `/` or `/ranked`.
+  The selected destination is stored in the one-time hashed OAuth transaction;
+  arbitrary return URLs are rejected rather than redirected to.
+
 ## Ranked game integrity
 
 - Canonical card resolution comes only from `game-rules.js`.

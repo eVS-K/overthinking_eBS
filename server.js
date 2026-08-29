@@ -41,7 +41,11 @@ const TURN_TIME_LIMIT_MS = 90_000;
 // only Phase-1 private-room customization is an explicitly allow-listed turn
 // duration; Random Match and Ranked deliberately continue to use the fixed
 // classic 90 seconds.
-const RECONNECT_GRACE_MS = 30_000;
+// A brief network interruption should not immediately throw away a live
+// match.  This remains deliberately short: guest-room state is in memory,
+// and a longer window would leave a disconnected seat unavailable for too
+// long.
+const RECONNECT_GRACE_MS = 10_000;
 const MAX_ROOM_ID_LENGTH = 24;
 const MAX_PLAYER_NAME_LENGTH = 20;
 function buildDefaultAllowedOrigins(environment = process.env) {
@@ -343,7 +347,11 @@ function createPlayer({ id, clientId, name }, seatIndex) {
     suit: seatIndex === 0 ? '♠' : '♥',
     hand: createInitialHand(),
     score: 0,
-    connected: true
+    connected: true,
+    // These fields are internal only. createRoomView deliberately omits them
+    // so a reconnect token/generation is never exposed to another browser.
+    disconnectGeneration: 0,
+    reconnectDeadline: 0
   };
 }
 
@@ -640,6 +648,9 @@ function createRoom(id, { matchType = 'private', allowedRandomClientIds = [], cr
     gameState: 'waiting',
     selections: {},
     deadline: 0,
+    // Publicly safe absolute timestamp for a paused live game. It is zero
+    // outside reconnecting state and never contains a client identifier.
+    reconnectDeadline: 0,
     pausedRemainingMs: TURN_TIME_LIMIT_MS,
     winner: null,
     // Display names are intentionally kept for the history/UI, but never use
@@ -674,7 +685,9 @@ function getRoom(roomId) {
 }
 
 function getTimerKey(roomId, clientId) {
-  return `${roomId}:${clientId}`;
+  // Both values are client supplied strings, so a delimiter-based key could
+  // collide (for example, "a:b" + "c" versus "a" + "b:c").
+  return JSON.stringify([roomId, clientId]);
 }
 
 function clearTurnTimer(roomId) {
@@ -688,6 +701,52 @@ function clearDisconnectTimer(roomId, clientId) {
   const timer = disconnectTimers.get(key);
   if (timer) clearTimeout(timer);
   disconnectTimers.delete(key);
+}
+
+function nextDisconnectGeneration(player) {
+  const current = Number.isSafeInteger(player?.disconnectGeneration)
+    && player.disconnectGeneration >= 0
+    ? player.disconnectGeneration
+    : 0;
+  // A practical reconnect session cannot reach this value, but wrapping
+  // keeps the comparison safe even if a malformed/in-memory test fixture
+  // supplied a huge number.
+  return current >= Number.MAX_SAFE_INTEGER ? 1 : current + 1;
+}
+
+function refreshReconnectDeadline(room) {
+  if (!room || room.gameState !== 'reconnecting') {
+    if (room) room.reconnectDeadline = 0;
+    return 0;
+  }
+  const deadlines = room.players
+    .filter((player) => player.connected === false
+      && Number.isSafeInteger(player.reconnectDeadline)
+      && player.reconnectDeadline > 0)
+    .map((player) => player.reconnectDeadline);
+  room.reconnectDeadline = deadlines.length > 0 ? Math.min(...deadlines) : 0;
+  return room.reconnectDeadline;
+}
+
+function beginReconnectGrace(room, player, now = Date.now()) {
+  if (!room || !player || player.connected !== false) return null;
+  const generation = nextDisconnectGeneration(player);
+  const deadline = now + RECONNECT_GRACE_MS;
+  player.disconnectGeneration = generation;
+  player.reconnectDeadline = deadline;
+  refreshReconnectDeadline(room);
+  return { generation, deadline };
+}
+
+function cancelReconnectGrace(room, player) {
+  if (!player) return false;
+  clearDisconnectTimer(room?.id, player.clientId);
+  // Clearing the timer alone is insufficient: a callback already queued by
+  // the event loop must not be able to expire a later disconnect.
+  player.disconnectGeneration = nextDisconnectGeneration(player);
+  player.reconnectDeadline = 0;
+  refreshReconnectDeadline(room);
+  return true;
 }
 
 function clearPrivateRoomIdleTimer(roomId) {
@@ -727,7 +786,8 @@ function expirePrivateRoom(room) {
 
   clearPrivateRoomIdleTimer(room.id);
   clearTurnTimer(room.id);
-  room.players.forEach((player) => clearDisconnectTimer(room.id, player.clientId));
+  room.players.forEach((player) => cancelReconnectGrace(room, player));
+  room.reconnectDeadline = 0;
 
   const members = io.sockets.adapter.rooms.get(room.id);
   members?.forEach((socketId) => {
@@ -870,6 +930,7 @@ function resetGame(room) {
   room.lastRound = null;
   room.selections = {};
   room.deadline = 0;
+  room.reconnectDeadline = 0;
   room.pausedRemainingMs = getRoomTurnTimeLimitMs(room);
   room.winner = null;
   room.winnerSeat = null;
@@ -924,6 +985,7 @@ function startTurnTimer(room, durationMs) {
   clearTurnTimer(room.id);
   if (room.gameState !== 'playing' || room.players.length !== 2 || !room.players.every((player) => player.connected)) return;
 
+  room.reconnectDeadline = 0;
   const turnTimeLimitMs = getRoomTurnTimeLimitMs(room);
   const requestedDuration = Number.isFinite(durationMs) ? durationMs : turnTimeLimitMs;
   const safeDuration = Math.max(0, Math.min(Math.floor(requestedDuration), turnTimeLimitMs));
@@ -944,12 +1006,39 @@ function startTurnTimer(room, durationMs) {
   }, safeDuration));
 }
 
-function pauseForReconnect(room) {
-  if (room.gameState !== 'playing') return;
-  room.pausedRemainingMs = Math.max(0, room.deadline - Date.now());
+function pauseForReconnect(room, now = Date.now()) {
+  if (!room || room.gameState !== 'playing') return false;
+  room.pausedRemainingMs = Math.max(0, room.deadline - now);
   room.deadline = 0;
   room.gameState = 'reconnecting';
+  room.reconnectDeadline = now + RECONNECT_GRACE_MS;
   clearTurnTimer(room.id);
+  return true;
+}
+
+function restoreReturningPlayer(room, player, socketId, playerName) {
+  if (!room || !player || !socketId) return null;
+  const previousSocketId = player.id;
+  cancelReconnectGrace(room, player);
+  player.id = socketId;
+  player.name = playerName;
+  player.connected = true;
+  if (room.selections[previousSocketId]) {
+    room.selections[socketId] = room.selections[previousSocketId];
+    delete room.selections[previousSocketId];
+  }
+  return previousSocketId;
+}
+
+function resumeAfterReconnect(room) {
+  if (!room || room.gameState !== 'reconnecting' || room.players.length !== 2 || !room.players.every((player) => player.connected)) {
+    refreshReconnectDeadline(room);
+    return false;
+  }
+  room.gameState = 'playing';
+  room.reconnectDeadline = 0;
+  startTurnTimer(room, room.pausedRemainingMs);
+  return true;
 }
 
 function createRoomView(room, socketId) {
@@ -985,6 +1074,11 @@ function createRoomView(room, socketId) {
     lastRound: room.lastRound,
     gameState: room.gameState,
     deadline: room.deadline,
+    reconnectDeadline: room.gameState === 'reconnecting'
+      && Number.isSafeInteger(room.reconnectDeadline)
+      && room.reconnectDeadline > 0
+      ? room.reconnectDeadline
+      : 0,
     winner: room.winner,
     winnerSeat: room.winnerSeat,
     finishReason: room.finishReason,
@@ -1347,6 +1441,8 @@ function startQueuedRandomMatches() {
 function removeEmptyRoom(room) {
   if (!room || room.players.length > 0 || room.spectators.length > 0) return false;
   clearPrivateRoomIdleTimer(room.id);
+  clearTurnTimer(room.id);
+  room.reconnectDeadline = 0;
   rooms.delete(room.id);
   startQueuedRandomMatches();
   return true;
@@ -1390,7 +1486,6 @@ function cancelPendingRandomSearch(socket, requestId = '') {
   socket.data.roomId = undefined;
   socket.data.lastRandomSearchRequestId = undefined;
   socket.data.lastRandomSearchRoomId = undefined;
-  clearDisconnectTimer(room.id, room.players[playerIndex].clientId);
   resetAfterPlayerDeparture(room, playerIndex);
   emitRandomMatchStatus(socket, 'idle', requestedId);
   schedulePresenceBroadcast();
@@ -1603,6 +1698,7 @@ function finishGameByForfeit(room, player) {
   clearTurnTimer(room.id);
   room.selections = {};
   room.deadline = 0;
+  room.reconnectDeadline = 0;
   room.gameState = 'finished';
   room.winner = winner.name;
   room.winnerSeat = room.players.indexOf(winner) === 0 ? 'p1' : 'p2';
@@ -1627,13 +1723,13 @@ function requeueRemainingRandomPlayer(room, departingPlayer) {
   // Random rooms never admit spectators. Remove the remaining player from the
   // now-closed match before queuing them, so they cannot be stranded in a
   // room that no future random player is allowed to join.
+  if (remainingPlayer) cancelReconnectGrace(room, remainingPlayer);
   room.players = [];
   if (remainingSocket && remainingSocket.connected) {
     remainingSocket.leave(room.id);
     if (remainingSocket.data.roomId === room.id) remainingSocket.data.roomId = undefined;
     remainingSocket.data.lastRandomSearchRequestId = undefined;
     remainingSocket.data.lastRandomSearchRoomId = undefined;
-    clearDisconnectTimer(room.id, remainingPlayer.clientId);
   }
   removeEmptyRoom(room);
 
@@ -1668,6 +1764,7 @@ function requeueRemainingRandomPlayer(room, departingPlayer) {
 
 function resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators = false } = {}) {
   const [departingPlayer] = room.players.splice(playerIndex, 1);
+  if (departingPlayer) cancelReconnectGrace(room, departingPlayer);
   const shouldNotifyNewSettingsOwner = room.matchType === 'private'
     && departingPlayer?.clientId === room.hostClientId;
   if (room.matchType === 'random' && !moveToSpectators) {
@@ -1712,21 +1809,40 @@ function resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators = false
   return true;
 }
 
-function removePlayerAfterGrace(roomId, clientId) {
-  const room = getRoom(roomId);
-  if (!room) return;
-  const playerIndex = room.players.findIndex((player) => player.clientId === clientId && !player.connected);
-  if (playerIndex < 0) return;
+function expireDisconnectedPlayer(room, clientId, generation, expectedRoom = room) {
+  if (!room || room !== expectedRoom) return false;
+  const playerIndex = room.players.findIndex((player) => (
+    player.clientId === clientId
+      && player.connected === false
+      && player.disconnectGeneration === generation
+  ));
+  if (playerIndex < 0) return false;
   resetAfterPlayerDeparture(room, playerIndex);
+  return true;
+}
+
+function removePlayerAfterGrace(roomId, clientId, generation, expectedRoom = null) {
+  const room = getRoom(roomId);
+  if (!room || (expectedRoom && room !== expectedRoom)) return false;
+  return expireDisconnectedPlayer(room, clientId, generation, expectedRoom || room);
 }
 
 function scheduleDisconnectRemoval(room, player) {
+  const grace = beginReconnectGrace(room, player);
+  if (!grace) return 0;
   clearDisconnectTimer(room.id, player.clientId);
   const key = getTimerKey(room.id, player.clientId);
-  disconnectTimers.set(key, setTimeout(() => {
+  let timer;
+  timer = setTimeout(() => {
+    // A reconnect can clear this timer and immediately create a new one. Do
+    // not let the earlier callback erase or expire the newer grace period.
+    if (disconnectTimers.get(key) !== timer) return;
     disconnectTimers.delete(key);
-    removePlayerAfterGrace(room.id, player.clientId);
-  }, RECONNECT_GRACE_MS));
+    removePlayerAfterGrace(room.id, player.clientId, grace.generation, room);
+  }, Math.max(0, grace.deadline - Date.now()));
+  timer.unref?.();
+  disconnectTimers.set(key, timer);
+  return grace.deadline;
 }
 
 io.on('connection', (socket) => {
@@ -1821,22 +1937,10 @@ io.on('connection', (socket) => {
     socket.data.clientId = clientId;
 
     if (returningPlayer) {
-      const previousSocketId = returningPlayer.id;
-      clearDisconnectTimer(room.id, clientId);
-      returningPlayer.id = socket.id;
-      returningPlayer.name = playerName;
-      returningPlayer.connected = true;
-      if (room.selections[previousSocketId]) {
-        room.selections[socket.id] = room.selections[previousSocketId];
-        delete room.selections[previousSocketId];
-      }
+      const previousSocketId = restoreReturningPlayer(room, returningPlayer, socket.id, playerName);
       const previousSocket = io.sockets.sockets.get(previousSocketId);
       if (previousSocket && previousSocketId !== socket.id) previousSocket.disconnect(true);
-
-      if (room.gameState === 'reconnecting' && room.players.every((player) => player.connected)) {
-        room.gameState = 'playing';
-        startTurnTimer(room, room.pausedRemainingMs);
-      }
+      resumeAfterReconnect(room);
     } else if (returningSpectator) {
       const previousSocketId = returningSpectator.id;
       returningSpectator.id = socket.id;
@@ -1939,7 +2043,6 @@ io.on('connection', (socket) => {
 
     socket.leave(room.id);
     socket.data.roomId = undefined;
-    clearDisconnectTimer(room.id, player.clientId);
     resetAfterPlayerDeparture(room, playerIndex);
     if (!enqueuePreparedRandomMatch(socket, prepared)) {
       // This is not expected after the synchronous preflight above, but make
@@ -2139,8 +2242,6 @@ io.on('connection', (socket) => {
       emitError(socket, 'この部屋の観戦者数は上限に達しています。空きができてから観戦者に切り替えてください。');
       return;
     }
-    const player = room.players[playerIndex];
-    clearDisconnectTimer(room.id, player.clientId);
     resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators: true });
   });
 
@@ -2156,8 +2257,6 @@ io.on('connection', (socket) => {
 
     const playerIndex = room.players.findIndex((player) => player.id === socket.id);
     if (playerIndex >= 0) {
-      const [player] = room.players.slice(playerIndex, playerIndex + 1);
-      clearDisconnectTimer(room.id, player.clientId);
       resetAfterPlayerDeparture(room, playerIndex);
     } else {
       const spectatorIndex = room.spectators.findIndex((spectator) => spectator.id === socket.id);
@@ -2209,14 +2308,18 @@ module.exports = {
   MAX_CHAT_IPS_PER_ROOM,
   PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS,
   PRIVATE_ROOM_IDLE_TTL_MS,
+  RECONNECT_GRACE_MS,
   areRandomMatchEntriesCompatible,
   app,
+  beginReconnectGrace,
   buildPrivateSettingsUpdate,
   buildDefaultAllowedOrigins,
+  cancelReconnectGrace,
   createRoomView,
   consumeChatIpQuota,
   createRoom,
   ensurePrivateRoomHost,
+  expireDisconnectedPlayer,
   finishGameByForfeit,
   getSelectableCardIds,
   getRoomTurnTimeLimitMs,
@@ -2225,6 +2328,9 @@ module.exports = {
   normalizeJoinPreferences,
   processTurn,
   promoteVolunteerSpectators,
+  pauseForReconnect,
+  restoreReturningPlayer,
+  resumeAfterReconnect,
   setSpectatorAutoJoin,
   startWhenBothPlayersAgree,
   updatePrivateRoomSettings,

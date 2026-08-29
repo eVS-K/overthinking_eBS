@@ -14,7 +14,8 @@ test('migrationは番号順に並び、各ファイルを一つのtransactionと
     '001_ranked.sql',
     '002_harden_ranked_database_access.sql',
     '003_replace_legacy_uuid_derived_handles.sql',
-    '004_leaderboard_visibility_and_threshold.sql'
+    '004_leaderboard_visibility_and_threshold.sql',
+    '005_private_pvp_presets.sql'
   ]);
 
   const queries = [];
@@ -33,4 +34,16 @@ test('migrationは番号順に並び、各ファイルを一つのtransactionと
   assert.equal(queries.some(({ sql }) => sql.includes('ENABLE ROW LEVEL SECURITY')), true);
   assert.equal(queries.some(({ sql }) => sql.includes('REVOKE ALL PRIVILEGES')), true);
   assert.equal(queries.at(-1).sql, 'SELECT pg_advisory_unlock($1)');
+});
+
+test('Private設定プリセットmigrationは保存数・所有者・OAuth復帰先をDBでも制限する', () => {
+  const sql = require('fs').readFileSync(path.join(migrationsDir, '005_private_pvp_presets.sql'), 'utf8');
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.private_pvp_presets/);
+  assert.match(sql, /preset_slot SMALLINT NOT NULL CHECK \(preset_slot BETWEEN 1 AND 10\)/);
+  assert.match(sql, /UNIQUE \(user_id, preset_slot\)/);
+  assert.match(sql, /UNIQUE \(user_id, normalized_name\)/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS return_path/);
+  assert.match(sql, /CHECK \(return_path IN \('\/', '\/ranked'\)\)/);
+  assert.match(sql, /ALTER TABLE public\.private_pvp_presets ENABLE ROW LEVEL SECURITY/);
+  assert.match(sql, /REVOKE ALL PRIVILEGES ON TABLE public\.private_pvp_presets/);
 });

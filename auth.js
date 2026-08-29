@@ -34,6 +34,13 @@ function normalizeOrigin(value) {
   }
 }
 
+// OAuth may return only to pages owned by this application.  Keeping this as
+// a small allow-list (rather than accepting a URL/query parameter) prevents a
+// saved-room login link from becoming an open-redirect primitive.
+function normalizeOAuthReturnPath(value) {
+  return value === '/' ? '/' : '/ranked';
+}
+
 function readDuration(value, fallback, { min = 60_000, max = 365 * 24 * 60 * 60_000 } = {}) {
   const parsed = Number.parseInt(value, 10);
   return Number.isSafeInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
@@ -205,7 +212,7 @@ class AuthService {
     }
   }
 
-  async beginOAuth(provider) {
+  async beginOAuth(provider, { returnPath = '/ranked' } = {}) {
     this.assertConfigured();
     if (!['google', 'github'].includes(provider)) {
       throw new RankedError(404, 'UNSUPPORTED_PROVIDER', 'Unsupported sign-in provider.');
@@ -218,11 +225,13 @@ class AuthService {
     const pkce = generatePkce();
     const now = this.nowDate();
     const redirectUri = `${this.config.appOrigin}/auth/callback`;
+    const safeReturnPath = normalizeOAuthReturnPath(returnPath);
     await this.repository.createOAuthTransaction({
       stateHash: sha256(transactionToken),
       provider,
       codeVerifier: pkce.codeVerifier,
       redirectUri,
+      returnPath: safeReturnPath,
       expiresAt: new Date(now.getTime() + OAUTH_TRANSACTION_TTL_MS)
     });
     return {
@@ -248,35 +257,52 @@ class AuthService {
     }
     const transaction = await this.repository.transaction((tx) => tx.consumeOAuthTransaction(sha256(oauthTransactionToken), this.nowDate()));
     if (!transaction) throw new RankedError(400, 'OAUTH_TRANSACTION_INVALID', 'The sign-in flow expired or was already used.');
-    const identity = await fetchSupabaseUser(this.config, {
-      authCode: code,
-      codeVerifier: transaction.codeVerifier,
-      fetchImpl: this.fetchImpl
-    });
-    const now = this.nowDate();
-    return this.repository.transaction(async (tx) => {
-      const profile = await tx.ensureProfile(identity.userId);
-      if (!profile || profile.status !== 'active') {
-        throw new RankedError(403, 'PROFILE_UNAVAILABLE', 'This account cannot use Ranked mode.');
-      }
-      if (previousSessionToken && /^[A-Za-z0-9_-]{43}$/.test(previousSessionToken)) {
-        const previous = await tx.findActiveSessionByTokenHash(sha256(previousSessionToken), now);
-        if (previous) await tx.revokeSession(previous.id, now);
-      }
-      const sessionToken = base64urlRandom(32);
-      const csrfToken = base64urlRandom(32);
-      const absoluteExpiry = new Date(now.getTime() + this.config.sessionAbsoluteMs);
-      const idleExpiry = new Date(Math.min(absoluteExpiry.getTime(), now.getTime() + this.config.sessionIdleMs));
-      const session = await tx.createSession({
-        id: crypto.randomUUID(),
-        userId: identity.userId,
-        sessionTokenHash: sha256(sessionToken),
-        csrfTokenHash: sha256(csrfToken),
-        expiresAt: absoluteExpiry,
-        idleExpiresAt: idleExpiry
+    const safeReturnPath = normalizeOAuthReturnPath(transaction.returnPath);
+    let identity;
+    try {
+      identity = await fetchSupabaseUser(this.config, {
+        authCode: code,
+        codeVerifier: transaction.codeVerifier,
+        fetchImpl: this.fetchImpl
       });
-      return { session, sessionToken, csrfToken, profile };
-    });
+    } catch (error) {
+      // The transaction was already consumed, so surface its already
+      // server-validated destination only to the route layer for a safe retry
+      // redirect. It is never sent as an arbitrary provider value.
+      if (error && typeof error === 'object') error.returnPath = safeReturnPath;
+      throw error;
+    }
+    const now = this.nowDate();
+    try {
+      return await this.repository.transaction(async (tx) => {
+        const profile = await tx.ensureProfile(identity.userId);
+        if (!profile || profile.status !== 'active') {
+          throw new RankedError(403, 'PROFILE_UNAVAILABLE', 'This account cannot use Ranked mode.');
+        }
+        if (previousSessionToken && /^[A-Za-z0-9_-]{43}$/.test(previousSessionToken)) {
+          const previous = await tx.findActiveSessionByTokenHash(sha256(previousSessionToken), now);
+          if (previous) await tx.revokeSession(previous.id, now);
+        }
+        const sessionToken = base64urlRandom(32);
+        const csrfToken = base64urlRandom(32);
+        const absoluteExpiry = new Date(now.getTime() + this.config.sessionAbsoluteMs);
+        const idleExpiry = new Date(Math.min(absoluteExpiry.getTime(), now.getTime() + this.config.sessionIdleMs));
+        const session = await tx.createSession({
+          id: crypto.randomUUID(),
+          userId: identity.userId,
+          sessionTokenHash: sha256(sessionToken),
+          csrfTokenHash: sha256(csrfToken),
+          expiresAt: absoluteExpiry,
+          idleExpiresAt: idleExpiry
+        });
+        return { session, sessionToken, csrfToken, profile, returnPath: safeReturnPath };
+      });
+    } catch (error) {
+      // Keep an OAuth failure on the same server-validated page even when a
+      // profile or session write fails after the provider has authenticated.
+      if (error && typeof error === 'object') error.returnPath = safeReturnPath;
+      throw error;
+    }
   }
 
   async authenticate(sessionToken) {
@@ -405,6 +431,7 @@ module.exports = {
   isAuthConfigured,
   makeAuthorizationUrl,
   normalizeOrigin,
+  normalizeOAuthReturnPath,
   parseCookies,
   readProviderJson,
   serializeCookie,

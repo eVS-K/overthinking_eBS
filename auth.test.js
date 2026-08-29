@@ -12,6 +12,7 @@ const {
   createAuthConfig,
   fetchWithTimeout,
   isAuthConfigured,
+  normalizeOAuthReturnPath,
   parseCookies,
   readProviderJson,
   sha256
@@ -85,6 +86,32 @@ test('OAuth callbackは開始したbrowserのHttpOnly transaction cookieなし�
   // A rejected cross-browser callback does not consume the legitimate flow.
   const completed = await service.completeOAuth({ code: 'short-lived-auth-code', oauthTransactionToken: begin.transactionToken });
   assert.equal((await service.authenticate(completed.sessionToken)).userId, USER_ID);
+});
+
+test('OAuthの復帰先はPrivate画面またはRanked画面だけに固定される', async () => {
+  const { service } = makeRuntime();
+  const privateBegin = await service.beginOAuth('google', { returnPath: '/' });
+  const privateLogin = await service.completeOAuth({ code: 'short-lived-auth-code', oauthTransactionToken: privateBegin.transactionToken });
+  assert.equal(privateLogin.returnPath, '/');
+
+  const externalBegin = await service.beginOAuth('github', { returnPath: 'https://evil.example/steal' });
+  const rankedLogin = await service.completeOAuth({ code: 'short-lived-auth-code', oauthTransactionToken: externalBegin.transactionToken });
+  assert.equal(rankedLogin.returnPath, '/ranked');
+  assert.equal(normalizeOAuthReturnPath('/'), '/');
+  assert.equal(normalizeOAuthReturnPath('/ranked'), '/ranked');
+  assert.equal(normalizeOAuthReturnPath('//evil.example'), '/ranked');
+});
+
+test('OAuthの後段保存が失敗しても、検証済みのPrivate復帰先だけを引き継ぐ', async () => {
+  const { service, repository } = makeRuntime();
+  const begin = await service.beginOAuth('google', { returnPath: '/' });
+  repository.ensureProfile = async () => {
+    throw new Error('profile persistence failed');
+  };
+  await assert.rejects(
+    service.completeOAuth({ code: 'short-lived-auth-code', oauthTransactionToken: begin.transactionToken }),
+    (error) => error instanceof Error && error.returnPath === '/'
+  );
 });
 
 test('CSRF / Origin / logout / expiry / banned account を拒否する', async () => {

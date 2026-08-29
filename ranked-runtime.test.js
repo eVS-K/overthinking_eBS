@@ -30,6 +30,10 @@ test('Ranked設定がない場合はruntimeだけfail closedし、PvP起動を�
   assert.deepEqual(notices, []);
 });
 
+test('保存済みPrivate設定tableも認証ランタイムのreadiness対象に含める', () => {
+  assert.equal(REQUIRED_RANKED_TABLES.includes('private_pvp_presets'), true);
+});
+
 test('Readinessは必須tableと全migrationを確認し、短時間の同一確認をDBへ重複送信しない', async () => {
   let queryCount = 0;
   const pool = {

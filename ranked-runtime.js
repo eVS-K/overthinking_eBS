@@ -6,6 +6,7 @@ const { createAuthConfig, AuthService, isAuthConfigured } = require('./auth');
 const { createPostgresPool, readDatabaseQueryTimeout, readDatabaseSslConfig } = require('./database');
 const { parseEncryptionKey } = require('./ranked-crypto');
 const { PostgresRankedRepository } = require('./ranked-repository');
+const { PrivatePresetService } = require('./private-preset-service');
 const { RankedService } = require('./ranked-service');
 const { loadRankedValueTable } = require('./ranked-values');
 
@@ -13,6 +14,7 @@ const REQUIRED_RANKED_TABLES = Object.freeze([
   'profiles',
   'app_sessions',
   'oauth_transactions',
+  'private_pvp_presets',
   'seasons',
   'ranked_profiles',
   'ranked_games',
@@ -42,6 +44,7 @@ function unavailable(reason, { configured = false } = {}) {
     configured,
     reason,
     service: null,
+    privatePresetService: null,
     auth: null,
     repository: null,
     pool: null
@@ -161,11 +164,13 @@ function createRankedRuntime({ environment = process.env, logger = console } = {
     abandonAfterMs: Number.parseInt(environment.RANKED_ABANDON_AFTER_MS, 10) || undefined
   });
   const auth = new AuthService({ repository, config });
+  const privatePresetService = new PrivatePresetService({ repository });
   const runtime = {
     available: true,
     configured,
     reason: null,
     service,
+    privatePresetService,
     auth,
     repository,
     pool

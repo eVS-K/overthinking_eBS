@@ -10,21 +10,28 @@ const {
   MAX_CHAT_IPS_PER_ROOM,
   PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS,
   PRIVATE_ROOM_IDLE_TTL_MS,
+  RECONNECT_GRACE_MS,
   areRandomMatchEntriesCompatible,
   app,
+  beginReconnectGrace,
   buildPrivateSettingsUpdate,
   buildDefaultAllowedOrigins,
+  cancelReconnectGrace,
   consumeChatIpQuota,
   createRoom,
   createRoomView,
   ensurePrivateRoomHost,
+  expireDisconnectedPlayer,
   finishGameByForfeit,
   getSelectableCardIds,
   getRoomTurnTimeLimitMs,
   isPrivateRoomIdleExpired,
   normalizeJoinPreferences,
   processTurn,
+  pauseForReconnect,
   promoteVolunteerSpectators,
+  restoreReturningPlayer,
+  resumeAfterReconnect,
   setSpectatorAutoJoin,
   startWhenBothPlayersAgree,
   transferPrivateRoomSettingsOwner,
@@ -170,6 +177,80 @@ test('Private PvPの待機・終了ルームだけがアイドル期限の対象
   randomRoom.idleDeadline = 10_000;
   assert.equal(isPrivateRoomIdleExpired(randomRoom, 10_000), false);
   assert.ok(PRIVATE_ROOM_IDLE_TTL_MS >= 60_000);
+});
+
+test('同じclientIdで10秒以内に戻ると、伏せ札と残りターン時間を維持して対局を再開する', () => {
+  const now = 1_000_000;
+  const room = createRoom('reconnect-resume');
+  const firstHand = createInitialHand();
+  room.gameState = 'playing';
+  room.deadline = now + 44_000;
+  room.players = [
+    { id: 'p1-old', clientId: 'first-client', name: '先手', suit: '♠', hand: firstHand, score: 2, connected: false },
+    { id: 'p2', clientId: 'second-client', name: '後手', suit: '♥', hand: [], score: 3, connected: true }
+  ];
+  room.selections = { 'p1-old': 'ace' };
+
+  assert.equal(RECONNECT_GRACE_MS, 10_000);
+  assert.equal(pauseForReconnect(room, now), true);
+  assert.equal(room.gameState, 'reconnecting');
+  assert.equal(room.pausedRemainingMs, 44_000);
+  assert.equal(room.deadline, 0);
+  assert.equal(room.reconnectDeadline, now + RECONNECT_GRACE_MS);
+
+  const grace = beginReconnectGrace(room, room.players[0], now);
+  assert.deepEqual(grace, { generation: 1, deadline: now + RECONNECT_GRACE_MS });
+  const pausedView = createRoomView(room, 'p2');
+  assert.equal(pausedView.reconnectDeadline, now + RECONNECT_GRACE_MS);
+  assert.equal(JSON.stringify(pausedView).includes('disconnectGeneration'), false);
+  assert.equal(pausedView.players[0].reconnectDeadline, undefined);
+
+  assert.equal(restoreReturningPlayer(room, room.players[0], 'p1-new', '戻った先手'), 'p1-old');
+  assert.equal(room.players[0].connected, true);
+  assert.equal(room.players[0].name, '戻った先手');
+  assert.deepEqual(room.players[0].hand, firstHand);
+  assert.deepEqual(room.selections, { 'p1-new': 'ace' });
+  assert.equal(room.players[0].reconnectDeadline, 0);
+  assert.equal(resumeAfterReconnect(room), true);
+  assert.equal(room.gameState, 'playing');
+  assert.equal(room.reconnectDeadline, 0);
+  assert.equal(room.pausedRemainingMs, 44_000);
+  assert.ok(room.deadline > Date.now());
+  assert.equal(createRoomView(room, 'p1-new').reconnectDeadline, 0);
+
+  // resumeAfterReconnect starts the preserved turn timer; end this isolated
+  // fixture so it cannot outlive the test.
+  assert.equal(finishGameByForfeit(room, room.players[0]), true);
+});
+
+test('再接続期限は切断世代と同じroom objectにだけ適用され、古いcallbackは状態を壊せない', () => {
+  const now = 2_000_000;
+  const room = createRoom('reconnect-generation');
+  room.gameState = 'reconnecting';
+  room.players = [
+    { id: 'p1', clientId: 'first-client', name: '切断中', suit: '♠', hand: [], score: 1, connected: false },
+    { id: 'p2', clientId: 'second-client', name: '接続中', suit: '♥', hand: [], score: 2, connected: true }
+  ];
+  const firstGrace = beginReconnectGrace(room, room.players[0], now);
+  assert.equal(room.reconnectDeadline, firstGrace.deadline);
+
+  // Reconnecting cancels/invalidates the first callback. A later disconnect
+  // obtains a different generation and its own 10-second grace window.
+  cancelReconnectGrace(room, room.players[0]);
+  room.players[0].connected = false;
+  const secondGrace = beginReconnectGrace(room, room.players[0], now + 250);
+  assert.ok(secondGrace.generation > firstGrace.generation);
+  assert.equal(room.reconnectDeadline, secondGrace.deadline);
+
+  assert.equal(expireDisconnectedPlayer(room, 'first-client', firstGrace.generation, room), false);
+  assert.equal(room.players.length, 2);
+  assert.equal(expireDisconnectedPlayer(room, 'first-client', secondGrace.generation, createRoom('same-id-different-object')), false);
+  assert.equal(room.players.length, 2);
+
+  assert.equal(expireDisconnectedPlayer(room, 'first-client', secondGrace.generation, room), true);
+  assert.equal(room.gameState, 'waiting');
+  assert.equal(room.reconnectDeadline, 0);
+  assert.deepEqual(room.players.map((player) => player.clientId), ['second-client']);
 });
 
 test('Private PvPだけが60/90/120秒の設定を持ち、開始同意は設定変更で必ず取り消される', () => {

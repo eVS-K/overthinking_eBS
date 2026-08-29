@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const { AuthService, createAuthConfig, sha256 } = require('./auth');
 const { registerRankedRoutes } = require('./ranked-api');
 const { MemoryRankedRepository } = require('./ranked-repository');
+const { PrivatePresetService } = require('./private-preset-service');
 const { RankedService } = require('./ranked-service');
 const { RankedValueLookup, createSignedRankedValueTable } = require('./ranked-values');
 
@@ -29,6 +30,7 @@ async function startApi() {
     valueLookup: new RankedValueLookup(createSignedRankedValueTable()),
     seedEncryptionKey: Buffer.alloc(32, 12)
   });
+  const privatePresetService = new PrivatePresetService({ repository });
   await repository.ensureProfile(USER_A);
   await repository.ensureProfile(USER_B);
   const farFuture = new Date(Date.now() + 86_400_000);
@@ -37,7 +39,7 @@ async function startApi() {
 
   const app = express();
   registerRankedRoutes(app, {
-    runtime: { available: true, service, auth },
+    runtime: { available: true, service, auth, privatePresetService },
     getClientIp: () => '127.0.0.1',
     logger: { warn() {} }
   });
@@ -47,6 +49,7 @@ async function startApi() {
   return {
     repository,
     service,
+    privatePresetService,
     auth,
     baseUrl: `http://127.0.0.1:${port}`,
     close: () => new Promise((resolve) => server.close(resolve))
@@ -78,6 +81,12 @@ test('Ranked REST APIはauth/CSRF/Origin/ownership/idempotency/payload境界を�
   assert.equal(login.status, 303);
   assert.match(login.headers.get('set-cookie'), /__Host-overthinking-oauth-transaction=.*HttpOnly/);
   assert.equal(new URL(login.headers.get('location')).searchParams.has('state'), false);
+  const privateLogin = await fetch(`${runtime.baseUrl}/auth/login/google?returnTo=%2F`, { redirect: 'manual' });
+  assert.equal(privateLogin.status, 303);
+  assert.equal([...runtime.repository.oauthTransactions.values()].at(-1).returnPath, '/');
+  const untrustedReturn = await fetch(`${runtime.baseUrl}/auth/login/google?returnTo=https%3A%2F%2Fevil.example`, { redirect: 'manual' });
+  assert.equal(untrustedReturn.status, 303);
+  assert.equal([...runtime.repository.oauthTransactions.values()].at(-1).returnPath, '/ranked');
   const crossBrowserCallback = await fetch(`${runtime.baseUrl}/auth/callback?code=short`, { redirect: 'manual' });
   assert.equal(crossBrowserCallback.status, 303);
   assert.equal(crossBrowserCallback.headers.get('location'), '/ranked?login=failed');
@@ -152,6 +161,66 @@ test('leaderboard responseはprivate session/auth identityを返さない', asyn
   assert.equal(serialized.includes('sessionTokenHash'), false);
   assert.equal(serialized.includes('userId'), false);
   assert.equal(serialized.includes('email'), false);
+});
+
+test('Private設定プリセットAPIはCookie認証・CSRF・所有権・公開境界を強制する', async (t) => {
+  const runtime = await startApi();
+  t.after(runtime.close);
+  const classic = { ruleset: 'classic-v1', turnTimeLimitMs: 90_000 };
+
+  const unauthenticated = await fetch(`${runtime.baseUrl}/api/private-presets`);
+  assert.equal(unauthenticated.status, 401);
+
+  const noCsrf = await fetch(`${runtime.baseUrl}/api/private-presets`, {
+    method: 'POST',
+    headers: { Cookie: headers().Cookie, Origin: 'http://ranked.test', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: '標準', config: classic })
+  });
+  assert.equal(noCsrf.status, 403);
+
+  const created = await json(await fetch(`${runtime.baseUrl}/api/private-presets`, {
+    method: 'POST', headers: headers(), body: JSON.stringify({ name: '標準', config: classic })
+  }));
+  assert.equal(created.status, 201);
+  assert.deepEqual(created.body.preset.config, classic);
+  assert.equal(JSON.stringify(created.body).includes('userId'), false);
+  assert.equal(JSON.stringify(created.body).includes('normalizedName'), false);
+  const presetId = created.body.preset.id;
+
+  const read = await json(await fetch(`${runtime.baseUrl}/api/private-presets`, {
+    headers: { Cookie: headers().Cookie }
+  }));
+  assert.equal(read.status, 200);
+  assert.equal(read.headers.get('cache-control'), 'no-store, max-age=0');
+  assert.equal(read.body.presets.length, 1);
+
+  const invalid = await json(await fetch(`${runtime.baseUrl}/api/private-presets`, {
+    method: 'POST', headers: headers(), body: JSON.stringify({ name: 'bad', config: { ...classic, hidden: true } })
+  }));
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error.code, 'INVALID_PRIVATE_PRESET');
+  assert.equal((await runtime.privatePresetService.listPresets(USER_A)).length, 1);
+
+  const foreignUpdate = await fetch(`${runtime.baseUrl}/api/private-presets/${presetId}`, {
+    method: 'PUT', headers: headers(TOKEN_B, CSRF_B), body: JSON.stringify({ name: '奪取', config: classic })
+  });
+  assert.equal(foreignUpdate.status, 404);
+  const foreignDelete = await fetch(`${runtime.baseUrl}/api/private-presets/${presetId}`, {
+    method: 'DELETE', headers: headers(TOKEN_B, CSRF_B), body: '{}'
+  });
+  assert.equal(foreignDelete.status, 404);
+
+  const updated = await json(await fetch(`${runtime.baseUrl}/api/private-presets/${presetId}`, {
+    method: 'PUT', headers: headers(), body: JSON.stringify({ name: '短時間', config: { ruleset: 'classic-v1', turnTimeLimitMs: 60_000 } })
+  }));
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.preset.name, '短時間');
+
+  const deleted = await fetch(`${runtime.baseUrl}/api/private-presets/${presetId}`, {
+    method: 'DELETE', headers: headers(), body: '{}'
+  });
+  assert.equal(deleted.status, 204);
+  assert.equal((await runtime.privatePresetService.listPresets(USER_A)).length, 0);
 });
 
 test('ランキング基盤の障害はpublic cacheや内部DB情報を残さない', async (t) => {

@@ -11,9 +11,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
   <script src="page-redirect.js?v=security-v4"></script>
-  <link rel="stylesheet" href="style.css?v=pvp-v29">
+  <link rel="stylesheet" href="style.css?v=pvp-v30">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v29"></script>
+  <script src="socket-loader.js?v=pvp-v30"></script>
 </head>
 <body>
   <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
@@ -248,10 +248,36 @@
               </section>
               <p id="private-settings-feedback" class="private-settings-feedback" role="status">現在の設定担当者は、対局開始前に変更できます。</p>
             </div>
+            <section id="private-preset-panel" class="private-preset-panel hidden" aria-labelledby="private-preset-title">
+              <div class="private-preset-heading">
+                <div><span class="section-label" id="private-preset-title">設定プリセット</span><p>好みのPrivate設定を、アカウントごとに最大10件保存できます。</p></div>
+                <span id="private-preset-count" class="private-preset-count">0 / 10</span>
+              </div>
+              <div id="private-preset-signed-out" class="private-preset-signed-out">
+                <p>ログインすると保存・呼び出しが使えます。ログインしなくても、これまでどおり対戦できます。</p>
+                <div id="private-preset-auth-actions" class="private-preset-auth-actions">
+                  <a id="private-preset-login-google" class="private-preset-login-link" href="/auth/login/google?returnTo=/">Googleでログイン</a>
+                  <a id="private-preset-login-github" class="private-preset-login-link" href="/auth/login/github?returnTo=/">GitHubでログイン</a>
+                </div>
+              </div>
+              <div id="private-preset-signed-in" class="private-preset-signed-in hidden">
+                <p id="private-preset-account" class="private-preset-account">ログイン状態を確認しています…</p>
+                <label for="private-preset-select"><span>保存済み設定</span><select id="private-preset-select" disabled><option value="">保存済み設定を選ぶ</option></select></label>
+                <label for="private-preset-name"><span>プリセット名</span><input id="private-preset-name" type="text" maxlength="32" autocomplete="off" placeholder="例：タロット練習"></label>
+                <div class="private-preset-actions">
+                  <button id="private-preset-load-btn" type="button">読み込む</button>
+                  <button id="private-preset-save-btn" type="button">現在の設定を保存</button>
+                  <button id="private-preset-update-btn" type="button" disabled>上書き</button>
+                  <button id="private-preset-delete-btn" type="button" disabled>削除</button>
+                  <button id="private-preset-logout-btn" type="button">ログアウト</button>
+                </div>
+              </div>
+              <p id="private-preset-feedback" class="private-preset-feedback" role="status">保存した設定の適用は、現在の設定担当者だけが行えます。</p>
+            </section>
           </section>
         </section>
 
-        <section class="spectator-utilities" aria-label="観戦者向けの操作とカード案内">
+        <section class="spectator-utilities" aria-label="対局の操作とカード案内">
           <section id="spectator-seat-panel" class="spectator-seat-panel hidden" aria-labelledby="spectator-seat-title">
             <div><span class="section-label" id="spectator-seat-title">観戦者メニュー</span><p>空席ができたときの参加予約は、いつでも変更できます。</p></div>
             <label class="spectator-seat-option" for="spectator-auto-join-toggle">
@@ -260,7 +286,7 @@
             </label>
           </section>
           <section id="spectator-tarot-guide" class="spectator-tarot-guide hidden" aria-labelledby="spectator-tarot-guide-title">
-            <div><span class="section-label" id="spectator-tarot-guide-title">観戦者用・使用中のタロット</span><p>カードを選ぶと、この対局で有効な能力を確認できます。</p></div>
+            <div><span class="section-label" id="spectator-tarot-guide-title">使用中のタロット</span><p>カードを選ぶと、この対局で有効な能力を確認できます。</p></div>
             <div id="spectator-tarot-list" class="spectator-tarot-list" role="list" aria-label="使用中のタロットカード"></div>
             <section id="spectator-tarot-detail" class="spectator-tarot-detail" aria-live="polite" aria-atomic="true">
               <span id="spectator-tarot-mark" aria-hidden="true">α</span>

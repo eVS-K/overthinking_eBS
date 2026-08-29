@@ -39,6 +39,20 @@ function mapProfile(row) {
   };
 }
 
+function mapPrivatePreset(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id ?? row.userId,
+    slot: Number(row.preset_slot ?? row.presetSlot),
+    name: row.name,
+    normalizedName: row.normalized_name ?? row.normalizedName,
+    config: cloneValue(row.config),
+    createdAt: row.created_at ?? row.createdAt ?? null,
+    updatedAt: row.updated_at ?? row.updatedAt ?? null
+  };
+}
+
 function mapSession(row) {
   if (!row) return null;
   return {
@@ -295,9 +309,9 @@ class PostgresRankedRepository {
 
   async createOAuthTransaction(transaction) {
     await this.query(
-      `INSERT INTO oauth_transactions (state_hash, provider, code_verifier, redirect_uri, expires_at)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [transaction.stateHash, transaction.provider, transaction.codeVerifier, transaction.redirectUri, transaction.expiresAt]
+      `INSERT INTO oauth_transactions (state_hash, provider, code_verifier, redirect_uri, return_path, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [transaction.stateHash, transaction.provider, transaction.codeVerifier, transaction.redirectUri, transaction.returnPath || '/ranked', transaction.expiresAt]
     );
   }
 
@@ -313,9 +327,86 @@ class PostgresRankedRepository {
       provider: row.provider,
       codeVerifier: row.code_verifier,
       redirectUri: row.redirect_uri,
+      returnPath: row.return_path,
       createdAt: row.created_at,
       expiresAt: row.expires_at
     } : null;
+  }
+
+  async listPrivatePresets(userId) {
+    const result = await this.query(
+      `SELECT * FROM private_pvp_presets WHERE user_id = $1 ORDER BY updated_at DESC, id ASC`,
+      [userId]
+    );
+    return result.rows.map(mapPrivatePreset);
+  }
+
+  async findPrivatePresetById(userId, id) {
+    const result = await this.query(
+      `SELECT * FROM private_pvp_presets WHERE user_id = $1 AND id = $2`,
+      [userId, id]
+    );
+    return mapPrivatePreset(result.rows[0]);
+  }
+
+  async findPrivatePresetByNormalizedName(userId, normalizedName) {
+    const result = await this.query(
+      `SELECT * FROM private_pvp_presets WHERE user_id = $1 AND normalized_name = $2`,
+      [userId, normalizedName]
+    );
+    return mapPrivatePreset(result.rows[0]);
+  }
+
+  async countPrivatePresets(userId) {
+    const result = await this.query(
+      `SELECT count(*)::integer AS total FROM private_pvp_presets WHERE user_id = $1`,
+      [userId]
+    );
+    return Number(result.rows[0]?.total || 0);
+  }
+
+  async findAvailablePrivatePresetSlot(userId) {
+    const result = await this.query(
+      `SELECT slots.slot
+       FROM generate_series(1, 10) AS slots(slot)
+       WHERE NOT EXISTS (
+         SELECT 1 FROM private_pvp_presets
+         WHERE user_id = $1 AND preset_slot = slots.slot
+       )
+       ORDER BY slots.slot ASC
+       LIMIT 1`,
+      [userId]
+    );
+    return result.rows[0] ? Number(result.rows[0].slot) : null;
+  }
+
+  async createPrivatePreset(preset) {
+    const result = await this.query(
+      `INSERT INTO private_pvp_presets (id, user_id, preset_slot, name, normalized_name, config)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [preset.id, preset.userId, preset.slot, preset.name, preset.normalizedName, preset.config]
+    );
+    return mapPrivatePreset(result.rows[0]);
+  }
+
+  async updatePrivatePreset(userId, id, preset) {
+    const result = await this.query(
+      `UPDATE private_pvp_presets
+       SET name = $3, normalized_name = $4, config = $5, updated_at = now()
+       WHERE user_id = $1 AND id = $2
+       RETURNING *`,
+      [userId, id, preset.name, preset.normalizedName, preset.config]
+    );
+    return mapPrivatePreset(result.rows[0]);
+  }
+
+  async deletePrivatePreset(userId, id) {
+    const result = await this.query(
+      `DELETE FROM private_pvp_presets WHERE user_id = $1 AND id = $2 RETURNING *`,
+      [userId, id]
+    );
+    return mapPrivatePreset(result.rows[0]);
   }
 
   async purgeExpiredAuthArtifacts(now = new Date(), revokedBefore = new Date(new Date(now).getTime() - 7 * 24 * 60 * 60_000)) {
@@ -512,6 +603,7 @@ class MemoryRankedRepository {
     this.sessions = new Map();
     this.sessionByHash = new Map();
     this.oauthTransactions = new Map();
+    this.privatePresets = new Map();
     this.seasons = new Map();
     this.activeSeasonId = null;
     this.games = new Map();
@@ -524,7 +616,7 @@ class MemoryRankedRepository {
   _snapshot() {
     return {
       profiles: cloneMap(this.profiles), sessions: cloneMap(this.sessions), sessionByHash: new Map(this.sessionByHash),
-      oauthTransactions: cloneMap(this.oauthTransactions), seasons: cloneMap(this.seasons), activeSeasonId: this.activeSeasonId,
+      oauthTransactions: cloneMap(this.oauthTransactions), privatePresets: cloneMap(this.privatePresets), seasons: cloneMap(this.seasons), activeSeasonId: this.activeSeasonId,
       games: cloneMap(this.games), activeGameByUser: new Map(this.activeGameByUser), movesByGame: cloneMap(this.movesByGame),
       rankedProfiles: cloneMap(this.rankedProfiles)
     };
@@ -659,6 +751,77 @@ class MemoryRankedRepository {
     this.oauthTransactions.delete(stateHash);
     if (!transaction || new Date(transaction.expiresAt) <= now) return null;
     return cloneValue(transaction);
+  }
+
+  async listPrivatePresets(userId) {
+    return [...this.privatePresets.values()]
+      .filter((preset) => preset.userId === userId)
+      .sort((left, right) => new Date(right.updatedAt) - new Date(left.updatedAt) || left.id.localeCompare(right.id))
+      .map(cloneValue);
+  }
+
+  async findPrivatePresetById(userId, id) {
+    const preset = this.privatePresets.get(id);
+    return preset?.userId === userId ? cloneValue(preset) : null;
+  }
+
+  async findPrivatePresetByNormalizedName(userId, normalizedName) {
+    return cloneValue([...this.privatePresets.values()].find((preset) => (
+      preset.userId === userId && preset.normalizedName === normalizedName
+    )) || null);
+  }
+
+  async countPrivatePresets(userId) {
+    return [...this.privatePresets.values()].filter((preset) => preset.userId === userId).length;
+  }
+
+  async findAvailablePrivatePresetSlot(userId) {
+    const used = new Set([...this.privatePresets.values()]
+      .filter((preset) => preset.userId === userId)
+      .map((preset) => preset.slot));
+    for (let slot = 1; slot <= 10; slot += 1) {
+      if (!used.has(slot)) return slot;
+    }
+    return null;
+  }
+
+  async createPrivatePreset(preset) {
+    if ([...this.privatePresets.values()].some((item) => (
+      item.userId === preset.userId && (item.slot === preset.slot || item.normalizedName === preset.normalizedName)
+    ))) {
+      const error = new Error('private preset already exists');
+      error.code = '23505';
+      throw error;
+    }
+    const stored = {
+      ...cloneValue(preset),
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    this.privatePresets.set(stored.id, stored);
+    return cloneValue(stored);
+  }
+
+  async updatePrivatePreset(userId, id, preset) {
+    const existing = this.privatePresets.get(id);
+    if (!existing || existing.userId !== userId) return null;
+    if ([...this.privatePresets.values()].some((item) => (
+      item.id !== id && item.userId === userId && item.normalizedName === preset.normalizedName
+    ))) {
+      const error = new Error('private preset name already exists');
+      error.code = '23505';
+      throw error;
+    }
+    const stored = { ...existing, ...cloneValue(preset), updatedAt: new Date() };
+    this.privatePresets.set(id, stored);
+    return cloneValue(stored);
+  }
+
+  async deletePrivatePreset(userId, id) {
+    const existing = this.privatePresets.get(id);
+    if (!existing || existing.userId !== userId) return null;
+    this.privatePresets.delete(id);
+    return cloneValue(existing);
   }
 
   async purgeExpiredAuthArtifacts(now = new Date(), revokedBefore = new Date(new Date(now).getTime() - 7 * 24 * 60 * 60_000)) {
@@ -809,6 +972,7 @@ module.exports = {
   createDefaultHandle,
   mapGame,
   mapMove,
+  mapPrivatePreset,
   mapProfile,
   mapRankedProfile,
   mapSeason

@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { CSRF_COOKIE_NAME, OAUTH_TRANSACTION_COOKIE_NAME, SESSION_COOKIE_NAME, createAuthMiddleware, parseCookies } = require('./auth');
+const { CSRF_COOKIE_NAME, OAUTH_TRANSACTION_COOKIE_NAME, SESSION_COOKIE_NAME, createAuthMiddleware, normalizeOAuthReturnPath, parseCookies } = require('./auth');
 const { createFixedWindowLimiter } = require('./security');
 const { RankedError } = require('./ranked-service');
 
@@ -81,9 +81,15 @@ function registerUnavailableRankedRoutes(app) {
   app.use('/api/ranked', unavailable);
   app.use('/api/leaderboard', unavailable);
   app.use('/api/profile', unavailable);
+  app.use('/api/private-presets', unavailable);
   app.use('/api/auth', unavailable);
   app.get('/auth/login/:provider', unavailable);
   app.get('/auth/callback', unavailable);
+}
+
+function oauthResultPath(returnPath, result) {
+  const safePath = normalizeOAuthReturnPath(returnPath);
+  return `${safePath}?login=${encodeURIComponent(result)}`;
 }
 
 function registerRankedRoutes(app, { runtime, getClientIp, logger = console }) {
@@ -93,7 +99,7 @@ function registerRankedRoutes(app, { runtime, getClientIp, logger = console }) {
   }
 
   const router = express.Router();
-  const { auth, service } = runtime;
+  const { auth, service, privatePresetService } = runtime;
   const { requireAuth, requireStateChange } = createAuthMiddleware(auth);
   const byIp = (request) => `ip:${getClientIp(request)}`;
   const byUser = (request) => `user:${request.auth.userId}`;
@@ -107,8 +113,10 @@ function registerRankedRoutes(app, { runtime, getClientIp, logger = console }) {
   const profileLimit = createRateLimit({ limit: 12, windowMs: 60 * 60_000, getKey: byUser });
   const leaderboardLimit = createRateLimit({ limit: 120, windowMs: 60_000, getKey: byIp });
   const authSessionLimit = createRateLimit({ limit: 120, windowMs: 60_000, getKey: byUser });
+  const privatePresetReadLimit = createRateLimit({ limit: 60, windowMs: 60_000, getKey: byUser });
+  const privatePresetWriteLimit = createRateLimit({ limit: 30, windowMs: 10 * 60_000, getKey: byUser });
 
-  const redirectOAuthFailure = (response, error) => {
+  const redirectOAuthFailure = (response, error, returnPath = '/ranked') => {
     // Only validation/exchange failures are actionable by immediately trying
     // OAuth again. Database/provider outages need a distinct path so users do
     // not mistake a server incident for a bad Google/GitHub account.
@@ -119,17 +127,18 @@ function registerRankedRoutes(app, { runtime, getClientIp, logger = console }) {
     // remains short lived and hashed, but the browser can no longer present
     // an accidental stale transaction on a later callback.
     response.append('Set-Cookie', auth.clearOAuthTransactionCookie());
-    response.redirect(303, `/ranked?login=${retryableSignInFailure ? 'failed' : 'unavailable'}`);
+    response.redirect(303, oauthResultPath(returnPath, retryableSignInFailure ? 'failed' : 'unavailable'));
   };
 
   router.get('/auth/login/:provider', authLoginLimit, asyncRoute(async (request, response) => {
     noStore(response);
+    const returnPath = normalizeOAuthReturnPath(request.query.returnTo);
     let result;
     try {
-      result = await auth.beginOAuth(request.params.provider);
+      result = await auth.beginOAuth(request.params.provider, { returnPath });
     } catch (error) {
       if (error instanceof RankedError && error.code === 'UNSUPPORTED_PROVIDER') throw error;
-      redirectOAuthFailure(response, error);
+      redirectOAuthFailure(response, error, returnPath);
       return;
     }
     response.setHeader('Set-Cookie', auth.oauthTransactionCookie(result.transactionToken));
@@ -156,13 +165,13 @@ function registerRankedRoutes(app, { runtime, getClientIp, logger = console }) {
       // OAuth failures should return the user to the sign-in UI, not leave a
       // raw provider error or a Private PvP-looking backend root page.
       const retryableSignInFailure = isRetryableOAuthFailure(error);
-      response.redirect(303, `/ranked?login=${retryableSignInFailure ? 'failed' : 'unavailable'}`);
+      response.redirect(303, oauthResultPath(error?.returnPath, retryableSignInFailure ? 'failed' : 'unavailable'));
       return;
     }
     response.append('Set-Cookie', auth.sessionCookie(result.sessionToken));
     response.append('Set-Cookie', auth.csrfCookie(result.csrfToken));
     response.append('Set-Cookie', auth.clearOAuthTransactionCookie());
-    response.redirect(303, '/ranked');
+    response.redirect(303, normalizeOAuthReturnPath(result.returnPath));
   }));
 
   router.use('/api', express.json({ limit: '4kb', strict: true, type: 'application/json' }));
@@ -193,6 +202,35 @@ function registerRankedRoutes(app, { runtime, getClientIp, logger = console }) {
     const cookies = parseCookies(request.headers.cookie || '');
     await auth.logout(cookies[SESSION_COOKIE_NAME]);
     response.setHeader('Set-Cookie', auth.clearCookies());
+    response.status(204).end();
+  }));
+
+  const requirePrivatePresetService = (_request, _response, next) => {
+    if (!privatePresetService) {
+      next(new RankedError(503, 'PRIVATE_PRESETS_UNAVAILABLE', 'Saved Private settings are temporarily unavailable.'));
+      return;
+    }
+    next();
+  };
+
+  router.get('/api/private-presets', requireAuth, requirePrivatePresetService, privatePresetReadLimit, asyncRoute(async (request, response) => {
+    noStore(response);
+    response.json({ presets: await privatePresetService.listPresets(request.auth.userId) });
+  }));
+
+  router.post('/api/private-presets', requireAuth, requireStateChange, requirePrivatePresetService, privatePresetWriteLimit, asyncRoute(async (request, response) => {
+    noStore(response);
+    response.status(201).json({ preset: await privatePresetService.createPreset(request.auth.userId, request.body) });
+  }));
+
+  router.put('/api/private-presets/:id', requireAuth, requireStateChange, requirePrivatePresetService, privatePresetWriteLimit, asyncRoute(async (request, response) => {
+    noStore(response);
+    response.json({ preset: await privatePresetService.updatePreset(request.auth.userId, request.params.id, request.body) });
+  }));
+
+  router.delete('/api/private-presets/:id', requireAuth, requireStateChange, requireEmptyObject, requirePrivatePresetService, privatePresetWriteLimit, asyncRoute(async (request, response) => {
+    noStore(response);
+    await privatePresetService.deletePreset(request.auth.userId, request.params.id);
     response.status(204).end();
   }));
 
@@ -252,6 +290,7 @@ function registerRankedRoutes(app, { runtime, getClientIp, logger = console }) {
 module.exports = {
   createRateLimit,
   noStore,
+  oauthResultPath,
   registerRankedRoutes,
   sendError
 };

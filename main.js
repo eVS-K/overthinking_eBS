@@ -3,6 +3,7 @@ const GAME_SERVER_URL = ['localhost', '127.0.0.1'].includes(window.location.host
   : 'https://overthinking-ebs.onrender.com';
 const RANKED_APP_URL = new URL('/ranked', GAME_SERVER_URL).toString();
 const TURN_TIME_LIMIT_MS = 90_000;
+const RECONNECT_GRACE_MS = 10_000;
 const PRIVATE_TURN_TIME_OPTIONS_MS = new Set([60_000, 90_000, 120_000]);
 const CHAT_MESSAGE_LIMIT = 50;
 const MAX_RENDERED_CHAT_MESSAGES = 100;
@@ -26,6 +27,7 @@ const VIRTUAL_BLANK_CARD_ID = 'virtual-blank';
 const MIN_EXPANDED_DECK_SIZE = 5;
 const MAX_EXPANDED_DECK_SIZE = 14;
 const MAX_EXPANDED_CARD_COPIES = 3;
+const MAX_PRIVATE_PRESETS = 10;
 const DEFAULT_EXPANDED_DECK = Object.freeze([
   { definitionId: 'ace', copies: 1 },
   { definitionId: 'king', copies: 1 },
@@ -67,6 +69,11 @@ let timerInterval = null;
 let privateSettingsPending = null;
 let privateSettingsTimeout = null;
 let privateSettingsFeedback = '';
+let privatePresetAccount = { state: 'checking', profile: null };
+let privatePresets = [];
+let privatePresetLoading = false;
+let privatePresetWriting = false;
+let privatePresetFeedback = '';
 let spectatorTarotSelectionId = '';
 let lastRoundId = null;
 let lastFinaleId = null;
@@ -172,6 +179,22 @@ const elements = {
   expandedBlankEnabled: document.getElementById('expanded-blank-enabled'),
   expandedBlankNote: document.getElementById('expanded-blank-note'),
   privateSettingsFeedback: document.getElementById('private-settings-feedback'),
+  privatePresetPanel: document.getElementById('private-preset-panel'),
+  privatePresetCount: document.getElementById('private-preset-count'),
+  privatePresetSignedOut: document.getElementById('private-preset-signed-out'),
+  privatePresetAuthActions: document.getElementById('private-preset-auth-actions'),
+  privatePresetLoginGoogle: document.getElementById('private-preset-login-google'),
+  privatePresetLoginGithub: document.getElementById('private-preset-login-github'),
+  privatePresetSignedIn: document.getElementById('private-preset-signed-in'),
+  privatePresetAccount: document.getElementById('private-preset-account'),
+  privatePresetSelect: document.getElementById('private-preset-select'),
+  privatePresetName: document.getElementById('private-preset-name'),
+  privatePresetLoadButton: document.getElementById('private-preset-load-btn'),
+  privatePresetSaveButton: document.getElementById('private-preset-save-btn'),
+  privatePresetUpdateButton: document.getElementById('private-preset-update-btn'),
+  privatePresetDeleteButton: document.getElementById('private-preset-delete-btn'),
+  privatePresetLogoutButton: document.getElementById('private-preset-logout-btn'),
+  privatePresetFeedback: document.getElementById('private-preset-feedback'),
   history: document.getElementById('history-list'),
   spectatorCount: document.getElementById('spectator-count'),
   chatList: document.getElementById('chat-list'),
@@ -627,6 +650,319 @@ function clearPrivateSettingsPending() {
   privateSettingsPending = null;
 }
 
+function isSameOriginGameApp() {
+  try {
+    return window.location.origin === new URL(GAME_SERVER_URL).origin;
+  } catch {
+    return false;
+  }
+}
+
+function getCookieValue(name) {
+  if (typeof document.cookie !== 'string') return '';
+  const prefix = `${encodeURIComponent(name)}=`;
+  const item = document.cookie.split(';').map((value) => value.trim()).find((value) => value.startsWith(prefix));
+  if (!item) return '';
+  try {
+    return decodeURIComponent(item.slice(prefix.length));
+  } catch {
+    return '';
+  }
+}
+
+function buildPrivatePresetLoginUrl(provider) {
+  const url = new URL(`/auth/login/${provider}`, GAME_SERVER_URL);
+  // The server persists and allow-lists this path in the short-lived OAuth
+  // transaction. Do not append a caller-controlled external destination.
+  url.searchParams.set('returnTo', '/');
+  return url.toString();
+}
+
+function privatePresetErrorMessage(error, fallback = '設定プリセットを操作できませんでした。') {
+  const code = error?.code;
+  if (code === 'AUTH_REQUIRED') return '保存にはログインが必要です。ログイン後にもう一度お試しください。';
+  if (code === 'PRIVATE_PRESET_LIMIT') return `保存できる設定は最大${MAX_PRIVATE_PRESETS}件です。不要な設定を削除してからお試しください。`;
+  if (code === 'PRIVATE_PRESET_NAME_TAKEN') return '同じ名前の設定がすでにあります。別の名前にしてください。';
+  if (code === 'INVALID_PRIVATE_PRESET') return '設定名または設定内容を確認してください。名前は32文字以内で、見えない文字は使えません。';
+  if (code === 'PRIVATE_PRESET_NOT_FOUND') return '保存済み設定が見つかりませんでした。最新の一覧を確認してください。';
+  if (code === 'PROFILE_UNAVAILABLE' || code === 'PRIVATE_PRESETS_UNAVAILABLE' || code === 'RANKED_UNAVAILABLE') {
+    return '保存機能は一時的に利用できません。対戦はログインなしで続けられます。';
+  }
+  if (error?.status === 403) return 'この操作を確認できませんでした。ログイン状態を確認してください。';
+  return fallback;
+}
+
+async function readPrivatePresetResponse(response) {
+  let body = null;
+  try {
+    body = response.status === 204 ? null : await response.json();
+  } catch {
+    // A malformed outage response must not be surfaced as raw server text.
+  }
+  if (!response.ok) {
+    const error = new Error(body?.error?.message || 'Private preset request failed.');
+    error.status = response.status;
+    error.code = body?.error?.code;
+    throw error;
+  }
+  return body;
+}
+
+async function privatePresetApi(path, { method = 'GET', body } = {}) {
+  if (!isSameOriginGameApp()) {
+    const error = new Error('Private preset sign-in requires the game server origin.');
+    error.code = 'PRIVATE_PRESETS_UNAVAILABLE';
+    throw error;
+  }
+  const headers = { Accept: 'application/json' };
+  if (method !== 'GET') {
+    const csrfToken = getCookieValue('__Host-overthinking-csrf');
+    if (!csrfToken) {
+      const error = new Error('Missing CSRF token.');
+      error.code = 'AUTH_REQUIRED';
+      throw error;
+    }
+    headers['Content-Type'] = 'application/json';
+    headers['X-CSRF-Token'] = csrfToken;
+  }
+  const response = await window.fetch(new URL(path, GAME_SERVER_URL), {
+    method,
+    credentials: 'same-origin',
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  return readPrivatePresetResponse(response);
+}
+
+function getSelectedPrivatePreset() {
+  const selectedId = elements.privatePresetSelect?.value || '';
+  return privatePresets.find((preset) => preset.id === selectedId) || null;
+}
+
+function getCurrentPrivatePresetConfig() {
+  if (!currentRoom) return null;
+  const rules = getRoomRules(currentRoom);
+  return buildPrivateSettingsRequest(rules);
+}
+
+function setPrivatePresetFeedback(message = '') {
+  privatePresetFeedback = message;
+  if (currentRoom) renderRoomRules(currentRoom);
+}
+
+function renderPrivatePresetPanel(room) {
+  if (!elements.privatePresetPanel) return;
+  const isPrivateRoom = room?.matchType !== 'random';
+  elements.privatePresetPanel.classList.toggle('hidden', !isPrivateRoom);
+  if (!isPrivateRoom) return;
+
+  elements.privatePresetLoginGoogle.href = buildPrivatePresetLoginUrl('google');
+  elements.privatePresetLoginGithub.href = buildPrivatePresetLoginUrl('github');
+  const signedIn = privatePresetAccount.state === 'signed-in';
+  const checking = privatePresetAccount.state === 'checking';
+  const unavailable = privatePresetAccount.state === 'unavailable';
+  elements.privatePresetSignedOut.classList.toggle('hidden', signedIn);
+  elements.privatePresetSignedIn.classList.toggle('hidden', !signedIn);
+  setText(elements.privatePresetCount, signedIn ? `${privatePresets.length} / ${MAX_PRIVATE_PRESETS}` : `— / ${MAX_PRIVATE_PRESETS}`);
+
+  if (!signedIn) {
+    const message = elements.privatePresetSignedOut.querySelector('p');
+    if (message) {
+      setText(
+        message,
+        checking
+          ? 'ログイン状態を確認しています…。対戦はログインなしで続けられます。'
+          : unavailable
+            ? '保存機能は一時的に利用できません。対戦はログインなしで続けられます。'
+            : 'ログインすると保存・呼び出しが使えます。ログインしなくても、これまでどおり対戦できます。'
+      );
+    }
+    elements.privatePresetAuthActions.classList.toggle('hidden', checking || unavailable);
+    setText(elements.privatePresetFeedback, privatePresetFeedback || (unavailable ? '認証・保存基盤の復旧後にもう一度お試しください。' : '保存した設定の適用は、現在の設定担当者だけが行えます。'));
+    return;
+  }
+
+  elements.privatePresetAuthActions.classList.remove('hidden');
+  const profile = privatePresetAccount.profile || {};
+  setText(elements.privatePresetAccount, `${profile.handle || 'ログイン済み'} として保存しています。アカウント情報は対局相手には共有されません。`);
+
+  const previousSelection = elements.privatePresetSelect.value;
+  elements.privatePresetSelect.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = privatePresets.length ? '保存済み設定を選ぶ' : '保存済み設定はありません';
+  elements.privatePresetSelect.append(placeholder);
+  privatePresets.forEach((preset) => {
+    const option = document.createElement('option');
+    option.value = preset.id;
+    option.textContent = preset.name;
+    elements.privatePresetSelect.append(option);
+  });
+  const selectedId = privatePresets.some((preset) => preset.id === previousSelection) ? previousSelection : '';
+  elements.privatePresetSelect.value = selectedId;
+  const selectedPreset = getSelectedPrivatePreset();
+  const loading = privatePresetLoading || privatePresetWriting;
+  const canApply = Boolean(
+    selectedPreset
+    && isRoomHost(room)
+    && ['waiting', 'finished'].includes(room?.gameState)
+    && socket?.connected
+    && !privateSettingsPending
+    && !loading
+  );
+  elements.privatePresetSelect.disabled = loading || privatePresets.length === 0;
+  elements.privatePresetName.disabled = loading;
+  elements.privatePresetLoadButton.disabled = !canApply;
+  elements.privatePresetSaveButton.disabled = loading || !getCurrentPrivatePresetConfig() || privatePresets.length >= MAX_PRIVATE_PRESETS;
+  elements.privatePresetUpdateButton.disabled = loading || !selectedPreset || !getCurrentPrivatePresetConfig();
+  elements.privatePresetDeleteButton.disabled = loading || !selectedPreset;
+  elements.privatePresetLogoutButton.disabled = loading;
+  setText(
+    elements.privatePresetFeedback,
+    privatePresetFeedback
+      || (isRoomHost(room)
+        ? '保存はいつでもできます。読み込みは待機中または対局終了後に反映します。'
+        : '保存はできます。読み込み・適用は現在の設定担当者だけが行えます。')
+  );
+}
+
+async function refreshPrivatePresets() {
+  if (privatePresetAccount.state !== 'signed-in') return;
+  privatePresetLoading = true;
+  if (currentRoom) renderRoomRules(currentRoom);
+  try {
+    const response = await privatePresetApi('/api/private-presets');
+    privatePresets = Array.isArray(response?.presets)
+      ? response.presets.filter((preset) => preset && typeof preset.id === 'string' && typeof preset.name === 'string' && preset.config && typeof preset.config === 'object')
+      : [];
+    privatePresetFeedback = '';
+  } catch (error) {
+    if (error?.status === 401) {
+      privatePresetAccount = { state: 'signed-out', profile: null };
+      privatePresets = [];
+    } else {
+      privatePresetFeedback = privatePresetErrorMessage(error, '保存済み設定を読み込めませんでした。');
+    }
+  } finally {
+    privatePresetLoading = false;
+    if (currentRoom) renderRoomRules(currentRoom);
+  }
+}
+
+async function loadPrivatePresetAccount() {
+  if (!isSameOriginGameApp()) {
+    privatePresetAccount = { state: 'unavailable', profile: null };
+    if (currentRoom) renderRoomRules(currentRoom);
+    return;
+  }
+  privatePresetAccount = { state: 'checking', profile: null };
+  if (currentRoom) renderRoomRules(currentRoom);
+  try {
+    const response = await window.fetch(new URL('/api/auth/me', GAME_SERVER_URL), {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    });
+    if (response.status === 401) {
+      privatePresetAccount = { state: 'signed-out', profile: null };
+      return;
+    }
+    const body = await readPrivatePresetResponse(response);
+    if (!body?.authenticated || !body.profile) {
+      privatePresetAccount = { state: 'unavailable', profile: null };
+      privatePresetFeedback = '認証状態を確認できませんでした。時間をおいて再試行してください。';
+      return;
+    }
+    privatePresetAccount = { state: 'signed-in', profile: body.profile };
+    await refreshPrivatePresets();
+  } catch (error) {
+    privatePresetAccount = { state: 'unavailable', profile: null };
+    privatePresetFeedback = privatePresetErrorMessage(error, '認証状態を確認できませんでした。時間をおいて再試行してください。');
+  } finally {
+    if (currentRoom) renderRoomRules(currentRoom);
+  }
+}
+
+async function savePrivatePreset({ overwrite = false } = {}) {
+  if (privatePresetAccount.state !== 'signed-in') {
+    setPrivatePresetFeedback('保存にはログインが必要です。ログイン後にもう一度お試しください。');
+    return;
+  }
+  const config = getCurrentPrivatePresetConfig();
+  const selectedPreset = getSelectedPrivatePreset();
+  const name = elements.privatePresetName.value;
+  if (!config) {
+    setPrivatePresetFeedback('保存するPrivate設定を確認できませんでした。');
+    return;
+  }
+  if (overwrite && !selectedPreset) {
+    setPrivatePresetFeedback('上書きする保存済み設定を選んでください。');
+    return;
+  }
+  privatePresetWriting = true;
+  if (currentRoom) renderRoomRules(currentRoom);
+  try {
+    const path = overwrite ? `/api/private-presets/${encodeURIComponent(selectedPreset.id)}` : '/api/private-presets';
+    const response = await privatePresetApi(path, { method: overwrite ? 'PUT' : 'POST', body: { name, config } });
+    const saved = response?.preset;
+    if (!saved?.id) throw new Error('Private preset response was invalid.');
+    if (overwrite) {
+      privatePresets = privatePresets.map((preset) => preset.id === saved.id ? saved : preset);
+    } else {
+      privatePresets = [saved, ...privatePresets];
+    }
+    elements.privatePresetName.value = saved.name;
+    privatePresetFeedback = overwrite ? `「${saved.name}」を現在の設定で上書きしました。` : `「${saved.name}」を保存しました。`;
+    if (currentRoom) renderRoomRules(currentRoom);
+    elements.privatePresetSelect.value = saved.id;
+  } catch (error) {
+    privatePresetFeedback = privatePresetErrorMessage(error);
+  } finally {
+    privatePresetWriting = false;
+    if (currentRoom) renderRoomRules(currentRoom);
+  }
+}
+
+async function deletePrivatePreset() {
+  if (privatePresetAccount.state !== 'signed-in') return;
+  const selectedPreset = getSelectedPrivatePreset();
+  if (!selectedPreset) {
+    setPrivatePresetFeedback('削除する保存済み設定を選んでください。');
+    return;
+  }
+  if (!window.confirm(`「${selectedPreset.name}」を削除しますか？ この操作は元に戻せません。`)) return;
+  privatePresetWriting = true;
+  if (currentRoom) renderRoomRules(currentRoom);
+  try {
+    await privatePresetApi(`/api/private-presets/${encodeURIComponent(selectedPreset.id)}`, { method: 'DELETE', body: {} });
+    privatePresets = privatePresets.filter((preset) => preset.id !== selectedPreset.id);
+    elements.privatePresetName.value = '';
+    privatePresetFeedback = `「${selectedPreset.name}」を削除しました。`;
+  } catch (error) {
+    privatePresetFeedback = privatePresetErrorMessage(error, '保存済み設定を削除できませんでした。');
+  } finally {
+    privatePresetWriting = false;
+    if (currentRoom) renderRoomRules(currentRoom);
+  }
+}
+
+async function logoutPrivatePresetAccount() {
+  if (privatePresetAccount.state !== 'signed-in') return;
+  privatePresetWriting = true;
+  if (currentRoom) renderRoomRules(currentRoom);
+  try {
+    await privatePresetApi('/api/auth/logout', { method: 'POST', body: {} });
+    privatePresetAccount = { state: 'signed-out', profile: null };
+    privatePresets = [];
+    elements.privatePresetName.value = '';
+    privatePresetFeedback = 'ログアウトしました。対戦はそのまま続けられます。';
+  } catch (error) {
+    privatePresetFeedback = privatePresetErrorMessage(error, 'ログアウトを確認できませんでした。');
+  } finally {
+    privatePresetWriting = false;
+    if (currentRoom) renderRoomRules(currentRoom);
+  }
+}
+
 function highlightPrivateSettingsOwnership() {
   const controls = elements.privateSettingsControls;
   if (!controls || controls.classList.contains('hidden')) return;
@@ -838,6 +1174,11 @@ function renderRoomRules(room) {
     ? '時間切れ時は、合法な手札と手札外のBlankからサーバーが1つをランダムに選びます。'
     : '時間切れ時は、残った合法な手札からサーバーが1枚をランダムに選びます。');
 
+  // Presets are personal, account-owned convenience data. Showing this panel
+  // never grants room-edit permission; the existing Socket boundary remains
+  // the sole authority when a saved config is applied.
+  renderPrivatePresetPanel(room);
+
   elements.privateSettingsControls.classList.toggle('hidden', !canEdit);
   elements.transferPrivateSettingsOwnerButton.classList.toggle('hidden', !canEdit);
   if (!canEdit) return;
@@ -867,24 +1208,24 @@ function renderRoomRules(room) {
 }
 
 function requestPrivateSettingsChange(changes) {
-  if (!socket?.connected || !currentRoom || !currentRoomId || currentRoom.matchType === 'random') return;
-  if (!isRoomHost(currentRoom) || !['waiting', 'finished'].includes(currentRoom.gameState)) return;
+  if (!socket?.connected || !currentRoom || !currentRoomId || currentRoom.matchType === 'random') return false;
+  if (!isRoomHost(currentRoom) || !['waiting', 'finished'].includes(currentRoom.gameState)) return false;
   const rules = getRoomRules(currentRoom);
   const requestSettings = buildPrivateSettingsRequest(rules, changes);
   if (!PRIVATE_TURN_TIME_OPTIONS_MS.has(requestSettings.turnTimeLimitMs)) {
     privateSettingsFeedback = '選べる制限時間は60秒・90秒・120秒です。';
     renderRoomRules(currentRoom);
-    return;
+    return false;
   }
   if (requestSettings.ruleset === EXPANDED_PRIVATE_RULESET_ID) {
     const validationMessage = validateExpandedSettingsForClient(requestSettings);
     if (validationMessage) {
       privateSettingsFeedback = validationMessage;
       renderRoomRules(currentRoom);
-      return;
+      return false;
     }
   }
-  if (privateSettingsMatch(rules, requestSettings)) return;
+  if (privateSettingsMatch(rules, requestSettings)) return false;
 
   clearPrivateSettingsPending();
   const pendingRequest = {
@@ -922,6 +1263,7 @@ function requestPrivateSettingsChange(changes) {
       privateSettingsFeedback = '設定を確認しています…';
     }
   });
+  return true;
 }
 
 function requestPrivateSettingsOwnershipTransfer() {
@@ -950,6 +1292,23 @@ function requestPrivateSettingsOwnershipTransfer() {
 
 function renderTimer(room) {
   resetTimer();
+  if (room.gameState === 'reconnecting' && Number.isFinite(room.reconnectDeadline) && room.reconnectDeadline > 0) {
+    const updateReconnectTimer = () => {
+      const remainingMs = Math.max(0, room.reconnectDeadline - Date.now());
+      const remainingSeconds = Math.ceil(remainingMs / 1_000);
+      setText(elements.timer, remainingSeconds);
+      elements.timerProgress.style.width = `${Math.min(100, (remainingMs / RECONNECT_GRACE_MS) * 100)}%`;
+      setText(
+        elements.status,
+        remainingMs > 0
+          ? `対戦相手の再接続を待っています。あと ${remainingSeconds} 秒で対局を終了します。制限時間は停止中です。`
+          : '対戦相手の再接続期限を確認しています…'
+      );
+    };
+    updateReconnectTimer();
+    timerInterval = window.setInterval(updateReconnectTimer, 250);
+    return;
+  }
   if (room.gameState !== 'playing' || !room.deadline) return;
   const turnTimeLimitMs = getRoomRules(room).turnTimeLimitMs;
 
@@ -1641,7 +2000,15 @@ function renderStatus(room, me, opponent) {
       setText(elements.status, '両者が「対戦開始に同意する」を押すと、対局が始まります。');
     }
   } else if (room.gameState === 'reconnecting') {
-    setText(elements.status, '対戦相手の再接続を待っています。制限時間は停止中です。');
+    const remainingSeconds = Number.isFinite(room.reconnectDeadline) && room.reconnectDeadline > 0
+      ? Math.max(0, Math.ceil((room.reconnectDeadline - Date.now()) / 1_000))
+      : null;
+    setText(
+      elements.status,
+      remainingSeconds === null
+        ? '対戦相手の再接続を待っています。制限時間は停止中です。'
+        : `対戦相手の再接続を待っています。あと ${remainingSeconds} 秒で対局を終了します。制限時間は停止中です。`
+    );
   } else if (room.gameState === 'playing') {
     setText(elements.status, room.viewer.hasConfirmedSelection
       ? 'カードを伏せました。相手の選択を待っています…'
@@ -1707,7 +2074,7 @@ function getActiveSpectatorTarotCards(room) {
 
 function renderSpectatorTarotGuide(room) {
   if (!elements.spectatorTarotGuide) return;
-  const cards = room?.viewer?.isSpectator ? getActiveSpectatorTarotCards(room) : [];
+  const cards = getActiveSpectatorTarotCards(room);
   const shouldShow = cards.length > 0;
   elements.spectatorTarotGuide.classList.toggle('hidden', !shouldShow);
   if (!shouldShow) {
@@ -2100,6 +2467,45 @@ elements.expandedBlankEnabled.addEventListener('change', () => {
   requestPrivateSettingsChange({ blankEnabled: elements.expandedBlankEnabled.checked === true });
 });
 
+elements.privatePresetSelect.addEventListener('change', () => {
+  const selectedPreset = getSelectedPrivatePreset();
+  if (selectedPreset) elements.privatePresetName.value = selectedPreset.name;
+  if (currentRoom) renderRoomRules(currentRoom);
+});
+
+elements.privatePresetLoadButton.addEventListener('click', () => {
+  const selectedPreset = getSelectedPrivatePreset();
+  if (!selectedPreset) {
+    setPrivatePresetFeedback('読み込む保存済み設定を選んでください。');
+    return;
+  }
+  if (!isRoomHost(currentRoom) || !['waiting', 'finished'].includes(currentRoom?.gameState) || !socket?.connected) {
+    setPrivatePresetFeedback('設定の読み込み・適用は、待機中または対局終了後の設定担当者だけが行えます。');
+    return;
+  }
+  if (requestPrivateSettingsChange(selectedPreset.config)) {
+    setPrivatePresetFeedback(`「${selectedPreset.name}」を読み込んでいます。サーバーで確認後に反映されます。`);
+  } else {
+    setPrivatePresetFeedback(`「${selectedPreset.name}」は、すでに現在の設定と同じです。`);
+  }
+});
+
+elements.privatePresetSaveButton.addEventListener('click', () => {
+  savePrivatePreset();
+});
+
+elements.privatePresetUpdateButton.addEventListener('click', () => {
+  savePrivatePreset({ overwrite: true });
+});
+
+elements.privatePresetDeleteButton.addEventListener('click', () => {
+  deletePrivatePreset();
+});
+
+elements.privatePresetLogoutButton.addEventListener('click', () => {
+  logoutPrivatePresetAccount();
+});
+
 elements.chatInput.addEventListener('input', () => {
   const normalized = normalizeChatInput(elements.chatInput.value);
   if (elements.chatInput.value !== normalized) elements.chatInput.value = normalized;
@@ -2180,6 +2586,9 @@ syncSpectatorJoinOptions();
 updatePresenceView();
 renderEntryMode();
 updateChatSoundToggle();
+// Authentication is optional for Guest PvP.  This background check only
+// enables the saved Private-setting panel when a secure app session exists.
+void loadPrivatePresetAccount();
 window.addEventListener('pointerdown', primeChatSound, { once: true, passive: true });
 window.addEventListener('keydown', primeChatSound, { once: true });
 
