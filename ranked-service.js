@@ -316,22 +316,28 @@ class RankedService {
   async submitMove(userId, gameId, payload) {
     const move = this.validateMovePayload(payload);
     const safeGameId = assertUuid(gameId, 'gameId');
-    return this.repository.transaction(async (tx) => {
+    // A deadline crossing must settle the server-side timeout move before the
+    // stale player request is rejected.  Do not throw from inside that
+    // transaction: PostgreSQL (and the test repository) correctly roll back
+    // on a thrown error, which would otherwise make the returned game view
+    // disagree with persisted state until a later sweeper pass.
+    const outcome = await this.repository.transaction(async (tx) => {
       await this.assertActiveProfile(tx, userId);
       let game = await tx.findGameById(safeGameId, { forUpdate: true });
       this.assertGameOwner(game, userId);
       this.assertGameEvaluationCompatibility(game);
 
       const duplicate = await tx.findMoveByRequestId(game.id, move.requestId);
-      if (duplicate) return { ...duplicate.response, idempotent: true };
+      if (duplicate) return { kind: 'move', result: { ...duplicate.response, idempotent: true } };
 
       if (game.status !== 'active') throw new RankedError(409, 'GAME_FINISHED', 'This Ranked game is already finished.');
       const now = this.nowDate();
       if (asDate(game.deadline).getTime() <= now.getTime()) {
         game = await this.settleDueGameInTransaction(tx, game, now);
-        throw new RankedError(409, 'ROUND_EXPIRED', 'The turn expired before this move was accepted.', {
+        return {
+          kind: 'expired',
           game: this.getGameView(game, await tx.listMoves(game.id))
-        });
+        };
       }
       if (move.expectedRound !== game.currentRound) {
         throw new RankedError(409, 'ROUND_MISMATCH', 'The client round is stale.', {
@@ -341,14 +347,23 @@ class RankedService {
       if (!getLegalCardIds(game.state.playerMask).includes(move.cardId)) {
         throw new RankedError(400, 'ILLEGAL_CARD', 'That card is not available in this game state.');
       }
-      return this.executeRoundInTransaction(tx, game, {
-        playerCardId: move.cardId,
-        requestId: move.requestId,
-        timeout: false,
-        thinkingTimeMs: Math.max(0, Math.min(this.turnTimeLimitForRound(game.currentRound), now.getTime() - asDate(game.turnStartedAt).getTime())),
-        now
-      });
+      return {
+        kind: 'move',
+        result: await this.executeRoundInTransaction(tx, game, {
+          playerCardId: move.cardId,
+          requestId: move.requestId,
+          timeout: false,
+          thinkingTimeMs: Math.max(0, Math.min(this.turnTimeLimitForRound(game.currentRound), now.getTime() - asDate(game.turnStartedAt).getTime())),
+          now
+        })
+      };
     });
+    if (outcome.kind === 'expired') {
+      throw new RankedError(409, 'ROUND_EXPIRED', 'The turn expired before this move was accepted.', {
+        game: outcome.game
+      });
+    }
+    return outcome.result;
   }
 
   async settleDueGameInTransaction(tx, game, now = this.nowDate()) {

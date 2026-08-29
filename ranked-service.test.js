@@ -189,6 +189,33 @@ test('deadline後も読み取りは状態を変えず、明示的なsettleだけ
   assert.ok(move.regret >= 0n);
 });
 
+test('期限切れ後の通常moveはtimeoutを永続化してからROUND_EXPIREDを返す', async () => {
+  const runtime = makeService();
+  const game = await runtime.service.createOrResumeGame(USER_A);
+  runtime.advance(90_000);
+
+  await assert.rejects(
+    runtime.service.submitMove(USER_A, game.id, {
+      expectedRound: 1,
+      cardId: 'ace',
+      requestId: REQUEST_A
+    }),
+    (error) => {
+      assert.equal(error instanceof RankedError, true);
+      assert.equal(error.code, 'ROUND_EXPIRED');
+      assert.equal(error.details.game.currentRound, 2);
+      return true;
+    }
+  );
+
+  const persisted = await runtime.repository.findGameById(game.id);
+  const moves = await runtime.repository.listMoves(game.id);
+  assert.equal(persisted.currentRound, 2);
+  assert.equal(moves.length, 1);
+  assert.equal(moves[0].timeout, true);
+  assert.equal(moves[0].requestId, null, 'late client request must not be recorded as the timeout move');
+});
+
 test('最終ラウンドはserver-sideで15秒締切になり、timeout記録も15秒になる', async () => {
   const runtime = makeService();
   const now = new Date('2026-08-24T00:00:00.000Z');

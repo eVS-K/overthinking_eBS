@@ -151,7 +151,9 @@ test('観戦中は空席参加予約の順番を部屋内で変更でき、席�
   assert.match(client, /観戦者 \$\{roomView\.spectatorCount\}人/);
   assert.match(server, /function getSpectatorSeatQueue\(/);
   assert.match(server, /function normalizePlayerSeats\(/);
-  assert.match(server, /socket\.on\('set_spectator_auto_join'/);
+  // Socket handlers run through the shared guarded registration boundary so
+  // malformed transport payloads cannot terminate the server process.
+  assert.match(server, /onSocketEvent\('set_spectator_auto_join'/);
   assert.match(css, /\.reveal-card\.reveal-spade/);
   assert.match(css, /\.reveal-card\.reveal-heart/);
   assert.match(css, /\.history-item\.winner-p1/);
@@ -193,6 +195,8 @@ test('Private拡張では共通デッキ・終了条件・Blankを待機中だ�
   assert.match(html, /id="expanded-deck-list"/);
   assert.match(html, /id="expanded-round-limit-input"/);
   assert.match(html, /id="expanded-score-target-enabled"/);
+  assert.match(html, /規定の獲得枚数で早期決着にする/);
+  assert.match(html, /指定枚数を先取した時点で総ラウンドを待たずに終了します/);
   assert.match(html, /id="expanded-blank-enabled"/);
   assert.match(client, /function renderExpandedDeckEditor\(/);
   assert.match(client, /function requestPrivateSettingsChange\(/);
@@ -206,6 +210,15 @@ test('Private拡張では共通デッキ・終了条件・Blankを待機中だ�
   assert.match(server, /getPrivateCardRoundPreview/);
   assert.match(css, /\.expanded-private-settings\s*\{/);
   assert.match(css, /\.card-virtual-blank\s*\{/);
+});
+
+test('Private拡張デッキの枚数操作は対象カードを含むアクセシブル名を持つ', () => {
+  const client = read('main.js');
+
+  assert.match(client, /const cardDisplayName = formatCardDisplayName\(card\);/);
+  assert.match(client, /controls\.setAttribute\('aria-label', `\$\{cardDisplayName\} の枚数`\);/);
+  assert.match(client, /minus\.setAttribute\('aria-label', `\$\{cardDisplayName\} を1枚減らす`\);/);
+  assert.match(client, /plus\.setAttribute\('aria-label', `\$\{cardDisplayName\} を1枚増やす`\);/);
 });
 
 test('Privateの設定担当は対戦者へ安全に譲れ、受け取った側へ編集可能な通知を出す', () => {

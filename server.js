@@ -9,6 +9,7 @@ const {
   CLASSIC_ROUND_LIMIT,
   CLASSIC_SCORE_TARGET,
   EXPANDED_PRIVATE_RULESET_ID,
+  MAX_PRIVATE_EXPANSION_SPECTATORS,
   PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS
 } = require('./private-ruleset');
 const {
@@ -366,6 +367,16 @@ function getRoomPrivateConfig(room) {
   return clonePrivateRoomConfig(source);
 }
 
+function getRoomSpectatorLimit(room) {
+  // Expanded Private matches can grow in both card/state complexity and
+  // visual density. Keep their deliberately lower hard cap effective not
+  // only during play, but also while a configured lobby is waiting to start.
+  const config = getRoomPrivateConfig(room);
+  return config && isExpandedPrivateRoomConfig(config)
+    ? Math.min(MAX_SPECTATORS_PER_ROOM, MAX_PRIVATE_EXPANSION_SPECTATORS)
+    : MAX_SPECTATORS_PER_ROOM;
+}
+
 function getRoomTurnTimeLimitMs(room) {
   // Random Match is intentionally never configurable. Ranked has its own
   // REST-side timing and does not use these Socket.IO rooms.
@@ -470,6 +481,13 @@ function updatePrivateRoomSettings(room, {
     return {
       ok: false,
       message: 'ルール設定を確認してください。制限時間・ラウンド数・即時勝利・Blank・デッキの組合せが無効です。'
+    };
+  }
+  const nextSpectatorLimit = getRoomSpectatorLimit({ ...room, privateConfig: nextConfig });
+  if (isExpandedPrivateRoomConfig(nextConfig) && room.spectators.length > nextSpectatorLimit) {
+    return {
+      ok: false,
+      message: `拡張デッキは観戦者を${nextSpectatorLimit}人までに制限しています。観戦者数が減ってから変更してください。`
     };
   }
   if (JSON.stringify(currentConfig) === JSON.stringify(nextConfig)) {
@@ -1037,6 +1055,61 @@ function consumeSocketEvent(socket) {
   state.count += 1;
   socket.data.eventRate = state;
   return true;
+}
+
+// Socket.IO's default parameter only handles an omitted argument; a raw
+// client can still send `null`, an array, or a primitive as the payload.  The
+// game handlers intentionally assume an object after their boundary, so
+// normalize malformed event data before it reaches them.  This is not a
+// substitute for each event's authorization/field validation; it prevents a
+// malformed transport frame from becoming an uncaught process-level error.
+const SOCKET_EVENTS_WITH_OBJECT_PAYLOAD = new Set([
+  'join_room',
+  'join_random_match',
+  'leave_random_queue',
+  'find_next_random_match',
+  'send_chat',
+  'confirm_card',
+  'update_private_settings',
+  'transfer_private_settings_owner',
+  'agree_to_start',
+  'restart_game',
+  'forfeit_game',
+  'set_spectator_auto_join',
+  'switch_to_spectator',
+  'leave_room'
+]);
+
+function isPlainSocketPayload(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function normalizeSocketEventPayload(event) {
+  if (!Array.isArray(event) || !SOCKET_EVENTS_WITH_OBJECT_PAYLOAD.has(event[0])) return;
+  if (!isPlainSocketPayload(event[1])) event[1] = {};
+}
+
+function registerSocketEvent(socket, eventName, handler) {
+  socket.on(eventName, (...args) => {
+    const rejectSafely = (error) => {
+      // Keep malformed or unexpected socket traffic inside this connection.
+      // Event-specific validation happens before state changes; this final
+      // guard protects Guest PvP (and the optional Ranked runtime in the same
+      // Node process) from an uncaught callback exception or rejection.
+      console.warn(`Socket event handler failed: ${eventName}`, error?.name || 'Error');
+      emitError(socket, '操作を処理できませんでした。画面を更新してから、もう一度お試しください。');
+    };
+    try {
+      // The current handlers are synchronous, but keep this boundary safe if
+      // a future handler performs asynchronous work.
+      return Promise.resolve(handler(...args)).catch(rejectSafely);
+    } catch (error) {
+      rejectSafely(error);
+      return undefined;
+    }
+  });
 }
 
 function getParticipant(room, socketId) {
@@ -1667,8 +1740,9 @@ io.on('connection', (socket) => {
   socket.data.clientIp = clientIp;
   emitPresence(socket);
   schedulePresenceBroadcast();
-  socket.use((_event, next) => {
+  socket.use((event, next) => {
     if (consumeSocketEvent(socket)) {
+      normalizeSocketEventPayload(event);
       next();
       return;
     }
@@ -1676,7 +1750,12 @@ io.on('connection', (socket) => {
     socket.disconnect(true);
   });
 
-  socket.on('join_room', (payload = {}) => {
+  // Individual handlers remain authoritative for room ownership and field
+  // validation. This wrapper is a final boundary so a bad event cannot bring
+  // down the shared Node process.
+  const onSocketEvent = (eventName, handler) => registerSocketEvent(socket, eventName, handler);
+
+  onSocketEvent('join_room', (payload = {}) => {
     const roomId = normalizeText(payload.roomId, MAX_ROOM_ID_LENGTH);
     const playerName = normalizeText(payload.playerName, MAX_PLAYER_NAME_LENGTH, 'プレイヤー');
     const clientId = normalizeText(payload.clientId, 80);
@@ -1723,7 +1802,7 @@ io.on('connection', (socket) => {
       return;
     }
     if (!returningPlayer && !returningSpectator) {
-      if (joinPreferences.joinAsSpectator && room.spectators.length >= MAX_SPECTATORS_PER_ROOM) {
+      if (joinPreferences.joinAsSpectator && room.spectators.length >= getRoomSpectatorLimit(room)) {
         emitError(socket, 'この部屋の観戦者数は上限に達しています。');
         return;
       }
@@ -1788,11 +1867,11 @@ io.on('connection', (socket) => {
     emitChatState(socket, room, clientId);
   });
 
-  socket.on('get_presence', () => {
+  onSocketEvent('get_presence', () => {
     emitPresence(socket);
   });
 
-  socket.on('join_random_match', (payload = {}, acknowledge) => {
+  onSocketEvent('join_random_match', (payload = {}, acknowledge) => {
     const requestId = getSuppliedRandomSearchRequestId(payload?.requestId);
     if (acknowledgeKnownRandomSearch(socket, requestId, acknowledge)) return;
     const queued = queueRandomMatch(socket, {
@@ -1806,11 +1885,11 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('leave_random_queue', (payload = {}) => {
+  onSocketEvent('leave_random_queue', (payload = {}) => {
     cancelPendingRandomSearch(socket, payload?.requestId);
   });
 
-  socket.on('find_next_random_match', (payload = {}, acknowledge) => {
+  onSocketEvent('find_next_random_match', (payload = {}, acknowledge) => {
     const reject = (message) => {
       emitError(socket, message);
       replyToChat(acknowledge, { ok: false, message });
@@ -1872,7 +1951,7 @@ io.on('connection', (socket) => {
     replyToChat(acknowledge, { ok: true, requestId: prepared.requestId });
   });
 
-  socket.on('send_chat', (payload = {}, acknowledge) => {
+  onSocketEvent('send_chat', (payload = {}, acknowledge) => {
     const room = getRoom(socket.data.roomId);
     const participant = room && getParticipant(room, socket.id);
     if (!room || !participant) {
@@ -1916,7 +1995,7 @@ io.on('connection', (socket) => {
     replyToChat(acknowledge, { ok: true, sent: result.sent, limit: result.limit });
   });
 
-  socket.on('confirm_card', (payload = {}) => {
+  onSocketEvent('confirm_card', (payload = {}) => {
     const room = getBoundRoom(socket, payload.roomId);
     if (!room || room.gameState !== 'playing') return;
 
@@ -1937,7 +2016,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('update_private_settings', (payload = {}, acknowledge) => {
+  onSocketEvent('update_private_settings', (payload = {}, acknowledge) => {
     const reject = (message) => {
       emitError(socket, message);
       replyToChat(acknowledge, { ok: false, message });
@@ -1967,7 +2046,7 @@ io.on('connection', (socket) => {
     replyToChat(acknowledge, result);
   });
 
-  socket.on('transfer_private_settings_owner', (payload = {}, acknowledge) => {
+  onSocketEvent('transfer_private_settings_owner', (payload = {}, acknowledge) => {
     const reject = (message) => {
       emitError(socket, message);
       replyToChat(acknowledge, { ok: false, message });
@@ -2016,12 +2095,12 @@ io.on('connection', (socket) => {
     refreshPrivateRoomIdleExpiry(room);
     broadcastRoom(room);
   };
-  socket.on('agree_to_start', agreeToStart);
+  onSocketEvent('agree_to_start', agreeToStart);
   // Older cached pages used restart_game. Preserve it as a safe alias while
   // requiring the same two-player consent as the current client.
-  socket.on('restart_game', agreeToStart);
+  onSocketEvent('restart_game', agreeToStart);
 
-  socket.on('forfeit_game', (payload = {}) => {
+  onSocketEvent('forfeit_game', (payload = {}) => {
     const room = getBoundRoom(socket, payload.roomId);
     if (!room) return;
     const player = room.players.find((candidate) => candidate.id === socket.id);
@@ -2032,7 +2111,7 @@ io.on('connection', (socket) => {
     broadcastRoom(room);
   });
 
-  socket.on('set_spectator_auto_join', (payload = {}) => {
+  onSocketEvent('set_spectator_auto_join', (payload = {}) => {
     const room = getBoundRoom(socket, payload.roomId);
     if (!room || room.matchType !== 'private') return;
     const spectator = room.spectators.find((candidate) => candidate.id === socket.id);
@@ -2047,7 +2126,7 @@ io.on('connection', (socket) => {
     broadcastRoom(room);
   });
 
-  socket.on('switch_to_spectator', (payload = {}) => {
+  onSocketEvent('switch_to_spectator', (payload = {}) => {
     const room = getBoundRoom(socket, payload.roomId);
     if (!room) return;
     if (room.matchType === 'random') {
@@ -2056,12 +2135,16 @@ io.on('connection', (socket) => {
     }
     const playerIndex = room.players.findIndex((candidate) => candidate.id === socket.id);
     if (playerIndex < 0) return;
+    if (room.spectators.length >= getRoomSpectatorLimit(room)) {
+      emitError(socket, 'この部屋の観戦者数は上限に達しています。空きができてから観戦者に切り替えてください。');
+      return;
+    }
     const player = room.players[playerIndex];
     clearDisconnectTimer(room.id, player.clientId);
     resetAfterPlayerDeparture(room, playerIndex, { moveToSpectators: true });
   });
 
-  socket.on('leave_room', (payload = {}) => {
+  onSocketEvent('leave_room', (payload = {}) => {
     const room = getBoundRoom(socket, payload?.roomId);
     if (!room) return;
     socket.leave(room.id);
@@ -2088,7 +2171,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
+  onSocketEvent('disconnect', () => {
     untrackSocket(socket.data.clientIp);
     leaveRandomMatchQueue(socket, { notify: false });
     schedulePresenceBroadcast();
@@ -2147,5 +2230,9 @@ module.exports = {
   updatePrivateRoomSettings,
   transferPrivateRoomSettingsOwner,
   rankedDeadlineSweeper,
-  rankedRuntime
+  rankedRuntime,
+  server,
+  SOCKET_EVENTS_WITH_OBJECT_PAYLOAD,
+  normalizeSocketEventPayload,
+  getRoomSpectatorLimit
 };

@@ -709,7 +709,7 @@ function validateExpandedSettingsForClient(request) {
   }
   if (request.scoreTarget !== null
     && (!Number.isSafeInteger(request.scoreTarget) || request.scoreTarget < 1 || request.scoreTarget > request.roundLimit * 2)) {
-    return '即時勝利の枚数は、総ラウンド数で獲得できる範囲にしてください。';
+    return '早期決着の獲得枚数は、総ラウンド数で獲得できる範囲にしてください。';
   }
   return '';
 }
@@ -728,6 +728,7 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
   setText(elements.expandedDeckTotal, `${totalCards} / ${MAX_EXPANDED_DECK_SIZE}枚`);
   elements.expandedDeckList.replaceChildren();
   catalog.forEach((card) => {
+    const cardDisplayName = formatCardDisplayName(card);
     const row = document.createElement('article');
     const isTarot = isTarotCard(card);
     const isNoAbility = isNoAbilityCard(card);
@@ -735,7 +736,7 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
     row.className = `expanded-deck-card${isTarot ? ' expanded-deck-card-tarot' : ''}${hasNonTarotAbility ? ' expanded-deck-card-has-ability' : ''}${isNoAbility ? ' expanded-deck-card-no-ability' : ''}`;
     const copy = document.createElement('div');
     const name = document.createElement('strong');
-    name.textContent = formatCardDisplayName(card);
+    name.textContent = cardDisplayName;
     const type = document.createElement('span');
     type.className = 'expanded-deck-card-type';
     type.textContent = isTarot ? '特殊 TAROT' : '';
@@ -746,18 +747,23 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
     copy.append(description);
     const controls = document.createElement('div');
     controls.className = 'expanded-deck-card-controls';
+    controls.setAttribute('role', 'group');
+    controls.setAttribute('aria-label', `${cardDisplayName} の枚数`);
     const minus = document.createElement('button');
     minus.type = 'button';
     minus.className = 'deck-count-button';
     minus.textContent = '−';
+    minus.setAttribute('aria-label', `${cardDisplayName} を1枚減らす`);
     minus.dataset.deckAction = 'decrement';
     minus.dataset.definitionId = card.id;
     const count = document.createElement('output');
     count.textContent = String(copiesById.get(card.id) || 0);
+    count.setAttribute('aria-label', `${cardDisplayName} の現在の枚数`);
     const plus = document.createElement('button');
     plus.type = 'button';
     plus.className = 'deck-count-button';
     plus.textContent = '+';
+    plus.setAttribute('aria-label', `${cardDisplayName} を1枚増やす`);
     plus.dataset.deckAction = 'increment';
     plus.dataset.definitionId = card.id;
     const currentCopies = copiesById.get(card.id) || 0;
@@ -807,7 +813,7 @@ function renderRoomRules(room) {
   }
 
   const deckCount = isExpanded ? deckCardCount(rules.deck) : 7;
-  const immediateText = rules.scoreTarget === null ? '即時勝利なし' : `${rules.scoreTarget}枚獲得で即時決着`;
+  const immediateText = rules.scoreTarget === null ? '早期決着なし' : `${rules.scoreTarget}枚を先取で早期決着`;
   const cardNames = new Map((rules.deckCatalog || []).map((card) => [card.id, card.name]));
   const deckText = isExpanded
     ? rules.deck.map((entry) => `${cardNames.get(entry.definitionId) || entry.definitionId} ×${entry.copies}`).join(' / ')

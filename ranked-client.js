@@ -374,8 +374,9 @@
         ? await api('/api/ranked/games/active/settle', { method: 'POST', body: {}, stateChanging: true })
         : await api('/api/ranked/games/resume');
       renderGame(result.game);
-      if (result.game?.status !== 'active') await refreshProfile();
-    } catch (error) { setErrorMessage(error); }
+      await refreshCompletedGameViews(result.game);
+      return result.game;
+    } catch (error) { setErrorMessage(error); return null; }
   }
   async function refreshProfile() {
     const result = await api('/api/profile'); renderProfile(result.profile);
@@ -407,6 +408,17 @@
       if (showMessage) setErrorMessage(error);
     }
   }
+  async function refreshCompletedGameViews(game) {
+    if (!game || game.status === 'active') return;
+    // A timeout can finalize a game while the client is recovering from an
+    // otherwise rejected move.  Refresh both independently: an incidental
+    // profile read failure must not leave the public leaderboard stale too.
+    const [profileRefresh] = await Promise.allSettled([
+      refreshProfile(),
+      refreshLeaderboard()
+    ]);
+    if (profileRefresh.status === 'rejected') setErrorMessage(profileRefresh.reason);
+  }
 
   async function startGame() {
     try { setMessage('ランク対戦を準備しています…', { kind: 'info' }); const result = await api('/api/ranked/games', { method: 'POST', body: {}, stateChanging: true }); state.selectedCardId = null; state.retryMove = null; renderGame(result.game); setMessage(''); } catch (error) { setErrorMessage(error); }
@@ -435,6 +447,7 @@
     } catch (error) {
       if (error.details?.game) {
         state.pendingMove = null; state.retryMove = null; state.selectedCardId = null; renderGame(error.details.game);
+        await refreshCompletedGameViews(error.details.game);
       } else {
         // Retain the exact idempotency key so a transport failure can be retried
         // without risking a second server-side decision.
@@ -487,7 +500,11 @@
       const me = await api('/api/auth/me');
       state.csrfCookieName = me.csrfCookieName || state.csrfCookieName;
       setAuthNotice(''); renderProfile(me.profile); setHidden(elements['ranked-loading'], true); setHidden(elements['ranked-dashboard'], false); setHidden(elements['ranked-logout'], false);
-      await refreshActiveGame(); await refreshLeaderboard();
+      const resumedGame = await refreshActiveGame();
+      // A completed resumed game already refreshes both panels above.  Do not
+      // spend a second leaderboard request simply because the page was loaded
+      // on the result screen.
+      if (!resumedGame || resumedGame.status === 'active') await refreshLeaderboard();
     } catch (error) {
       setHidden(elements['ranked-loading'], true);
       setHidden(elements['ranked-auth'], false);

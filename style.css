@@ -506,9 +506,9 @@ input::placeholder { color: #65708b; }
 .expanded-rule-inputs input[type="number"]:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 2px; }
 .expanded-rule-inputs .expanded-immediate-toggle, .expanded-rule-inputs .expanded-blank-toggle { justify-content: flex-start; }
 .expanded-rule-inputs input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--gold-bright); }
-.expanded-blank-toggle > span { display: grid; gap: 2px; min-width: 0; }
-.expanded-blank-toggle strong { color: #fff0bf; font-size: 10px; }
-.expanded-blank-toggle small { color: #9facca; font-size: 8px; line-height: 1.35; }
+.expanded-immediate-toggle > span, .expanded-blank-toggle > span { display: grid; gap: 2px; min-width: 0; }
+.expanded-immediate-toggle strong, .expanded-blank-toggle strong { color: #fff0bf; font-size: 10px; }
+.expanded-immediate-toggle small, .expanded-blank-toggle small { color: #9facca; font-size: 8px; line-height: 1.35; }
 .expanded-score-target-label.is-disabled { opacity: .48; }
 .card-virtual-blank { border-style: dashed; background: linear-gradient(145deg, rgba(69, 85, 119, .76), rgba(25, 33, 53, .94)); }
 .card-virtual-blank .card-center-suit { color: rgba(173, 195, 232, .33); }

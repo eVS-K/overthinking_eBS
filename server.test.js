@@ -28,7 +28,11 @@ const {
   setSpectatorAutoJoin,
   startWhenBothPlayersAgree,
   transferPrivateRoomSettingsOwner,
-  updatePrivateRoomSettings
+  updatePrivateRoomSettings,
+  server,
+  SOCKET_EVENTS_WITH_OBJECT_PAYLOAD,
+  normalizeSocketEventPayload,
+  getRoomSpectatorLimit
 } = require('./server');
 
 test('直前の対戦相手を避けるランダム待機同士は、即時に再マッチしない', () => {
@@ -45,6 +49,55 @@ test('直前の対戦相手を避けるランダム待機同士は、即時に�
 function start(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 }
+
+async function openRawPollingSocket(port) {
+  const origin = 'https://evs-k.github.io';
+  const handshake = await fetch(`http://127.0.0.1:${port}/socket.io/?EIO=4&transport=polling`, {
+    headers: { Origin: origin }
+  });
+  assert.equal(handshake.status, 200);
+  const openPacket = await handshake.text();
+  const sid = JSON.parse(openPacket.slice(1)).sid;
+  assert.equal(typeof sid, 'string');
+  const url = `http://127.0.0.1:${port}/socket.io/?EIO=4&transport=polling&sid=${encodeURIComponent(sid)}`;
+  const headers = { Origin: origin, 'Content-Type': 'text/plain;charset=UTF-8' };
+  const connected = await fetch(url, { method: 'POST', headers, body: '40' });
+  assert.equal(connected.status, 200);
+  return { url, headers };
+}
+
+test('不正なSocket payloadは接続内で拒否され、Node processを停止させない', async (t) => {
+  const port = await start(server);
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const polling = await openRawPollingSocket(port);
+  const malformed = await fetch(polling.url, {
+    method: 'POST',
+    headers: polling.headers,
+    body: '42["join_room",null]'
+  });
+  assert.equal(malformed.status, 200);
+
+  // Socket event delivery is asynchronous.  The regression is the process
+  // survival after a raw `null` payload that previously threw in join_room.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const health = await fetch(`http://127.0.0.1:${port}/health`);
+  assert.equal(health.status, 200);
+
+  await fetch(polling.url, { method: 'POST', headers: polling.headers, body: '41' });
+});
+
+test('object payloadを要求するSocket eventは不正なJSON値を安全な空objectへ正規化する', () => {
+  for (const eventName of SOCKET_EVENTS_WITH_OBJECT_PAYLOAD) {
+    for (const invalidPayload of [null, false, 0, 'text', []]) {
+      const event = [eventName, invalidPayload];
+      normalizeSocketEventPayload(event);
+      assert.deepEqual(event, [eventName, {}], `${eventName} must reject ${typeof invalidPayload}`);
+    }
+  }
+});
 
 test('Guest chatのIP補助quotaはroom内の追跡IP数を上限で抑える', () => {
   const room = createRoom('chat-cap-test');
@@ -197,6 +250,39 @@ test('Private設定はホスト・待機/終了状態だけに限定され、開
     configRevision: 0,
     turnTimeLimitMs: 120_000
   }).ok, false);
+});
+
+test('Private拡張の観戦者上限は通常Privateより低く、超過した設定変更を拒否する', () => {
+  const room = createRoom('expanded-spectator-cap');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '作成者', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '参加者', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+  const classicLimit = getRoomSpectatorLimit(room);
+
+  assert.equal(updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: room.configRevision,
+    ruleset: 'private-expanded-v1'
+  }).ok, true);
+
+  const expandedLimit = getRoomSpectatorLimit(room);
+  assert.ok(expandedLimit < classicLimit);
+  assert.ok(expandedLimit <= 16);
+  room.spectators = Array.from({ length: expandedLimit + 1 }, (_item, index) => ({
+    id: `spectator-${index}`,
+    clientId: `spectator-client-${index}`,
+    name: `観戦者${index}`
+  }));
+  const rejected = updatePrivateRoomSettings(room, {
+    clientId: 'host-client',
+    configRevision: room.configRevision,
+    turnTimeLimitMs: 60_000
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.message, /観戦者を/);
+  assert.equal(getRoomSpectatorLimit(room), expandedLimit, 'rejected update must preserve the active cap');
 });
 
 test('Privateの設定担当は接続中の対戦相手へだけ譲れ、旧担当の編集権限は直ちに失効する', () => {
