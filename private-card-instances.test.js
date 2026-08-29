@@ -46,6 +46,6 @@ test('公開用のTarotカードは能力表示に必要な種類とギリシャ
     definitionId: 'death'
   }));
   assert.equal(tarot.category, 'tarot');
-  assert.equal(tarot.displayMark, 'ξ');
+  assert.equal(tarot.displayMark, 'α');
   assert.equal(tarot.desc, '獲得札が相手以下なら13、上回ると0');
 });

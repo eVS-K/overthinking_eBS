@@ -3,7 +3,7 @@
 このファイルは、対話の要約で失われやすい設計判断を保つための作業メモです。公開仕様そのものではなく、実装時は `game-rules.js` とテストを正本として扱います。秘密情報・認証情報・本番設定値は記録しません。
 
 デッキ編集、互換性判定、設定凍結、通信境界の詳細は、実装設計の
-[`PRIVATE_PVP_EXPANSION_DESIGN.md`](./PRIVATE_PVP_EXPANSION_DESIGN.md) を参照する。更新版の提案書で追加通常札・終了条件・Tarotの能力文は提示された。Blankと、対象選択を伴わない4枚の条件型Tarotは実装済みだが、ロック、伏せ札、対象選択は同設計で保留とする。
+[`PRIVATE_PVP_EXPANSION_DESIGN.md`](./PRIVATE_PVP_EXPANSION_DESIGN.md) を参照する。更新版の提案書で追加通常札・終了条件・Tarotの能力文は提示された。Blankと、対象選択を伴わない6枚の比較型Tarotは実装済みだが、ロック、伏せ札、対象選択は同設計で保留とする。
 カードごとの導入順、必要機能、混在禁止、追加・廃止の運用は
 [`PRIVATE_PVP_CARD_CATALOG_DESIGN.md`](./PRIVATE_PVP_CARD_CATALOG_DESIGN.md) を参照する。
 
@@ -24,9 +24,9 @@
 6. 「この部屋のルール」は対局中央から外し、自分の手札・選択カード・操作ボタンの後ろへ置く。
 7. Blankは拡張Private専用の手札外・再利用可能な仮想札として実装済み。Blankを使う設定では明示的に選択でき、時間切れ時は合法な手札とBlankからサーバーが暗号学的乱数で選ぶ。Blankは手札を消費せず、獲得札・持ち越し札・得点にはならない。
 8. `mayPreventAllLegalPlays` を持つカードを将来デッキへ入れた場合だけ、Blankはサーバー側で必須にする。現在の公開済み通常札だけのデッキでは、Blankを使わない設定を選べる。
-9. Death、Temperance、The Devil、The TowerはPrivate拡張で使用可能。強さは各ラウンドの開始時点の得点・持ち越し札・ラウンド番号からサーバーが確定し、Jokerはその確定強さをコピーする。比較後には強さを履歴へ保存する。
+9. Death、Temperance、The Devil、The Tower、The Chariot、StrengthはPrivate拡張で使用可能。強さは各ラウンドの開始時点の得点・持ち越し札・ラウンド番号からサーバーが確定し、Jokerはその確定強さをコピーする。Strengthは内部で2倍単位の整数として計算し、The Chariotは相手の確定強さが15以上なら通常の数値比較より先に勝つ。比較後には強さを履歴へ保存する。
 10. Privateの設定担当は、待機中・終了後に設定を変えず接続中の対戦相手へ編集権限を譲れる。譲渡先はクライアントから指定できず、サーバーが同じ部屋のもう一人の対戦者に限定する。引継ぎ先だけへ通知し、旧担当者の編集要求は直ちに拒否する。担当者の退出・観戦者への切替時も、残った担当候補へ同じ通知を行う。
-11. Tarotの中央記号は大アルカナ順のギリシャ文字（Fool=α、Death=ξ）を正本のカード定義から配信する。Private拡張を観戦する人には、使用中のTarotだけを選べる一覧と能力説明を表示する。カードの色は、Tarotを紫、Joker／Three／Twoなど能力を持つ通常札を控えめなエメラルド、能力なしの通常札を標準の青で表示する。
+11. Tarotの中央記号はPrivate拡張での導入順にαから割り当てる（Death=α、Temperance=β、The Devil=γ、The Tower=δ、The Chariot=ε、Strength=ζ）。Private拡張を観戦する人には、使用中のTarotだけを選べる一覧と能力説明を表示する。カードの色は、Tarotを紫、Joker／Three／Twoなど能力を持つ通常札を控えめなエメラルド、能力なしの通常札を標準の青で表示する。
 
 ## 拡張時の固定境界
 
@@ -50,16 +50,15 @@
 
 ## Tarotの段階導入案
 
-- 初期導入済み: Death、Temperance、The Devil、The Tower（条件で強さが変わるだけ）。各1枚まで。選択時に現在ラウンドの強さと成立条件を表示し、解決後は結果・履歴にも強さを残す。
-- 仕様確定後: The Chariot、Strength。Strengthは浮動小数点を用いず内部値を整数化して比較する。
+- 初期導入済み: Death、Temperance、The Devil、The Tower、The Chariot、Strength。各1枚まで。選択時に現在ラウンドの強さと成立条件を表示し、解決後は結果・履歴にも強さを残す。Strengthは浮動小数点を用いず内部値を整数化して比較する。
 - 後回し: Fool、Hermit、Magician、Emperor、Wheel of Fortune（コピー、無効化、ラウンド延長）。
 - 拡張エンジン完成後: High Priestess、Empress、Hierophant、Lovers、Justice、Hanged Man、Star、Sun（対象選択、手札追加・破壊、ロック、伏せ札）。
 - 保留: Moon、Judgement、World。Worldの効果は「相手の獲得札を奪い、そのコピーを自分の手札へ加える」と提示されたが、獲得札の実体移送と対象選択が未実装のため保留する。
 
 ## 推奨する実装順
 
-1. 完了: Private設定、設定凍結、選択中カードの説明、拡張用の純粋エンジンとカード実体ID、Ten〜Four、可変デッキ、総ラウンド／即時勝利の終了判定、デッキ編集UI、開始同意・設定revision、Private Socket対局への接続、Blank、条件型Tarot 4枚。
-2. 次: The Chariot／Strengthの比較優先順を仕様・テストとともに確定する、またはロック・伏せ札・受信者別の秘匿表示を設計する。
+1. 完了: Private設定、設定凍結、選択中カードの説明、拡張用の純粋エンジンとカード実体ID、Ten〜Four、可変デッキ、総ラウンド／即時勝利の終了判定、デッキ編集UI、開始同意・設定revision、Private Socket対局への接続、Blank、比較型Tarot 6枚。
+2. 次: ロック・伏せ札・受信者別の秘匿表示を設計する。
 3. 対象選択・コピー・生成型Tarotを一枚ずつ追加。
 
 ## 必須の回帰・安全テスト

@@ -26,7 +26,12 @@ const EXPANDED_TIMEOUT_POLICY_SET = new Set(EXPANDED_TIMEOUT_POLICIES);
 // mechanics themselves.
 const EXPANDED_PRIVATE_FEATURES = Object.freeze([
   'public-cards-v1',
-  'conditional-strength-v1'
+  'conditional-strength-v1',
+  // Strength is evaluated in doubled integer units, while The Chariot
+  // checks the opponent's already-determined strength before the canonical
+  // numeric comparison. Both mechanics remain local to Private expansion.
+  'scaled-strength-v1',
+  'compare-override-v1'
 ]);
 
 // Expansion work must remain bounded before it is ever connected to a room.

@@ -37,6 +37,13 @@ const {
 
 const CLASSIC_DEFINITION_IDS = Object.freeze(CARD_DEFINITIONS.map((card) => card.id));
 
+function recordedStrengthToUnits(value) {
+  if (Number.isSafeInteger(value) && value >= 0) return value * 2;
+  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)\.5$/.test(value)) return null;
+  const wholePart = Number(value.slice(0, -2));
+  return Number.isSafeInteger(wholePart) ? wholePart * 2 + 1 : null;
+}
+
 function cloneHand(hand) {
   if (!Array.isArray(hand)) throw new TypeError('private hand must be an array');
   return hand.map(clonePrivateCardInstance);
@@ -210,13 +217,15 @@ function assertPrivateGameState(state) {
     const canonicalResult = resolution.canonicalResult;
     if (record.canonicalResult !== canonicalResult) throw new RangeError('private history outcome does not match canonical rules');
     const hasStrengthSnapshot = record.p1Strength !== undefined || record.p2Strength !== undefined;
-    if (hasStrengthSnapshot && (
-      !Number.isSafeInteger(record.p1Strength)
-      || !Number.isSafeInteger(record.p2Strength)
-      || record.p1Strength !== resolution.p1.resolvedStrength
-      || record.p2Strength !== resolution.p2.resolvedStrength
-    )) {
-      throw new RangeError('private history strength does not match the round context');
+    if (hasStrengthSnapshot) {
+      const p1StrengthUnits = recordedStrengthToUnits(record.p1Strength);
+      const p2StrengthUnits = recordedStrengthToUnits(record.p2Strength);
+      if (p1StrengthUnits === null
+        || p2StrengthUnits === null
+        || p1StrengthUnits !== resolution.p1.resolvedStrengthUnits
+        || p2StrengthUnits !== resolution.p2.resolvedStrengthUnits) {
+        throw new RangeError('private history strength does not match the round context');
+      }
     }
     const expectedWinnerSeat = canonicalResult === 'p1' ? 'p1' : canonicalResult === 'p2' ? 'p2' : null;
     const physicalPlayedCards = [p1Card, p2Card].filter((card) => !isVirtualBlankCard(card));

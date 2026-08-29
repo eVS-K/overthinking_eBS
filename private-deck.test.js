@@ -63,7 +63,7 @@ test('Private拡張デッキは未実装カード、無効な枚数、未到達�
   assert.throws(() => normalizePrivateDeckEntries([{ definitionId: 'ace', copies: 5 }], createClassicPrivateRuleset()), /only for the expanded/);
 });
 
-test('条件型TarotはPrivate拡張へ1枚だけ入れられ、同名の重複は拒否する', () => {
+test('導入済みTarotはPrivate拡張へ1枚だけ入れられ、同名の重複は拒否する', () => {
   const deck = normalizePrivateDeckEntries([
     { definitionId: 'ace', copies: 1 },
     { definitionId: 'king', copies: 1 },
@@ -72,6 +72,15 @@ test('条件型TarotはPrivate拡張へ1枚だけ入れられ、同名の重複�
     { definitionId: 'death', copies: 1 }
   ], expandedRules());
   assert.equal(deck.find((entry) => entry.definitionId === 'death')?.copies, 1);
+  const chariotAndStrength = normalizePrivateDeckEntries([
+    { definitionId: 'ace', copies: 1 },
+    { definitionId: 'king', copies: 1 },
+    { definitionId: 'queen', copies: 1 },
+    { definitionId: 'the-chariot', copies: 1 },
+    { definitionId: 'strength', copies: 1 }
+  ], expandedRules());
+  assert.equal(chariotAndStrength.find((entry) => entry.definitionId === 'the-chariot')?.copies, 1);
+  assert.equal(chariotAndStrength.find((entry) => entry.definitionId === 'strength')?.copies, 1);
   assert.throws(() => normalizePrivateDeckEntries([
     { definitionId: 'ace', copies: 1 },
     { definitionId: 'king', copies: 1 },

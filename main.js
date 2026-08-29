@@ -12,12 +12,13 @@ const CARD_MARKS = Object.freeze({
   blank: '—', 'virtual-blank': '—'
 });
 const TAROT_CARD_MARKS = Object.freeze({
-  'the-fool': 'α', 'the-magician': 'β', 'the-high-priestess': 'γ', 'the-empress': 'δ',
-  'the-emperor': 'ε', 'the-hierophant': 'ζ', 'the-lovers': 'η', 'the-chariot': 'θ',
-  strength: 'ι', 'the-hermit': 'κ', 'wheel-of-fortune': 'λ', justice: 'μ',
-  'the-hanged-man': 'ν', death: 'ξ', temperance: 'ο', 'the-devil': 'π',
-  'the-tower': 'ρ', 'the-star': 'σ', 'the-moon': 'τ', 'the-sun': 'υ',
-  judgement: 'φ', 'the-world': 'χ'
+  death: 'α', temperance: 'β', 'the-devil': 'γ', 'the-tower': 'δ',
+  'the-chariot': 'ε', strength: 'ζ', 'the-fool': 'η', 'the-magician': 'θ',
+  'the-high-priestess': 'ι', 'the-empress': 'κ', 'the-emperor': 'λ',
+  'the-hierophant': 'μ', 'the-lovers': 'ν', 'the-hermit': 'ξ',
+  'wheel-of-fortune': 'ο', justice: 'π', 'the-hanged-man': 'ρ',
+  'the-star': 'σ', 'the-moon': 'τ', 'the-sun': 'υ', judgement: 'φ',
+  'the-world': 'χ'
 });
 const CLASSIC_PRIVATE_RULESET_ID = 'classic-v1';
 const EXPANDED_PRIVATE_RULESET_ID = 'private-expanded-v1';
@@ -737,7 +738,7 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
     name.textContent = formatCardDisplayName(card);
     const type = document.createElement('span');
     type.className = 'expanded-deck-card-type';
-    type.textContent = isTarot ? '条件型 TAROT' : '';
+    type.textContent = isTarot ? '特殊 TAROT' : '';
     const description = document.createElement('small');
     description.textContent = card.desc || '能力なし';
     copy.append(name);
@@ -1127,8 +1128,9 @@ function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'sp
   elements.selectedCardPanel.classList.toggle('selected-card-has-ability', hasNonTarotAbilityCard(selectedCard));
   setText(elements.selectedCardSuit, suitType === 'heart' ? '♥' : '♠');
   setText(elements.selectedCardName, selectedCard.name);
-  const strengthText = Number.isSafeInteger(selectedCard.roundInfo?.strength)
-    ? `このラウンドの強さ：${selectedCard.roundInfo.strength}`
+  const displayStrength = formatDisplayedStrength(selectedCard.roundInfo?.strength);
+  const strengthText = displayStrength
+    ? `このラウンドの強さ：${displayStrength}`
     : selectedCard.definitionId === 'joker'
       ? 'このラウンドの強さ：相手のカードに合わせます'
       : '';
@@ -1387,7 +1389,8 @@ function createRevealCard(card, owner, seat = '', strength = undefined) {
   cardName.textContent = card.name;
   const power = document.createElement('span');
   power.className = 'reveal-card-strength';
-  power.textContent = Number.isSafeInteger(strength) ? `強さ ${strength}` : '';
+  const displayStrength = formatDisplayedStrength(strength);
+  power.textContent = displayStrength ? `強さ ${displayStrength}` : '';
   const label = document.createElement('span');
   label.textContent = owner;
   node.append(cardName);
@@ -1398,7 +1401,15 @@ function createRevealCard(card, owner, seat = '', strength = undefined) {
 
 function formatRoundCardLabel(card, strength) {
   const name = card?.name || '不明なカード';
-  return Number.isSafeInteger(strength) ? `${name}（強さ${strength}）` : name;
+  const displayStrength = formatDisplayedStrength(strength);
+  return displayStrength ? `${name}（強さ${displayStrength}）` : name;
+}
+
+function formatDisplayedStrength(value) {
+  if (Number.isSafeInteger(value) && value >= 0) return String(value);
+  return typeof value === 'string' && /^(?:0|[1-9][0-9]*)\.5$/.test(value)
+    ? value
+    : '';
 }
 
 function renderHistory(history) {

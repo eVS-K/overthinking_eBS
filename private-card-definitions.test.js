@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  AVAILABLE_CONDITIONAL_TAROT_IDS,
+  AVAILABLE_TAROT_IDS,
   TAROT_GREEK_MARKS_BY_ID,
   getClassicPrivateCardDefinition,
   getPrivateCardDefinition
@@ -27,21 +27,27 @@ test('Blankは仮想札としてengine-ready、Tarotは仕様済みでもデッ�
   assert.equal(world.desc, '相手の獲得札を奪い、そのコピーを手札へ加える');
 });
 
-test('初期導入の4枚の条件型TarotだけはPrivate拡張デッキへ入れられる状態である', () => {
-  assert.deepEqual([...AVAILABLE_CONDITIONAL_TAROT_IDS], ['death', 'temperance', 'the-devil', 'the-tower']);
-  for (const definitionId of AVAILABLE_CONDITIONAL_TAROT_IDS) {
+test('安全に解決できる6枚のTarotだけはPrivate拡張デッキへ入れられる状態である', () => {
+  assert.deepEqual([...AVAILABLE_TAROT_IDS], [
+    'death', 'temperance', 'the-devil', 'the-tower', 'the-chariot', 'strength'
+  ]);
+  for (const definitionId of AVAILABLE_TAROT_IDS) {
     const card = getPrivateCardDefinition(definitionId);
     assert.equal(card.status, 'available');
     assert.equal(card.category, 'tarot');
     assert.equal(card.maxCopiesPerDeck, 1);
-    assert.equal(card.requiresFeatures.includes('conditional-strength-v1'), true);
+    assert.equal(card.requiresFeatures.length > 0, true);
   }
+  assert.equal(getPrivateCardDefinition('the-chariot').requiresFeatures.includes('compare-override-v1'), true);
+  assert.equal(getPrivateCardDefinition('strength').requiresFeatures.includes('scaled-strength-v1'), true);
 });
 
-test('Tarotの表示記号はローマ数字ではなく大アルカナ順のギリシャ文字である', () => {
-  assert.equal(TAROT_GREEK_MARKS_BY_ID['the-fool'], 'α');
-  assert.equal(TAROT_GREEK_MARKS_BY_ID.death, 'ξ');
-  assert.equal(TAROT_GREEK_MARKS_BY_ID.temperance, 'ο');
-  assert.equal(TAROT_GREEK_MARKS_BY_ID['the-tower'], 'ρ');
-  assert.equal(getPrivateCardDefinition('death').displayMark, 'ξ');
+test('Tarotの表示記号は実装順にαから始まるギリシャ文字である', () => {
+  assert.equal(TAROT_GREEK_MARKS_BY_ID.death, 'α');
+  assert.equal(TAROT_GREEK_MARKS_BY_ID.temperance, 'β');
+  assert.equal(TAROT_GREEK_MARKS_BY_ID['the-devil'], 'γ');
+  assert.equal(TAROT_GREEK_MARKS_BY_ID['the-tower'], 'δ');
+  assert.equal(TAROT_GREEK_MARKS_BY_ID['the-chariot'], 'ε');
+  assert.equal(TAROT_GREEK_MARKS_BY_ID.strength, 'ζ');
+  assert.equal(getPrivateCardDefinition('death').displayMark, 'α');
 });

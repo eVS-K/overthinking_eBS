@@ -117,12 +117,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v28/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v28/);
+  assert.match(html, /style\.css\?v=pvp-v29/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v29/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v28/);
+  assert.match(loader, /main\.js\?v=pvp-v29/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -230,12 +230,14 @@ test('Privateの設定担当は対戦者へ安全に譲れ、受け取った側�
   assert.match(css, /\.private-settings-controls\.settings-owner-arrived/);
 });
 
-test('条件型Tarotは選択時・公開済み履歴でだけ現在ラウンドの強さを確認できる', () => {
+test('導入済みTarotは選択時・公開済み履歴でだけ現在ラウンドの強さを確認できる', () => {
   const client = read('main.js');
   const css = read('style.css');
 
-  assert.match(client, /death: 'ξ'/);
-  assert.match(client, /temperance: 'ο'/);
+  assert.match(client, /death: 'α'/);
+  assert.match(client, /temperance: 'β'/);
+  assert.match(client, /'the-chariot': 'ε'/);
+  assert.match(client, /strength: 'ζ'/);
   assert.match(client, /function formatRoundCardLabel\(/);
   assert.match(client, /createRevealCard\(lastRound\.p1Card, firstOwner, 'p1', lastRound\.p1Strength\)/);
   assert.match(client, /round\.p1Strength/);
@@ -249,8 +251,8 @@ test('Tarotはギリシャ文字で表示し、観戦者も対局の下で使用
   const client = read('main.js');
   const css = read('style.css');
 
-  assert.match(client, /death: 'ξ'/);
-  assert.match(client, /temperance: 'ο'/);
+  assert.match(client, /death: 'α'/);
+  assert.match(client, /temperance: 'β'/);
   assert.doesNotMatch(client, /death: 'XIII'/);
   assert.match(html, /id="spectator-tarot-guide"/);
   assert.match(html, /id="spectator-tarot-list"/);

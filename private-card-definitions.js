@@ -26,32 +26,38 @@ const PRIVATE_CARD_STATUSES = Object.freeze([
   'available',
   'retired'
 ]);
-const AVAILABLE_CONDITIONAL_TAROT_IDS = new Set([
+// A Tarot glyph is a private-expansion identifier, not the original major
+// arcana number.  The first playable Tarot therefore begins at α; later
+// additions keep their assigned glyph so existing room history stays legible.
+const AVAILABLE_TAROT_IDS = new Set([
   'death',
   'temperance',
   'the-devil',
-  'the-tower'
+  'the-tower',
+  'the-chariot',
+  'strength'
 ]);
-// Tarotの表示番号は、ローマ数字ではなく大アルカナの並び順に対応する
-// ギリシャ文字を用いる。Fool（0番）をαとして数えるため、Death（XIII）はξ。
+// The display sequence reflects the order in which the Private expansion
+// makes the cards playable. It deliberately starts with the first available
+// card instead of the original major arcana's Roman-numeral positions.
 const TAROT_GREEK_MARKS_BY_ID = Object.freeze({
-  'the-fool': 'α',
-  'the-magician': 'β',
-  'the-high-priestess': 'γ',
-  'the-empress': 'δ',
-  'the-emperor': 'ε',
-  'the-hierophant': 'ζ',
-  'the-lovers': 'η',
-  'the-chariot': 'θ',
-  strength: 'ι',
-  'the-hermit': 'κ',
-  'wheel-of-fortune': 'λ',
-  justice: 'μ',
-  'the-hanged-man': 'ν',
-  death: 'ξ',
-  temperance: 'ο',
-  'the-devil': 'π',
-  'the-tower': 'ρ',
+  death: 'α',
+  temperance: 'β',
+  'the-devil': 'γ',
+  'the-tower': 'δ',
+  'the-chariot': 'ε',
+  strength: 'ζ',
+  'the-fool': 'η',
+  'the-magician': 'θ',
+  'the-high-priestess': 'ι',
+  'the-empress': 'κ',
+  'the-emperor': 'λ',
+  'the-hierophant': 'μ',
+  'the-lovers': 'ν',
+  'the-hermit': 'ξ',
+  'wheel-of-fortune': 'ο',
+  justice: 'π',
+  'the-hanged-man': 'ρ',
   'the-star': 'σ',
   'the-moon': 'τ',
   'the-sun': 'υ',
@@ -209,7 +215,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
     : '',
   status: definition.id === 'blank'
     ? 'engine-ready'
-    : AVAILABLE_CONDITIONAL_TAROT_IDS.has(definition.id)
+    : AVAILABLE_TAROT_IDS.has(definition.id)
       ? 'available'
       : 'specified',
   availability: [EXPANDED_PRIVATE_RULESET_ID],
@@ -251,7 +257,7 @@ module.exports = {
   PRIVATE_CARD_CATALOG,
   PRIVATE_CARD_DEFINITION_BY_ID,
   PRIVATE_CARD_STATUSES,
-  AVAILABLE_CONDITIONAL_TAROT_IDS,
+  AVAILABLE_TAROT_IDS,
   TAROT_GREEK_MARKS_BY_ID,
   getClassicPrivateCardDefinition,
   getPrivateCardDefinition

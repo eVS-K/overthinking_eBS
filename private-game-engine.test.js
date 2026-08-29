@@ -269,3 +269,63 @@ test('条件型Tarotの強さは履歴へ確定保存され、改ざんされた
   forged.history[0].p1Strength = 0;
   assert.throws(() => assertPrivateGameState(forged), /history strength/);
 });
+
+test('Strengthの半分単位の強さは履歴へ表示値として保存され、整数単位で検証される', () => {
+  let state = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null, blankEnabled: true }),
+    instanceNamespace: 'strength-history',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'strength', copies: 1 }
+    ]
+  });
+  state = applyPrivateRound(
+    state,
+    VIRTUAL_BLANK_SELECTION_ID,
+    instanceIdFor(state, 'p2', 'ace')
+  ).state;
+  const result = applyPrivateRound(
+    state,
+    instanceIdFor(state, 'p1', 'jack'),
+    instanceIdFor(state, 'p2', 'strength')
+  );
+  assert.equal(result.p2Strength, '1.5');
+  assert.equal(result.canonicalResult, 'p1');
+  assert.doesNotThrow(() => assertPrivateGameState(result.state));
+
+  const forged = structuredClone(result.state);
+  forged.history[1].p2Strength = '1.0';
+  assert.throws(() => assertPrivateGameState(forged), /history strength/);
+});
+
+test('The Chariotの比較優先はPrivate状態遷移と履歴検証へ同じように適用される', () => {
+  const state = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null }),
+    instanceNamespace: 'chariot-history',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'the-chariot', copies: 1 },
+      { definitionId: 'the-devil', copies: 1 }
+    ]
+  });
+  // Put two physical cards into the stack first, so The Devil has strength15.
+  const stacked = applyPrivateRound(
+    state,
+    instanceIdFor(state, 'p1', 'ace'),
+    instanceIdFor(state, 'p2', 'ace')
+  ).state;
+  const result = applyPrivateRound(
+    stacked,
+    instanceIdFor(stacked, 'p1', 'the-chariot'),
+    instanceIdFor(stacked, 'p2', 'the-devil')
+  );
+  assert.equal(result.canonicalResult, 'p1');
+  assert.equal(result.awardedCards, 4);
+  assert.equal(result.state.p1.score, 4);
+  assert.doesNotThrow(() => assertPrivateGameState(result.state));
+});
