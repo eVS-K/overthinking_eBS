@@ -730,7 +730,8 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
     const row = document.createElement('article');
     const isTarot = isTarotCard(card);
     const isNoAbility = isNoAbilityCard(card);
-    row.className = `expanded-deck-card${isTarot ? ' expanded-deck-card-tarot' : ''}${isNoAbility ? ' expanded-deck-card-no-ability' : ''}`;
+    const hasNonTarotAbility = hasNonTarotAbilityCard(card);
+    row.className = `expanded-deck-card${isTarot ? ' expanded-deck-card-tarot' : ''}${hasNonTarotAbility ? ' expanded-deck-card-has-ability' : ''}${isNoAbility ? ' expanded-deck-card-no-ability' : ''}`;
     const copy = document.createElement('div');
     const name = document.createElement('strong');
     name.textContent = formatCardDisplayName(card);
@@ -990,6 +991,14 @@ function isNoAbilityCard(card) {
   return card?.virtual !== true && card?.desc === '能力なし';
 }
 
+function hasNonTarotAbilityCard(card) {
+  return card?.virtual !== true
+    && !isTarotCard(card)
+    && typeof card?.desc === 'string'
+    && card.desc !== ''
+    && card.desc !== '能力なし';
+}
+
 function formatCardDisplayName(card) {
   const mark = isTarotCard(card) ? getCardMark(card) : '';
   return mark ? `${mark} ${card.name}` : card.name;
@@ -1003,7 +1012,8 @@ function createCard(card, suitType, isInteractive) {
   const cardMark = getCardMark(card);
   const isTarot = isTarotCard(card);
   const isNoAbility = isNoAbilityCard(card);
-  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isTarot ? ' card-tarot' : ''}${isNoAbility ? ' card-no-ability' : ''}${card.roundInfo?.conditional ? ' card-conditional' : ''}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
+  const hasNonTarotAbility = hasNonTarotAbilityCard(card);
+  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isTarot ? ' card-tarot' : ''}${hasNonTarotAbility ? ' card-has-ability' : ''}${isNoAbility ? ' card-no-ability' : ''}${card.roundInfo?.conditional ? ' card-conditional' : ''}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.dataset.cardId = card.id;
   cardElement.setAttribute(
     'aria-label',
@@ -1110,10 +1120,11 @@ function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'sp
     setText(elements.selectedCardStrength, '');
     elements.selectedCardStrength.classList.add('hidden');
     setText(elements.selectedCardDescription, '');
-    elements.selectedCardPanel.classList.remove('selected-card-no-ability');
+    elements.selectedCardPanel.classList.remove('selected-card-no-ability', 'selected-card-has-ability');
     return;
   }
   elements.selectedCardPanel.classList.toggle('selected-card-no-ability', isNoAbilityCard(selectedCard));
+  elements.selectedCardPanel.classList.toggle('selected-card-has-ability', hasNonTarotAbilityCard(selectedCard));
   setText(elements.selectedCardSuit, suitType === 'heart' ? '♥' : '♠');
   setText(elements.selectedCardName, selectedCard.name);
   const strengthText = Number.isSafeInteger(selectedCard.roundInfo?.strength)

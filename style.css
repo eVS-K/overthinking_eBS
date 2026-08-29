@@ -299,10 +299,14 @@ input::placeholder { color: #65708b; }
 .card-heart .card-center-suit { color: rgba(255, 119, 143, .21); }
 .card-spade .card-corner-pip { color: var(--gold); }
 .card-heart .card-corner-pip { color: var(--heart); }
-.card-no-ability { border-color: rgba(164, 183, 216, .62); background: linear-gradient(145deg, rgba(49, 63, 92, .96), rgba(25, 34, 56, .98)); }
-.card-no-ability::before { border-color: rgba(194, 211, 239, .18); }
+.card-no-ability { border-color: rgba(180, 202, 253, .46); background: linear-gradient(145deg, rgba(57, 70, 108, .88), rgba(26, 34, 61, .96)); }
+.card-no-ability::before { border-color: rgba(229, 239, 255, .1); }
 .card-no-ability .card-center-suit { color: rgba(190, 208, 239, .24); }
 .card-no-ability .card-rank-mark { text-shadow: 0 0 14px rgba(200, 218, 248, .38); }
+.card-has-ability { border-color: rgba(94, 207, 163, .67); background: linear-gradient(145deg, rgba(37, 103, 84, .96), rgba(17, 57, 48, .99)); }
+.card-has-ability::before { border-color: rgba(161, 239, 205, .2); }
+.card-has-ability .card-center-suit { color: rgba(148, 235, 195, .27); }
+.card-has-ability .card-rank-mark { text-shadow: 0 0 14px rgba(145, 236, 194, .42); }
 .card-tarot { border-color: rgba(169, 145, 255, .68); background: linear-gradient(145deg, rgba(68, 58, 116, .92), rgba(31, 27, 61, .98)); }
 .card-tarot::before { border-color: rgba(197, 181, 255, .24); }
 .card-tarot .card-rank-mark { font-size: clamp(27px, 3.7vw, 43px); letter-spacing: -.045em; }
@@ -310,6 +314,9 @@ input::placeholder { color: #65708b; }
 .card-tarot.card-spade .card-center-suit { color: rgba(242, 189, 105, .25); }
 .card-tarot.card-heart .card-center-suit { color: rgba(255, 119, 143, .25); }
 .opponent-hand .card { background: linear-gradient(145deg, rgba(83, 49, 75, .83), rgba(40, 27, 49, .95)); }
+.opponent-hand .card-no-ability { background: linear-gradient(145deg, rgba(57, 70, 108, .88), rgba(26, 34, 61, .96)); }
+.opponent-hand .card-has-ability { background: linear-gradient(145deg, rgba(37, 103, 84, .96), rgba(17, 57, 48, .99)); }
+.opponent-hand .card-tarot { background: linear-gradient(145deg, rgba(68, 58, 116, .92), rgba(31, 27, 61, .98)); }
 
 .selected-card-panel { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; margin: -1px 2px 5px; padding: 9px 11px; overflow: hidden; border: 1px solid rgba(242, 189, 105, .44); border-inline-start: 3px solid var(--gold-bright); color: #edf2ff; background: linear-gradient(100deg, rgba(106, 83, 48, .34), rgba(32, 39, 67, .56) 42%, rgba(13, 21, 43, .72)); box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 8px 18px rgba(0, 0, 0, .12); animation: selected-card-enter .26s cubic-bezier(.19,.82,.3,1.1) both; }
 .selected-card-suit { display: grid; place-items: center; width: 38px; aspect-ratio: 1; border: 1px solid rgba(242, 189, 105, .55); border-radius: 50%; color: var(--gold-bright); background: rgba(242, 189, 105, .09); box-shadow: 0 0 16px rgba(242, 189, 105, .18); font-family: var(--serif); font-size: 22px; line-height: 1; }
@@ -317,9 +324,12 @@ input::placeholder { color: #65708b; }
 .selected-card-copy strong { overflow: hidden; color: #fff3ce; font-family: var(--serif); font-size: 18px; font-weight: 400; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; }
 .selected-card-strength { min-height: 14px; overflow-wrap: anywhere; color: #fff0bf; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .04em; line-height: 1.35; }
 .selected-card-copy p { margin: 0; overflow-wrap: anywhere; color: #c8d4eb; font-size: 11px; line-height: 1.45; }
-.selected-card-panel.selected-card-no-ability { border-color: rgba(164, 183, 216, .58); border-inline-start-color: #b9cbed; background: linear-gradient(100deg, rgba(72, 91, 128, .31), rgba(29, 39, 66, .63) 42%, rgba(13, 21, 43, .72)); }
+.selected-card-panel.selected-card-no-ability { border-color: rgba(180, 202, 253, .46); border-inline-start-color: #b9cbed; background: linear-gradient(100deg, rgba(72, 91, 128, .31), rgba(29, 39, 66, .63) 42%, rgba(13, 21, 43, .72)); }
 .selected-card-no-ability .selected-card-suit { border-color: rgba(185, 203, 237, .58); color: #c9d8f0; background: rgba(185, 203, 237, .1); box-shadow: 0 0 16px rgba(185, 203, 237, .16); }
 .selected-card-no-ability .selected-card-copy p { color: #c7d5eb; }
+.selected-card-panel.selected-card-has-ability { border-color: rgba(94, 207, 163, .58); border-inline-start-color: #8ce6bd; background: linear-gradient(100deg, rgba(43, 121, 95, .32), rgba(20, 61, 52, .63) 42%, rgba(13, 31, 36, .72)); }
+.selected-card-has-ability .selected-card-suit { border-color: rgba(140, 230, 189, .58); color: #a2f0ca; background: rgba(140, 230, 189, .1); box-shadow: 0 0 16px rgba(140, 230, 189, .16); }
+.selected-card-has-ability .selected-card-copy p { color: #b7e9d1; }
 
 .table-center { margin: 0 calc(clamp(16px, 3vw, 30px) * -1); padding: 16px clamp(16px, 3vw, 30px) 14px; border-block: 1px solid var(--line); background: rgba(3, 7, 18, .36); }
 .round-dashboard { display: grid; grid-template-columns: 1fr minmax(180px, 1.45fr) 1fr; align-items: center; gap: 16px; }
@@ -415,6 +425,7 @@ input::placeholder { color: #65708b; }
 .next-random-button { min-height: 42px; padding: 10px 13px; border: 1px solid rgba(242, 189, 105, .47); color: var(--gold-bright); background: rgba(242, 189, 105, .08); cursor: pointer; font-size: 10px; font-weight: 700; letter-spacing: .04em; transition: border-color .2s, color .2s, background .2s, transform .2s; }
 .next-random-button:hover:not(:disabled) { border-color: var(--gold); color: #fff4d7; background: rgba(242, 189, 105, .16); transform: translateY(-1px); }
 .surrender-button:disabled, .spectator-switch-button:disabled, .next-random-button:disabled { cursor: not-allowed; opacity: .48; }
+.spectator-utilities { display: grid; gap: 12px; min-width: 0; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
 .spectator-seat-panel { display: grid; gap: 10px; margin-top: 11px; padding: 12px; border: 1px solid rgba(141, 183, 255, .34); background: linear-gradient(135deg, rgba(71, 100, 173, .15), rgba(6, 11, 25, .22)); }
 .spectator-seat-panel > div { display: grid; gap: 4px; }
 .spectator-seat-panel .section-label { color: var(--blue-bright); }
@@ -480,7 +491,8 @@ input::placeholder { color: #65708b; }
 .expanded-deck-card strong { overflow: hidden; color: #e8efff; font-family: var(--serif); font-size: 13px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .expanded-deck-card small { overflow: hidden; color: #9facca; font-size: 8px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .expanded-deck-card-tarot { border-color: rgba(169, 145, 255, .4); background: linear-gradient(135deg, rgba(87, 67, 139, .17), rgba(5, 11, 25, .34)); }
-.expanded-deck-card-no-ability { border-color: rgba(164, 183, 216, .32); background: linear-gradient(135deg, rgba(61, 78, 111, .14), rgba(5, 11, 25, .34)); }
+.expanded-deck-card-has-ability { border-color: rgba(94, 207, 163, .42); background: linear-gradient(135deg, rgba(43, 121, 95, .19), rgba(5, 25, 25, .34)); }
+.expanded-deck-card-no-ability { border-color: rgba(180, 202, 253, .32); background: linear-gradient(135deg, rgba(61, 78, 111, .18), rgba(5, 11, 25, .34)); }
 .expanded-deck-card-type { color: #d4c5ff; font-family: var(--mono); font-size: 7px; font-weight: 700; letter-spacing: .1em; }
 .expanded-deck-card-controls { display: grid; grid-template-columns: 30px 24px 30px; align-items: center; gap: 3px; flex: 0 0 auto; }
 .deck-count-button { min-height: 30px; padding: 0; border: 1px solid rgba(242, 189, 105, .55); color: var(--gold-bright); background: rgba(16, 24, 48, .86); font-family: var(--mono); font-size: 16px; line-height: 1; cursor: pointer; }
@@ -638,6 +650,7 @@ input::placeholder { color: #65708b; }
   .reveal-card strong { font-size: 16px; }
   .reveal-versus span { font-size: 8px; letter-spacing: .04em; }
   .spectator-seat-panel { gap: 8px; margin-top: 9px; padding: 10px; }
+  .spectator-utilities { gap: 10px; margin-top: 18px; padding-top: 15px; }
   .spectator-seat-option strong { font-size: 11px; }
   .spectator-seat-option small, .spectator-seat-panel p { font-size: 9px; }
   .spectator-tarot-guide { gap: 8px; margin-top: 9px; padding: 10px; }
