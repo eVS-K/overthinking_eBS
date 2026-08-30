@@ -117,12 +117,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v30/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v30/);
+  assert.match(html, /style\.css\?v=pvp-v32/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v32/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v30/);
+  assert.match(loader, /main\.js\?v=pvp-v32/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -305,12 +305,51 @@ test('Private設定プリセットは任意ログインで保存し、適用時�
   assert.match(css, /\.private-preset-actions button\s*\{/);
 });
 
-test('Joker・2・3の能力カードは可読性を保った穏やかなエメラルド配色を使う', () => {
+test('Joker・2・3の能力カードは青い通常札に半透明の緑を重ね、枠線で区別する', () => {
   const css = read('style.css');
 
-  assert.match(css, /\.card-has-ability\s*\{[^}]*rgba\(67, 113, 102/);
-  assert.match(css, /\.selected-card-panel\.selected-card-has-ability\s*\{[^}]*rgba\(74, 129, 115/);
-  assert.match(css, /\.expanded-deck-card-has-ability\s*\{[^}]*rgba\(74, 129, 115/);
+  assert.match(css, /\.card-has-ability\s*\{[^}]*border-color:\s*#8ccbb7;[^}]*rgba\(57, 70, 108/);
+  assert.match(css, /\.card-has-ability::after\s*\{[^}]*rgba\(84, 189, 151, \.22\)/);
+  assert.match(css, /\.selected-card-panel\.selected-card-has-ability\s*\{[^}]*border-color:\s*#8ccbb7;[^}]*rgba\(84, 189, 151, \.18\)/);
+  assert.match(css, /\.expanded-deck-card-has-ability\s*\{[^}]*border-color:\s*#8ccbb7;[^}]*rgba\(84, 189, 151, \.17\)/);
+});
+
+test('拡張デッキ一覧は、続きがあるときにフェードとスクロール案内を出す', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="expanded-deck-scroll"/);
+  assert.match(html, /id="expanded-deck-scroll-hint"/);
+  assert.match(html, /id="expanded-deck-scroll-description"/);
+  assert.match(html, /aria-describedby="expanded-deck-scroll-description"/);
+  assert.match(html, /下へスクロールして、すべてのカードを見る/);
+  assert.match(client, /function updateExpandedDeckScrollCue\(/);
+  assert.match(client, /elements\.expandedDeckList\.addEventListener\('scroll', updateExpandedDeckScrollCue/);
+  assert.match(client, /window\.addEventListener\('resize', \(\) => \{[\s\S]*?updateExpandedDeckScrollCue\(\);/);
+  assert.match(css, /\.expanded-deck-scroll\.has-more-below::after\s*\{\s*opacity:\s*1;/);
+  assert.match(css, /\.expanded-deck-scroll\.has-more-below \.expanded-deck-scroll-hint\s*\{\s*opacity:\s*1;/);
+});
+
+test('モバイルの手札と組み合わせ早見表は、横に続きがある側だけをフェードで示す', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="matchup-table-scroll" class="matchup-table-scroll horizontal-scroll-cue"/);
+  assert.match(html, /id="matchup-table-wrap"[^>]*aria-describedby="matchup-table-scroll-description"/);
+  assert.match(html, /id="opp-hand-scroll" class="card-scroll horizontal-scroll-cue"/);
+  assert.match(html, /id="my-hand-scroll" class="card-scroll horizontal-scroll-cue"/);
+  assert.match(html, /id="opp-hand"[^>]*aria-describedby="opp-hand-scroll-description"/);
+  assert.match(html, /id="my-hand"[^>]*aria-describedby="my-hand-scroll-description"/);
+  assert.match(client, /function updateHorizontalScrollCue\(scroller, wrapper\)/);
+  assert.match(client, /wrapper\.classList\.toggle\('has-more-left', hasMoreLeft\);/);
+  assert.match(client, /wrapper\.classList\.toggle\('has-more-right', hasMoreRight\);/);
+  assert.match(client, /elements\.myHand\.addEventListener\('scroll'/);
+  assert.match(client, /elements\.opponentHand\.addEventListener\('scroll'/);
+  assert.match(client, /elements\.matchupTableWrap\.addEventListener\('scroll'/);
+  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.horizontal-scroll-cue::before, \.horizontal-scroll-cue::after/);
+  assert.match(css, /\.horizontal-scroll-cue\.has-more-left::before, \.horizontal-scroll-cue\.has-more-right::after\s*\{\s*opacity:\s*1;/);
 });
 
 test('切断中の対局は10秒間停止し、復帰期限を参加者へ明示する', () => {

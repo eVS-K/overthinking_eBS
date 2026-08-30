@@ -198,7 +198,8 @@ input::placeholder { color: #65708b; }
 .legend-win { color: #fff0c8; background: rgba(242, 189, 105, .2); }
 .legend-loss { color: #ffd9e0; background: rgba(255, 119, 143, .2); }
 .legend-draw { color: #dbe9ff; background: rgba(141, 183, 255, .2); }
-.matchup-table-wrap { margin-top: 13px; overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--line); scrollbar-color: var(--line-strong) transparent; -webkit-overflow-scrolling: touch; }
+.matchup-table-scroll { position: relative; min-width: 0; margin-top: 13px; --scroll-fade-color: rgba(8, 14, 29, .97); }
+.matchup-table-wrap { margin-top: 0; overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--line); scrollbar-color: var(--line-strong) transparent; -webkit-overflow-scrolling: touch; }
 .matchup-table-wrap:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 3px; }
 .matchup-table { width: 100%; min-width: 570px; border-collapse: collapse; color: #dce6fa; font-family: var(--mono); font-size: 10px; text-align: center; }
 .matchup-table th, .matchup-table td { min-width: 54px; height: 35px; padding: 5px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -261,6 +262,7 @@ input::placeholder { color: #65708b; }
 .score-box strong.score-pop { animation: score-pop .5s ease; }
 .score-award { position: absolute; right: 0; bottom: -19px; z-index: 2; color: var(--gold-bright); font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .08em; pointer-events: none; animation: score-award 1.15s cubic-bezier(.16,.7,.22,1) both; white-space: nowrap; }
 
+.card-scroll { position: relative; min-width: 0; --scroll-fade-color: rgba(18, 25, 47, .98); }
 .card-row { display: flex; gap: clamp(5px, 1.1vw, 10px); inline-size: 100%; min-width: 0; max-inline-size: 100%; padding: 9px 2px 15px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; scroll-padding-inline: 2px; scroll-snap-type: x proximity; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
 .card {
   position: relative;
@@ -303,10 +305,11 @@ input::placeholder { color: #65708b; }
 .card-no-ability::before { border-color: rgba(229, 239, 255, .1); }
 .card-no-ability .card-center-suit { color: rgba(190, 208, 239, .24); }
 .card-no-ability .card-rank-mark { text-shadow: 0 0 14px rgba(200, 218, 248, .38); }
-.card-has-ability { border-color: rgba(126, 204, 181, .66); background: linear-gradient(145deg, rgba(67, 113, 102, .96), rgba(32, 75, 67, .99)); }
-.card-has-ability::before { border-color: rgba(181, 237, 219, .2); }
-.card-has-ability .card-center-suit { color: rgba(174, 235, 213, .28); }
-.card-has-ability .card-rank-mark { text-shadow: 0 0 14px rgba(171, 236, 211, .4); }
+.card-has-ability { border-color: #8ccbb7; background: linear-gradient(145deg, rgba(57, 70, 108, .88), rgba(26, 34, 61, .96)); }
+.card-has-ability::before { z-index: 1; border-color: rgba(177, 231, 213, .25); }
+.card-has-ability::after { position: absolute; z-index: 0; inset: 0; content: ""; pointer-events: none; background: linear-gradient(145deg, rgba(84, 189, 151, .22), rgba(30, 120, 93, .18)); }
+.card-has-ability .card-center-suit { color: rgba(190, 208, 239, .24); }
+.card-has-ability .card-rank-mark { text-shadow: 0 0 14px rgba(200, 218, 248, .38); }
 .card-tarot { border-color: rgba(169, 145, 255, .68); background: linear-gradient(145deg, rgba(68, 58, 116, .92), rgba(31, 27, 61, .98)); }
 .card-tarot::before { border-color: rgba(197, 181, 255, .24); }
 .card-tarot .card-rank-mark { font-size: clamp(27px, 3.7vw, 43px); letter-spacing: -.045em; }
@@ -315,7 +318,7 @@ input::placeholder { color: #65708b; }
 .card-tarot.card-heart .card-center-suit { color: rgba(255, 119, 143, .25); }
 .opponent-hand .card { background: linear-gradient(145deg, rgba(83, 49, 75, .83), rgba(40, 27, 49, .95)); }
 .opponent-hand .card-no-ability { background: linear-gradient(145deg, rgba(57, 70, 108, .88), rgba(26, 34, 61, .96)); }
-.opponent-hand .card-has-ability { background: linear-gradient(145deg, rgba(67, 113, 102, .96), rgba(32, 75, 67, .99)); }
+.opponent-hand .card-has-ability { background: linear-gradient(145deg, rgba(57, 70, 108, .88), rgba(26, 34, 61, .96)); }
 .opponent-hand .card-tarot { background: linear-gradient(145deg, rgba(68, 58, 116, .92), rgba(31, 27, 61, .98)); }
 
 .selected-card-panel { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; margin: -1px 2px 5px; padding: 9px 11px; overflow: hidden; border: 1px solid rgba(242, 189, 105, .44); border-inline-start: 3px solid var(--gold-bright); color: #edf2ff; background: linear-gradient(100deg, rgba(106, 83, 48, .34), rgba(32, 39, 67, .56) 42%, rgba(13, 21, 43, .72)); box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 8px 18px rgba(0, 0, 0, .12); animation: selected-card-enter .26s cubic-bezier(.19,.82,.3,1.1) both; }
@@ -327,9 +330,9 @@ input::placeholder { color: #65708b; }
 .selected-card-panel.selected-card-no-ability { border-color: rgba(180, 202, 253, .46); border-inline-start-color: #b9cbed; background: linear-gradient(100deg, rgba(72, 91, 128, .31), rgba(29, 39, 66, .63) 42%, rgba(13, 21, 43, .72)); }
 .selected-card-no-ability .selected-card-suit { border-color: rgba(185, 203, 237, .58); color: #c9d8f0; background: rgba(185, 203, 237, .1); box-shadow: 0 0 16px rgba(185, 203, 237, .16); }
 .selected-card-no-ability .selected-card-copy p { color: #c7d5eb; }
-.selected-card-panel.selected-card-has-ability { border-color: rgba(126, 204, 181, .58); border-inline-start-color: #a1e3cb; background: linear-gradient(100deg, rgba(74, 129, 115, .32), rgba(37, 79, 71, .63) 42%, rgba(18, 38, 42, .72)); }
-.selected-card-has-ability .selected-card-suit { border-color: rgba(161, 227, 203, .58); color: #b7f0dc; background: rgba(161, 227, 203, .1); box-shadow: 0 0 16px rgba(161, 227, 203, .16); }
-.selected-card-has-ability .selected-card-copy p { color: #caecdf; }
+.selected-card-panel.selected-card-has-ability { border-color: #8ccbb7; border-inline-start-color: #a4dfca; background: linear-gradient(100deg, rgba(84, 189, 151, .18), rgba(48, 109, 102, .2) 42%, rgba(13, 21, 43, .72)), linear-gradient(100deg, rgba(72, 91, 128, .31), rgba(29, 39, 66, .63) 42%, rgba(13, 21, 43, .72)); }
+.selected-card-has-ability .selected-card-suit { border-color: #a4dfca; color: #b7f0dc; background: rgba(164, 223, 202, .1); box-shadow: 0 0 16px rgba(164, 223, 202, .16); }
+.selected-card-has-ability .selected-card-copy p { color: #cfe6e1; }
 
 .table-center { margin: 0 calc(clamp(16px, 3vw, 30px) * -1); padding: 16px clamp(16px, 3vw, 30px) 14px; border-block: 1px solid var(--line); background: rgba(3, 7, 18, .36); }
 .round-dashboard { display: grid; grid-template-columns: 1fr minmax(180px, 1.45fr) 1fr; align-items: center; gap: 16px; }
@@ -509,13 +512,19 @@ input::placeholder { color: #65708b; }
 .expanded-private-settings-heading .section-label { color: var(--blue-bright); }
 .expanded-private-settings-heading p { margin: 0; color: #afbfdb; font-size: 9px; line-height: 1.45; }
 .expanded-private-settings-heading > strong { flex: 0 0 auto; color: #fff0bf; font-family: var(--mono); font-size: 10px; }
-.expanded-deck-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 270px; padding-right: 2px; overflow: auto; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; }
+.expanded-deck-scroll { position: relative; min-width: 0; }
+.expanded-deck-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 270px; padding: 0 4px 38px 0; overflow: auto; overscroll-behavior: contain; scrollbar-color: var(--line-strong) transparent; scrollbar-width: thin; }
+.expanded-deck-list:focus-visible { outline: 2px solid var(--blue-bright); outline-offset: 3px; }
+.expanded-deck-scroll::after { position: absolute; right: 0; bottom: 0; left: 0; height: 54px; content: ""; pointer-events: none; opacity: 0; background: linear-gradient(to bottom, rgba(10, 18, 38, 0), rgba(10, 18, 38, .97) 72%); transition: opacity .18s ease; }
+.expanded-deck-scroll.has-more-below::after { opacity: 1; }
+.expanded-deck-scroll-hint { position: absolute; z-index: 1; right: 7px; bottom: 6px; left: 7px; margin: 0; pointer-events: none; opacity: 0; color: #d5e3ff; font-family: var(--mono); font-size: 8px; font-weight: 700; letter-spacing: .02em; text-align: center; text-shadow: 0 1px 5px #081022; transform: translateY(3px); transition: opacity .18s ease, transform .18s ease; }
+.expanded-deck-scroll.has-more-below .expanded-deck-scroll-hint { opacity: 1; transform: translateY(0); }
 .expanded-deck-card { display: flex; align-items: center; justify-content: space-between; gap: 7px; min-width: 0; padding: 7px 8px; border: 1px solid rgba(180, 202, 253, .18); background: rgba(5, 11, 25, .32); }
 .expanded-deck-card > div:first-child { display: grid; min-width: 0; gap: 2px; }
 .expanded-deck-card strong { overflow: hidden; color: #e8efff; font-family: var(--serif); font-size: 13px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .expanded-deck-card small { overflow: hidden; color: #9facca; font-size: 8px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .expanded-deck-card-tarot { border-color: rgba(169, 145, 255, .4); background: linear-gradient(135deg, rgba(87, 67, 139, .17), rgba(5, 11, 25, .34)); }
-.expanded-deck-card-has-ability { border-color: rgba(126, 204, 181, .42); background: linear-gradient(135deg, rgba(74, 129, 115, .2), rgba(11, 33, 34, .34)); }
+.expanded-deck-card-has-ability { border-color: #8ccbb7; background: linear-gradient(135deg, rgba(84, 189, 151, .17), rgba(30, 120, 93, .14)), linear-gradient(135deg, rgba(61, 78, 111, .18), rgba(5, 11, 25, .34)); }
 .expanded-deck-card-no-ability { border-color: rgba(180, 202, 253, .32); background: linear-gradient(135deg, rgba(61, 78, 111, .18), rgba(5, 11, 25, .34)); }
 .expanded-deck-card-type { color: #d4c5ff; font-family: var(--mono); font-size: 7px; font-weight: 700; letter-spacing: .1em; }
 .expanded-deck-card-controls { display: grid; grid-template-columns: 30px 24px 30px; align-items: center; gap: 3px; flex: 0 0 auto; }
@@ -636,6 +645,22 @@ input::placeholder { color: #65708b; }
   .matchup-guide, .rule-strength { padding: 12px; }
   .matchup-table { min-width: 530px; }
   .matchup-table th, .matchup-table td { min-width: 50px; }
+  /* Keep rows and the matrix readable instead of shrinking them into an
+     unusable layout.  The fades appear only on the side that can be swiped. */
+  .horizontal-scroll-cue::before, .horizontal-scroll-cue::after {
+    position: absolute;
+    z-index: 2;
+    top: 1px;
+    bottom: 1px;
+    width: 38px;
+    content: "";
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .16s ease;
+  }
+  .horizontal-scroll-cue::before { left: 1px; background: linear-gradient(to right, var(--scroll-fade-color), transparent); }
+  .horizontal-scroll-cue::after { right: 1px; background: linear-gradient(to left, var(--scroll-fade-color), transparent); }
+  .horizontal-scroll-cue.has-more-left::before, .horizontal-scroll-cue.has-more-right::after { opacity: 1; }
   .strategy-note { padding: 12px; font-size: 11px; }
   #game-screen { width: calc(100% - 16px); gap: 10px; margin: 8px auto calc(62px + env(safe-area-inset-bottom)); overflow-x: hidden; overflow-x: clip; }
   .game-shell, .sidebar { min-width: 0; max-width: 100%; overflow-x: hidden; overflow-x: clip; }

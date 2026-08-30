@@ -5,12 +5,13 @@ const assert = require('node:assert/strict');
 const { CARD_DEFINITIONS, resolveRound } = require('./game-rules');
 const { createClassicPrivateCardInstances } = require('./private-card-instances');
 const { createClassicPrivateRuleset, createExpandedPrivateRuleset } = require('./private-ruleset');
-const { VIRTUAL_BLANK_SELECTION_ID } = require('./private-blank');
+const { VIRTUAL_BLANK_SELECTION_ID, createVirtualBlankCard } = require('./private-blank');
 const {
   applyPrivateRound,
   assertPrivateGameState,
   createClassicPrivateGameState,
   createExpandedPrivateGameState,
+  getPrivateTerminalReason,
   isTerminalPrivateGameState,
   legalPrivateCardInstanceIds,
   privateMatchScore,
@@ -328,4 +329,107 @@ test('The Chariotの比較優先はPrivate状態遷移と履歴検証へ同じ�
   assert.equal(result.awardedCards, 4);
   assert.equal(result.state.p1.score, 4);
   assert.doesNotThrow(() => assertPrivateGameState(result.state));
+});
+
+test('保存済みstateは仮想Blankの混入、カード消失、凍結deck分布の改ざんを拒否する', () => {
+  const classic = createClassicPrivateGameState({ instanceNamespace: 'state-invariants' });
+  const missingCards = structuredClone(classic);
+  missingCards.p1.hand.pop();
+  missingCards.p2.hand.pop();
+  assert.throws(() => assertPrivateGameState(missingCards), /score and stack/);
+
+  const expanded = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null, blankEnabled: true }),
+    instanceNamespace: 'state-invariants-expanded',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'ten', copies: 1 }
+    ]
+  });
+  const virtualInHand = structuredClone(expanded);
+  virtualInHand.p1.hand[0] = createVirtualBlankCard();
+  assert.throws(() => assertPrivateGameState(virtualInHand), /cannot be held/);
+
+  const played = applyPrivateRound(expanded, instanceIdFor(expanded, 'p1', 'ace'), instanceIdFor(expanded, 'p2', 'king')).state;
+  const changedDefinition = structuredClone(played);
+  changedDefinition.p1.hand.find((card) => card.definitionId === 'queen').definitionId = 'jack';
+  assert.throws(() => assertPrivateGameState(changedDefinition), /frozen deck snapshot/);
+});
+
+test('Private終局のmatch scoreはp2勝利・引き分け・未終局を区別する', () => {
+  const initial = createClassicPrivateGameState({ instanceNamespace: 'match-score-initial' });
+  assert.throws(() => privateMatchScore(initial), /not terminal/);
+
+  let p2Wins = createClassicPrivateGameState({ instanceNamespace: 'match-score-p2' });
+  for (const [p1DefinitionId, p2DefinitionId] of [
+    ['ace', 'two'],
+    ['king', 'ace'],
+    ['queen', 'king'],
+    ['jack', 'queen'],
+    ['joker', 'three']
+  ]) {
+    p2Wins = applyPrivateRound(
+      p2Wins,
+      instanceIdFor(p2Wins, 'p1', p1DefinitionId),
+      instanceIdFor(p2Wins, 'p2', p2DefinitionId)
+    ).state;
+  }
+  assert.equal(isTerminalPrivateGameState(p2Wins), true);
+  assert.equal(privateMatchScore(p2Wins), 0);
+
+  let draw = createClassicPrivateGameState({ instanceNamespace: 'match-score-draw' });
+  for (const card of CARD_DEFINITIONS) {
+    draw = applyPrivateRound(
+      draw,
+      instanceIdFor(draw, 'p1', card.id),
+      instanceIdFor(draw, 'p2', card.id)
+    ).state;
+  }
+  assert.equal(isTerminalPrivateGameState(draw), true);
+  assert.equal(privateMatchScore(draw), 0.5);
+});
+
+test('Private state validatorは再接続時の壊れた構造を状態変更前に拒否する', () => {
+  const classic = createClassicPrivateGameState({ instanceNamespace: 'malformed-classic' });
+  assert.equal(getPrivateTerminalReason(classic), null);
+
+  const classicBlank = structuredClone(classic);
+  classicBlank.p1.hand[0] = createVirtualBlankCard();
+  assert.throws(() => assertPrivateGameState(classicBlank), /not enabled/);
+  const classicDeck = structuredClone(classic);
+  classicDeck.deck = [];
+  assert.throws(() => assertPrivateGameState(classicDeck), /cannot carry/);
+  const invalidRound = structuredClone(classic);
+  invalidRound.round = 0;
+  assert.throws(() => assertPrivateGameState(invalidRound), /invalid private round/);
+  const invalidPlayer = structuredClone(classic);
+  invalidPlayer.p1 = { hand: 'not-an-array', score: 0 };
+  assert.throws(() => assertPrivateGameState(invalidPlayer), /invalid private p1/);
+  const invalidStack = structuredClone(classic);
+  invalidStack.stack = {};
+  assert.throws(() => assertPrivateGameState(invalidStack), /stack must be an array/);
+  const invalidHistory = structuredClone(classic);
+  invalidHistory.history = [null];
+  assert.throws(() => assertPrivateGameState(invalidHistory), /invalid private history record/);
+
+  const expanded = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null }),
+    instanceNamespace: 'malformed-expanded',
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'ten', copies: 1 }
+    ]
+  });
+  const missingDeck = structuredClone(expanded);
+  delete missingDeck.deck;
+  assert.throws(() => assertPrivateGameState(missingDeck), /requires a deck snapshot/);
+  const wrongInitialCount = structuredClone(expanded);
+  wrongInitialCount.initialCardsPerSide = 4;
+  assert.throws(() => assertPrivateGameState(wrongInitialCount), /does not match initial card count/);
 });

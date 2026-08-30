@@ -18,7 +18,7 @@
     if (mainLoaded) return;
     mainLoaded = true;
     const mainScript = document.createElement('script');
-    mainScript.src = 'main.js?v=pvp-v30';
+    mainScript.src = 'main.js?v=pvp-v32';
     mainScript.defer = true;
     document.head.append(mainScript);
   }

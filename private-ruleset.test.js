@@ -11,9 +11,13 @@ const {
   EXPANDED_PRIVATE_RULESET_ID,
   MAX_PRIVATE_CARD_INSTANCES,
   assertClassicPrivateRuleset,
+  assertExpandedPrivateRuleset,
   assertPrivateExpansionLimits,
+  assertPrivateRuleset,
   createClassicPrivateRuleset,
   createExpandedPrivateRuleset,
+  getPrivateRulesetFeatures,
+  isSupportedExpandedTimeoutPolicy,
   isSupportedPrivateTurnTimeLimit
 } = require('./private-ruleset');
 
@@ -89,4 +93,43 @@ test('Private拡張presetは総ラウンド・任意の即時勝利・タイム�
   assert.throws(() => createExpandedPrivateRuleset({ roundLimit: 0 }), /round limit/);
   assert.throws(() => createExpandedPrivateRuleset({ scoreTarget: -1 }), /score target/);
   assert.equal(createExpandedPrivateRuleset({ timeoutPolicy: 'forged' }).timeoutPolicy, 'random-legal');
+});
+
+test('Private ruleset validatorは不正な型・ID・終了条件・派生timeoutを拒否する', () => {
+  const classic = createClassicPrivateRuleset();
+  const expanded = createExpandedPrivateRuleset({ blankEnabled: true, roundLimit: 8, scoreTarget: null });
+  assert.doesNotThrow(() => assertPrivateRuleset(classic));
+  assert.doesNotThrow(() => assertPrivateRuleset(expanded));
+  assert.equal(getPrivateRulesetFeatures(classic).length, 0);
+  assert.ok(getPrivateRulesetFeatures(expanded).length > 0);
+  assert.equal(isSupportedExpandedTimeoutPolicy('random-legal'), true);
+  assert.equal(isSupportedExpandedTimeoutPolicy('random-legal-with-blank'), true);
+  assert.equal(isSupportedExpandedTimeoutPolicy('forged'), false);
+
+  assert.throws(() => assertClassicPrivateRuleset(null), TypeError);
+  assert.throws(() => assertClassicPrivateRuleset({ ...classic, ruleset: 'future' }), /unsupported/);
+  assert.throws(() => assertClassicPrivateRuleset({ ...classic, turnTimeLimitMs: 15_000 }), /turn time/);
+  assert.throws(() => assertPrivateRuleset({ ruleset: 'future' }), /unsupported/);
+  assert.throws(() => assertExpandedPrivateRuleset(null), TypeError);
+  assert.throws(() => assertExpandedPrivateRuleset({ ...expanded, ruleset: 'future' }), /unsupported/);
+  assert.throws(() => assertExpandedPrivateRuleset({ ...expanded, turnTimeLimitMs: 15_000 }), /turn time/);
+  assert.throws(() => assertExpandedPrivateRuleset({ ...expanded, roundLimit: 0 }), /round limit/);
+  assert.throws(() => assertExpandedPrivateRuleset({ ...expanded, scoreTarget: 0 }), /score target/);
+  assert.throws(() => assertExpandedPrivateRuleset({ ...expanded, blankEnabled: 'true' }), /blank setting/);
+  assert.throws(() => assertExpandedPrivateRuleset({ ...expanded, timeoutPolicy: 'random-legal' }), /must match/);
+});
+
+test('Private expansion limitは構成値どうしの相関も検証する', () => {
+  const shared = {
+    initialCardsPerSide: 7,
+    maximumHandSize: 14,
+    totalCardInstances: 28,
+    roundLimit: 14,
+    effectStepsPerRound: 12,
+    historyLimit: 32,
+    spectatorLimit: 8
+  };
+  assert.throws(() => assertPrivateExpansionLimits({ ...shared, maximumHandSize: 6 }), /maximumHandSize cannot/);
+  assert.throws(() => assertPrivateExpansionLimits({ ...shared, totalCardInstances: 13 }), /totalCardInstances cannot/);
+  assert.throws(() => assertPrivateExpansionLimits({ ...shared, spectatorLimit: -1 }), /spectatorLimit/);
 });

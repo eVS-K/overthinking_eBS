@@ -22,7 +22,7 @@ test('migrationは番号順に並び、各ファイルを一つのtransactionと
   const client = {
     async query(sql, params) {
       queries.push({ sql, params });
-      if (sql === 'SELECT id FROM app_schema_migrations') return { rows: [] };
+      if (sql === 'SELECT id FROM public.app_schema_migrations') return { rows: [] };
       return { rows: [] };
     },
     release() {}
@@ -30,7 +30,9 @@ test('migrationは番号順に並び、各ファイルを一つのtransactionと
   await applyMigrations({ connect: async () => client }, migrationsDir);
   assert.equal(queries.filter(({ sql }) => sql === 'BEGIN').length, files.length);
   assert.equal(queries.filter(({ sql }) => sql === 'COMMIT').length, files.length);
-  assert.equal(queries.filter(({ sql }) => sql.startsWith('INSERT INTO app_schema_migrations')).length, files.length);
+  assert.equal(queries.filter(({ sql }) => sql.startsWith('INSERT INTO public.app_schema_migrations')).length, files.length);
+  assert.equal(queries[0].sql, 'SET search_path TO public');
+  assert.equal(queries[1].sql.includes('CREATE TABLE IF NOT EXISTS public.app_schema_migrations'), true);
   assert.equal(queries.some(({ sql }) => sql.includes('ENABLE ROW LEVEL SECURITY')), true);
   assert.equal(queries.some(({ sql }) => sql.includes('REVOKE ALL PRIVILEGES')), true);
   assert.equal(queries.at(-1).sql, 'SELECT pg_advisory_unlock($1)');

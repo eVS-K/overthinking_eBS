@@ -27,6 +27,49 @@ test('同一clientIdの再待機は重複せず、上限とIP数を保つ', () =
   assert.equal(queue.size, 1);
 });
 
+test('待機列は無効入力・存在しない削除・空の取り出しを安全に扱う', () => {
+  const queue = new RandomMatchQueue({ maxEntries: 2 });
+  assert.deepEqual(queue.enqueue({ socketId: 'missing-client-id' }), { ok: false, reason: 'invalid' });
+  assert.equal(queue.has('missing'), false);
+  assert.equal(queue.remove('missing'), null);
+  assert.equal(queue.removeBySocket('missing'), null);
+  assert.equal(queue.takeNext(), null);
+
+  queue.enqueue({ clientId: 'first', socketId: 'socket-1', ip: '192.0.2.1' }, 10);
+  assert.equal(queue.has('first'), true);
+  assert.equal(queue.remove('first').clientId, 'first');
+  assert.equal(queue.has('first'), false);
+});
+
+test('再待機はFIFO時刻を維持し、互換相手がいない有効entryを残す', () => {
+  const queue = new RandomMatchQueue({ maxEntries: 4 });
+  queue.enqueue({ clientId: 'a', socketId: 'socket-a', ip: '192.0.2.1' }, 10);
+  queue.enqueue({ clientId: 'a', socketId: 'socket-a-new', ip: '192.0.2.1' }, 20);
+  assert.equal(queue.entries.get('a').enqueuedAt, 10);
+  assert.equal(queue.entries.get('a').lastSeenAt, 20);
+  queue.enqueue({ clientId: 'gone', socketId: 'socket-gone', ip: '192.0.2.2' }, 21);
+  queue.enqueue({ clientId: 'b', socketId: 'socket-b', ip: '192.0.2.3' }, 22);
+
+  assert.equal(
+    queue.takeCompatiblePair(
+      (entry) => entry.clientId !== 'gone',
+      () => false
+    ),
+    null
+  );
+  assert.equal(queue.has('gone'), false);
+  assert.equal(queue.has('a'), true);
+  assert.equal(queue.has('b'), true);
+});
+
+test('互換性predicateを省略した待機列は古い二人を組み合わせる', () => {
+  const queue = new RandomMatchQueue();
+  queue.enqueue({ clientId: 'first', socketId: 'socket-1', ip: '192.0.2.1' }, 10);
+  queue.enqueue({ clientId: 'second', socketId: 'socket-2', ip: '192.0.2.2' }, 11);
+  assert.deepEqual(queue.takeCompatiblePair().map((entry) => entry.clientId), ['first', 'second']);
+  assert.equal(queue.size, 0);
+});
+
 test('ランダム対戦待機列は長時間残ったエントリを回収する', () => {
   const queue = new RandomMatchQueue({ maxAgeMs: 100 });
   queue.enqueue({ clientId: 'old', socketId: 'socket-old', ip: '203.0.113.1' }, 10);

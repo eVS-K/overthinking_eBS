@@ -4,7 +4,12 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "npm run generate-ranked-values && node --test",
+    "test": "npm run test:node",
+    "test:node": "npm run generate-ranked-values && node --test",
+    "check": "node scripts/check-syntax.js",
+    "test:coverage": "npm run generate-ranked-values && node scripts/run-core-coverage.js",
+    "test:postgres": "npm run generate-ranked-values && node --test --test-concurrency=1 postgres-integration.js",
+    "test:ci": "npm run check && npm test && npm run test:coverage",
     "generate-ranked-values": "node scripts/generate-ranked-values.js",
     "migrate": "node scripts/migrate.js",
     "rotate-ranked-season": "node scripts/rotate-ranked-season.js --confirm",
@@ -18,5 +23,8 @@
     "express": "^5.2.1",
     "pg": "^8.13.1",
     "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
   }
 }

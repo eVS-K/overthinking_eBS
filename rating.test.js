@@ -9,8 +9,11 @@ const {
   LEADERBOARD_ELIGIBILITY_GAMES,
   RATING_LAMBDA,
   calculateRating,
+  clampDecisionPerformance,
   createEmptyRatingProfile,
+  effectiveSampleSize,
   isEligibleForLeaderboard,
+  standardError,
   updateRatingProfile
 } = require('./rating');
 const { applyRound, createInitialRankedState, getLegalCardIds, isTerminalState } = require('./ranked-engine');
@@ -73,4 +76,26 @@ test('一様random strategyのDecision Performance期待値は1000近傍へ写�
   const mean = total / games;
   assert.ok(Math.abs(mean - 0.5) < 0.04, `mean=${mean}`);
   assert.ok(Math.abs(calculateRating(mean) - RANDOM_LEVEL_RATING) < 80);
+});
+
+test('Ratingは不正なperformanceを拒否し、負のsampleと統計補助値を安全に扱う', () => {
+  assert.equal(clampDecisionPerformance(-0.25), -0.25);
+  assert.throws(() => clampDecisionPerformance(Number.NaN), TypeError);
+  assert.throws(() => clampDecisionPerformance(INITIAL_DECISION_EV + 0.001), RangeError);
+  assert.throws(() => updateRatingProfile(null, { decisionPerformance: 0.5, matchScore: 0.25 }), RangeError);
+
+  const profile = updateRatingProfile(createEmptyRatingProfile(), {
+    decisionPerformance: -0.1,
+    matchScore: 0,
+    now: '2026-01-02T03:04:05.000Z'
+  });
+  assert.equal(profile.ratedGames, 1);
+  assert.ok(profile.rating < RANDOM_LEVEL_RATING);
+  assert.equal(profile.lastRankedAt, '2026-01-02T03:04:05.000Z');
+  assert.equal(effectiveSampleSize(createEmptyRatingProfile()), 0);
+  assert.equal(standardError(createEmptyRatingProfile()), null);
+
+  const twoSamples = updateRatingProfile(profile, { decisionPerformance: 0.4, matchScore: 0.5 });
+  assert.ok(effectiveSampleSize(twoSamples) > 1);
+  assert.ok(Number.isFinite(standardError(twoSamples)));
 });

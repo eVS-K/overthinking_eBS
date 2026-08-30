@@ -11,9 +11,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
   <script src="page-redirect.js?v=security-v4"></script>
-  <link rel="stylesheet" href="style.css?v=pvp-v30">
+  <link rel="stylesheet" href="style.css?v=pvp-v32">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v30"></script>
+  <script src="socket-loader.js?v=pvp-v32"></script>
 </head>
 <body>
   <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
@@ -110,8 +110,9 @@
             <div class="matchup-heading">
               <div><h2 id="matchup-title">カードの組み合わせ早見表</h2><p>行があなた、列が相手です。<b class="legend-win">勝</b>＝あなたの勝ち、<b class="legend-loss">負</b>＝あなたの負け、<b class="legend-draw">分</b>＝引き分け。</p></div>
             </div>
-            <div class="matchup-table-wrap" tabindex="0" aria-label="カードの組み合わせ早見表。横にスクロールできます。">
-              <table class="matchup-table">
+            <div id="matchup-table-scroll" class="matchup-table-scroll horizontal-scroll-cue">
+              <div id="matchup-table-wrap" class="matchup-table-wrap" tabindex="0" aria-label="カードの組み合わせ早見表。横にスクロールできます。" aria-describedby="matchup-table-scroll-description">
+                <table class="matchup-table">
                 <thead><tr><th scope="col">自分＼相手</th><th scope="col">A</th><th scope="col">K</th><th scope="col">Q</th><th scope="col">J</th><th scope="col">Joker</th><th scope="col">3</th><th scope="col">2</th></tr></thead>
                 <tbody>
                   <tr><th scope="row">A</th><td class="outcome-draw">分</td><td class="outcome-win">勝</td><td class="outcome-win">勝</td><td class="outcome-win">勝</td><td class="outcome-draw">分</td><td class="outcome-win">勝</td><td class="outcome-loss">負</td></tr>
@@ -122,7 +123,9 @@
                   <tr><th scope="row">3</th><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-win">勝</td><td class="outcome-draw">分</td><td class="outcome-win">勝</td></tr>
                   <tr><th scope="row">2</th><td class="outcome-win">勝</td><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-loss">負</td><td class="outcome-draw">分</td><td class="outcome-loss">負</td><td class="outcome-draw">分</td></tr>
                 </tbody>
-              </table>
+                </table>
+              </div>
+              <span id="matchup-table-scroll-description" class="sr-only">早見表の続きは、横へスワイプまたは横スクロールして確認できます。</span>
             </div>
           </section>
           <p class="draw-note"><strong>引き分けの場合</strong><span>出した2枚は誰にも入らず「持ち越し札」になります。次に勝った人が、持ち越し札もまとめて獲得します。</span></p>
@@ -151,7 +154,10 @@
             <div class="identity"><span class="suit-icon suit-heart" aria-hidden="true">♥</span><div><span id="opp-side-label" class="side-label">対戦相手</span><strong id="opp-name">対戦相手を待機中</strong></div></div>
             <div class="score-box"><span>獲得</span><strong id="opp-score">0</strong><small>枚</small></div>
           </div>
-          <div id="opp-hand" class="card-row opponent-hand" aria-label="相手の手札"></div>
+          <div id="opp-hand-scroll" class="card-scroll horizontal-scroll-cue">
+            <div id="opp-hand" class="card-row opponent-hand" aria-label="相手の手札" aria-describedby="opp-hand-scroll-description"></div>
+            <span id="opp-hand-scroll-description" class="sr-only">相手の手札の続きは、横へスワイプまたは横スクロールして確認できます。</span>
+          </div>
         </section>
 
         <section class="table-center" aria-label="ラウンド情報">
@@ -175,7 +181,10 @@
             <div class="identity"><span class="suit-icon suit-spade" aria-hidden="true">♠</span><div><span id="my-side-label" class="side-label">あなた</span><strong id="my-name">あなた</strong></div></div>
             <div class="score-box"><span>獲得</span><strong id="my-score">0</strong><small>枚</small></div>
           </div>
-          <div id="my-hand" class="card-row my-hand" aria-label="あなたの手札"></div>
+          <div id="my-hand-scroll" class="card-scroll horizontal-scroll-cue">
+            <div id="my-hand" class="card-row my-hand" aria-label="あなたの手札" aria-describedby="my-hand-scroll-description"></div>
+            <span id="my-hand-scroll-description" class="sr-only">あなたの手札の続きは、横へスワイプまたは横スクロールして確認できます。</span>
+          </div>
           <section id="selected-card-panel" class="selected-card-panel hidden" aria-live="polite" aria-atomic="true" aria-labelledby="selected-card-label">
             <span id="selected-card-suit" class="selected-card-suit" aria-hidden="true">♠</span>
             <div class="selected-card-copy">
@@ -238,7 +247,11 @@
                   <div><span class="section-label" id="expanded-private-settings-title">拡張デッキ</span><p>両者は同じ構成の手札を使います。</p></div>
                   <strong id="expanded-deck-total">0 / 14枚</strong>
                 </div>
-                <div id="expanded-deck-list" class="expanded-deck-list" aria-label="使用カードと枚数"></div>
+                <div id="expanded-deck-scroll" class="expanded-deck-scroll">
+                  <div id="expanded-deck-list" class="expanded-deck-list" tabindex="0" aria-label="使用カードと枚数" aria-describedby="expanded-deck-scroll-description"></div>
+                  <p id="expanded-deck-scroll-hint" class="expanded-deck-scroll-hint" aria-hidden="true">↓ 下へスクロールして、すべてのカードを見る</p>
+                  <span id="expanded-deck-scroll-description" class="sr-only">カード一覧は下へスクロールして、すべてのカードを確認できます。</span>
+                </div>
                 <div class="expanded-rule-inputs">
                   <label for="expanded-round-limit-input"><span>総ラウンド数</span><input id="expanded-round-limit-input" type="number" min="1" max="20" inputmode="numeric"></label>
                   <label class="expanded-immediate-toggle" for="expanded-score-target-enabled"><input id="expanded-score-target-enabled" type="checkbox"><span><strong>規定の獲得枚数で早期決着にする</strong><small>オンの場合、指定枚数を先取した時点で総ラウンドを待たずに終了します。</small></span></label>

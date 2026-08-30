@@ -5,10 +5,19 @@ const assert = require('node:assert/strict');
 const { CARD_DEFINITIONS, resolveRound } = require('./game-rules');
 const {
   applyRound,
+  assertRankedState,
+  cardBit,
+  cardFromIndex,
+  cardIdFromIndex,
+  cardIndexFromId,
+  cloneRankedState,
   createInitialRankedState,
   getCurrentRound,
+  getLegalCardIds,
   isTerminalState,
   popcount,
+  stateFromKey,
+  stateKey,
   terminalMatchScore
 } = require('./ranked-engine');
 
@@ -61,4 +70,44 @@ test('score > 8は残り札があっても直ちにterminalになる', () => {
   assert.equal(result.state.playerScore, 12);
   assert.equal(result.terminal, true);
   assert.equal(result.matchScore, 1);
+});
+
+test('Ranked stateの変換と境界検証は不正なmask・key・カードを拒否する', () => {
+  const initial = createInitialRankedState();
+  const clone = cloneRankedState(initial);
+  assert.notEqual(clone, initial);
+  assert.deepEqual(clone, initial);
+  assert.equal(cardIndexFromId('ace'), 0);
+  assert.equal(cardIdFromIndex(0), 'ace');
+  assert.equal(cardFromIndex(0).id, 'ace');
+  assert.equal(cardBit('ace'), 1);
+  assert.deepEqual(getLegalCardIds(initial.playerMask), CARD_DEFINITIONS.map((card) => card.id));
+  assert.equal(stateFromKey(stateKey(initial)).playerMask, initial.playerMask);
+
+  assert.throws(() => cardFromIndex(99), RangeError);
+  assert.throws(() => cardBit('not-a-card'), RangeError);
+  assert.throws(() => stateFromKey('1.2.3'), TypeError);
+  assert.throws(() => stateFromKey('1.1.0.0.1'), RangeError);
+  assert.throws(() => assertRankedState({ ...initial, playerMask: -1 }), RangeError);
+  assert.throws(() => assertRankedState({ ...initial, aiMask: 0 }), RangeError);
+  assert.throws(() => assertRankedState({ ...initial, playerMask: initial.playerMask & ~1 }), RangeError);
+  assert.throws(() => applyRound(initial, 'not-a-card', 'ace'), RangeError);
+  assert.throws(() => applyRound(initial, 'ace', 'not-a-card'), RangeError);
+});
+
+test('terminal stateは勝敗を三値で返し、追加roundを拒否する', () => {
+  const playerWin = { playerMask: 0, aiMask: 0, playerScore: 10, aiScore: 4, stackCount: 0 };
+  const aiWin = { playerMask: 0, aiMask: 0, playerScore: 4, aiScore: 10, stackCount: 0 };
+  const draw = { playerMask: 0, aiMask: 0, playerScore: 7, aiScore: 7, stackCount: 0 };
+  assert.equal(terminalMatchScore(playerWin), 1);
+  assert.equal(terminalMatchScore(aiWin), 0);
+  assert.equal(terminalMatchScore(draw), 0.5);
+  assert.throws(() => terminalMatchScore(createInitialRankedState()), /not terminal/);
+  assert.throws(() => applyRound(draw, 'ace', 'ace'), /terminal/);
+});
+
+test('既に使われたカードはどちらの手札からも再提出できない', () => {
+  const afterFirstRound = applyRound(createInitialRankedState(), 'ace', 'king').state;
+  assert.throws(() => applyRound(afterFirstRound, 'ace', 'queen'), /corresponding hand/);
+  assert.throws(() => applyRound(afterFirstRound, 'queen', 'king'), /corresponding hand/);
 });

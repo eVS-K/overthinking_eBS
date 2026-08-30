@@ -130,6 +130,7 @@ const elements = {
   myName: document.getElementById('my-name'),
   mySideLabel: document.getElementById('my-side-label'),
   myScore: document.getElementById('my-score'),
+  myHandScroll: document.getElementById('my-hand-scroll'),
   myHand: document.getElementById('my-hand'),
   selectedCardPanel: document.getElementById('selected-card-panel'),
   selectedCardSuit: document.getElementById('selected-card-suit'),
@@ -139,7 +140,10 @@ const elements = {
   opponentName: document.getElementById('opp-name'),
   opponentSideLabel: document.getElementById('opp-side-label'),
   opponentScore: document.getElementById('opp-score'),
+  opponentHandScroll: document.getElementById('opp-hand-scroll'),
   opponentHand: document.getElementById('opp-hand'),
+  matchupTableScroll: document.getElementById('matchup-table-scroll'),
+  matchupTableWrap: document.getElementById('matchup-table-wrap'),
   opponentZone: document.getElementById('opponent-zone'),
   myZone: document.getElementById('my-zone'),
   playerControls: document.getElementById('player-controls'),
@@ -171,6 +175,7 @@ const elements = {
   privateTurnTimeSelect: document.getElementById('private-turn-time-select'),
   expandedPrivateSettings: document.getElementById('expanded-private-settings'),
   expandedDeckTotal: document.getElementById('expanded-deck-total'),
+  expandedDeckScroll: document.getElementById('expanded-deck-scroll'),
   expandedDeckList: document.getElementById('expanded-deck-list'),
   expandedRoundLimitInput: document.getElementById('expanded-round-limit-input'),
   expandedScoreTargetEnabled: document.getElementById('expanded-score-target-enabled'),
@@ -1050,6 +1055,38 @@ function validateExpandedSettingsForClient(request) {
   return '';
 }
 
+function updateExpandedDeckScrollCue() {
+  const list = elements.expandedDeckList;
+  const wrapper = elements.expandedDeckScroll;
+  if (!list || !wrapper) return;
+  const hasMoreBelow = list.scrollHeight > list.clientHeight + 2
+    && list.scrollTop + list.clientHeight < list.scrollHeight - 2;
+  wrapper.classList.toggle('has-more-below', hasMoreBelow);
+}
+
+// On small screens, card rows and the rules matrix deliberately keep their
+// readable fixed-size contents.  These cues make that horizontal overflow
+// visible without widening the page itself.
+function updateHorizontalScrollCue(scroller, wrapper) {
+  if (!scroller || !wrapper) return;
+  const hasOverflow = scroller.scrollWidth > scroller.clientWidth + 2;
+  const hasMoreLeft = hasOverflow && scroller.scrollLeft > 2;
+  const hasMoreRight = hasOverflow
+    && scroller.scrollLeft + scroller.clientWidth < scroller.scrollWidth - 2;
+  wrapper.classList.toggle('has-more-left', hasMoreLeft);
+  wrapper.classList.toggle('has-more-right', hasMoreRight);
+}
+
+function updateHorizontalScrollCues() {
+  updateHorizontalScrollCue(elements.myHand, elements.myHandScroll);
+  updateHorizontalScrollCue(elements.opponentHand, elements.opponentHandScroll);
+  updateHorizontalScrollCue(elements.matchupTableWrap, elements.matchupTableScroll);
+}
+
+function scheduleHorizontalScrollCueUpdate() {
+  window.requestAnimationFrame(updateHorizontalScrollCues);
+}
+
 function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
   if (!elements.expandedPrivateSettings) return;
   const isExpanded = rules.ruleset === EXPANDED_PRIVATE_RULESET_ID;
@@ -1109,6 +1146,9 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
     row.append(copy, controls);
     elements.expandedDeckList.append(row);
   });
+  // The menu becomes long once Tarot is enabled.  Show a fade and a clear
+  // hint only while content remains below the visible viewport.
+  window.requestAnimationFrame(updateExpandedDeckScrollCue);
 
   elements.expandedRoundLimitInput.value = String(rules.roundLimit);
   elements.expandedRoundLimitInput.min = '1';
@@ -1473,6 +1513,7 @@ function renderHand(container, hand, suitType, isInteractive, { focusCardId = nu
   // keyboard user's position across that harmless redraw rather than losing
   // focus from the card they just toggled.
   focusTarget?.focus();
+  scheduleHorizontalScrollCueUpdate();
 }
 
 function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'spade' } = {}) {
@@ -2249,6 +2290,7 @@ function renderRoom(room) {
   updateConfirmButton();
   if (!chatReady) setChatFeedback('チャットを準備しています…');
   updateChatControls();
+  scheduleHorizontalScrollCueUpdate();
 }
 
 function openCreditModal() {
@@ -2444,6 +2486,18 @@ elements.expandedDeckList.addEventListener('click', (event) => {
   const nextScoreTarget = rules.scoreTarget === null ? null : Math.min(rules.scoreTarget, nextRoundLimit * 2);
   requestPrivateSettingsChange({ deck: nextDeck, roundLimit: nextRoundLimit, scoreTarget: nextScoreTarget });
 });
+
+elements.expandedDeckList.addEventListener('scroll', updateExpandedDeckScrollCue, { passive: true });
+elements.myHand.addEventListener('scroll', () => updateHorizontalScrollCue(elements.myHand, elements.myHandScroll), { passive: true });
+elements.opponentHand.addEventListener('scroll', () => updateHorizontalScrollCue(elements.opponentHand, elements.opponentHandScroll), { passive: true });
+elements.matchupTableWrap.addEventListener('scroll', () => updateHorizontalScrollCue(elements.matchupTableWrap, elements.matchupTableScroll), { passive: true });
+window.addEventListener('resize', () => {
+  window.requestAnimationFrame(() => {
+    updateExpandedDeckScrollCue();
+    updateHorizontalScrollCues();
+  });
+}, { passive: true });
+scheduleHorizontalScrollCueUpdate();
 
 elements.expandedRoundLimitInput.addEventListener('change', () => {
   requestPrivateSettingsChange({ roundLimit: Number(elements.expandedRoundLimitInput.value) });
