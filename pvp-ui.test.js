@@ -49,6 +49,56 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
   assert.match(css, /\.card-center-suit\s*\{[^}]*position:\s*absolute;[^}]*top:\s*50%;[^}]*left:\s*50%;[^}]*translate\(-50%, -50%\)/);
 });
 
+test('開始前の拡張デッキ札は設定プレビューとして明示し、選択可能な実札と誤認させない', () => {
+  const client = read('main.js');
+
+  assert.match(client, /const isPreview = card\?\.preview === true;/);
+  assert.match(client, /isPreview \? ' card-preview' : ''/);
+  assert.match(client, /開始時に使う設定デッキの札です。/);
+  assert.match(client, /const canChooseCard = isInteractive && !isLocked;/);
+});
+
+test('高度なTarotの対象選択は手札直下の専用パネルで行い、候補トークンは選択者だけが送る', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const server = read('server.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="private-action-panel"[^>]*aria-live="polite"/);
+  assert.match(html, /id="private-action-candidates"[^>]*role="group"/);
+  assert.ok(
+    html.indexOf('id="selected-card-panel"') < html.indexOf('id="private-action-panel"')
+      && html.indexOf('id="private-action-panel"') < html.indexOf('id="final-result-panel"'),
+    '対象選択は選択中カードと最終結果の間に置き、盤面を覆わない'
+  );
+  assert.match(client, /function renderPrivatePendingAction\(/);
+  assert.match(client, /function submitPrivateActionChoice\(/);
+  assert.match(client, /socket\.emit\('resolve_private_action'/);
+  assert.match(client, /actionId: action\.id/);
+  assert.match(client, /nonce: action\.nonce/);
+  assert.match(client, /gameRevision: action\.gameRevision/);
+  assert.match(client, /!getPrivatePendingAction\(currentRoom\)/);
+  assert.match(server, /publicPrivatePendingActionForViewer/);
+  assert.match(server, /onSocketEvent\('resolve_private_action'/);
+  assert.match(css, /\.private-action-panel\s*\{/);
+  assert.match(css, /\.private-action-candidate\s*\{[^}]*min-height:\s*55px;/);
+  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.private-action-candidate\s*\{[^}]*min-height:\s*48px;/);
+});
+
+test('ロック札とThe Starのノイズ札は、色だけに頼らず状態を明示して操作不能にする', () => {
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(client, /const isLocked = card\?\.state\?\.locked === true;/);
+  assert.match(client, /const isNoise = card\?\.category === 'noise';/);
+  assert.match(client, /const canChooseCard = isInteractive && !isLocked;/);
+  assert.match(client, /ロック中のため、今は選べません。/);
+  assert.match(client, /card-lock-badge/);
+  assert.match(css, /\.card-locked\s*\{[^}]*border-style:\s*dashed;/);
+  assert.match(css, /\.card-lock-badge\s*\{/);
+  assert.match(css, /\.card-noise\s*\{[^}]*border-style:\s*dashed;/);
+});
+
 test('クラシック書体はカード中央だけへ適用し、Jokerも同じ大きさと幅で読める', () => {
   const client = read('main.js');
   const css = read('style.css');
@@ -117,12 +167,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v32/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v32/);
+  assert.match(html, /style\.css\?v=pvp-v34/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v34/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v32/);
+  assert.match(loader, /main\.js\?v=pvp-v34/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -180,7 +230,8 @@ test('Private対戦のルール概要と制限時間設定は、現在の設定�
   assert.match(client, /function isRoomHost\(room\) \{\s*return \(room\?\.viewer\?\.isRoomHost \?\? room\?\.viewer\?\.isHost\)/);
   assert.match(client, /socket\.emit\('update_private_settings'/);
   assert.match(client, /room\.matchType === 'random'/);
-  assert.match(client, /\(remainingMs \/ turnTimeLimitMs\) \* 100/);
+  assert.match(client, /const timerLimitMs = pendingAction \? 20_000 : getRoomRules\(room\)\.turnTimeLimitMs;/);
+  assert.match(client, /\(remainingMs \/ timerLimitMs\) \* 100/);
   assert.match(css, /\.room-rules-panel\s*\{/);
   assert.match(css, /\.private-settings-controls\s*\{/);
 });
@@ -207,7 +258,7 @@ test('Private拡張では共通デッキ・終了条件・Blankを待機中だ�
   assert.match(server, /function getSelectableCardIds\(/);
   assert.match(server, /crypto\.randomInt\(options\.length\)/);
   assert.match(server, /function processExpandedPrivateTurn\(/);
-  assert.match(server, /getPrivateCardRoundPreview/);
+  assert.match(server, /publicExpandedCardForViewer/);
   assert.match(css, /\.expanded-private-settings\s*\{/);
   assert.match(css, /\.card-virtual-blank\s*\{/);
 });
@@ -251,12 +302,32 @@ test('導入済みTarotは選択時・公開済み履歴でだけ現在ラウン
   assert.match(client, /temperance: 'β'/);
   assert.match(client, /'the-chariot': 'ε'/);
   assert.match(client, /strength: 'ζ'/);
+  assert.match(client, /'the-magician': 'η'/);
+  assert.match(client, /'the-lovers': 'θ'/);
+  assert.match(client, /'wheel-of-fortune': 'ι'/);
   assert.match(client, /function formatRoundCardLabel\(/);
   assert.match(client, /createRevealCard\(lastRound\.p1Card, firstOwner, 'p1', lastRound\.p1Strength\)/);
   assert.match(client, /round\.p1Strength/);
   assert.match(css, /\.card-tarot\s*\{/);
   assert.match(css, /\.selected-card-strength\s*\{/);
   assert.match(css, /\.expanded-deck-card-tarot\s*\{/);
+});
+
+test('生成・総ラウンドTarotの効果は結果と履歴へ表示し、対局中の有効ラウンド数を優先する', () => {
+  const client = read('main.js');
+  const server = read('server.js');
+  const css = read('style.css');
+
+  assert.match(client, /function getDisplayedRoundLimit\(/);
+  assert.match(client, /effectiveRoundLimit/);
+  assert.match(client, /function formatExpandedRoundEffects\(/);
+  assert.match(client, /round-effect-detail/);
+  assert.match(client, /history-effect/);
+  assert.match(server, /function publicExpandedRoundEffect\(/);
+  assert.match(server, /createdCopies: effect\.cardInstanceIds\.length/);
+  assert.match(server, /effectiveRoundLimit: runtimeRoundLimit/);
+  assert.match(css, /\.round-outcome \.round-effect-detail\s*\{/);
+  assert.match(css, /\.history-detail \.history-effect\s*\{/);
 });
 
 test('Tarotはギリシャ文字で表示し、観戦者も対局の下で使用中の能力を確認できる', () => {

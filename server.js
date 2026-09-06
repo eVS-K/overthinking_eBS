@@ -17,16 +17,26 @@ const {
   isExpandedPrivateRoomConfig
 } = require('./private-room-config');
 const {
+  applyAdvancedTargetAction,
   applyPrivateRound,
+  applySunPreCommitAction,
+  beginAdvancedPrivateRound,
   createExpandedPrivateGameState,
-  legalPrivateCardInstanceIds
+  finalizeAdvancedPrivateRound,
+  legalPrivateCardInstanceIds,
+  requiresAdvancedPrivateRound,
+  skipAdvancedTargetAction
 } = require('./private-game-engine');
-const { getPrivateCardRoundPreview } = require('./private-card-effects');
-const { publicPrivateCard } = require('./private-card-instances');
-const { PRIVATE_CARD_CATALOG } = require('./private-card-definitions');
+const { PRIVATE_CARD_CATALOG, getPrivateCardDefinition } = require('./private-card-definitions');
 const {
-  publicVirtualBlankCard
-} = require('./private-blank');
+  chooseExpiredPrivateActionTarget,
+  createPrivatePendingAction,
+  resolvePrivatePendingAction
+} = require('./private-action-queue');
+const {
+  publicExpandedCardForViewer,
+  publicPrivatePendingActionForViewer
+} = require('./private-room-view');
 const { createFixedWindowLimiter, getClientIp, readPositiveInteger } = require('./security');
 const { MAX_CHAT_MESSAGES_PER_SESSION, appendChatMessage } = require('./chat');
 const { RandomMatchQueue } = require('./matchmaking');
@@ -126,6 +136,7 @@ function isAllowedOrigin(origin) {
 
 const rooms = new Map();
 const roomTimers = new Map();
+const privateActionTimers = new Map();
 const disconnectTimers = new Map();
 const privateRoomIdleTimers = new Map();
 const activeSocketsByIp = new Map();
@@ -395,6 +406,15 @@ function getRoomTurnTimeLimitMs(room) {
 
 function getPublicRoomRules(room) {
   const config = getRoomPrivateConfig(room) || createDefaultPrivateRoomConfig();
+  // Wheel of Fortune changes the frozen match's effective end round without
+  // changing the lobby configuration used for the next match.  Expose only
+  // the derived number, never the internal expanded state or generated-card
+  // allocation details.
+  const runtimeRoundLimit = room?.activePrivateConfig?.ruleset === EXPANDED_PRIVATE_RULESET_ID
+    && room?.privateGameState?.rules?.ruleset === EXPANDED_PRIVATE_RULESET_ID
+    && Number.isSafeInteger(room.privateGameState.effectiveRoundLimit)
+    ? room.privateGameState.effectiveRoundLimit
+    : config.roundLimit;
   const expandedDeckCatalog = isExpandedPrivateRoomConfig(config)
     ? PRIVATE_CARD_CATALOG
       .filter((definition) => definition.status === 'available' && definition.availability.includes(config.ruleset))
@@ -409,6 +429,7 @@ function getPublicRoomRules(room) {
     : [];
   return {
     ...config,
+    effectiveRoundLimit: runtimeRoundLimit,
     deckCatalog: expandedDeckCatalog,
     // Config revisions only apply to private-room setup. It is still safe and
     // useful to expose a stable zero to legacy/Random clients.
@@ -417,6 +438,172 @@ function getPublicRoomRules(room) {
       : 0,
     locked: isPrivateConfigLocked(room)
   };
+}
+
+// Player objects are intentionally initialized with the classic guest hand so
+// a waiting room can exist before its Private rules are frozen.  Never expose
+// that temporary implementation detail as a prospective expanded hand: it
+// makes a 5-card custom deck look like the standard seven cards until start.
+// The preview has no usable instance IDs and is only sent while the room is
+// waiting, before the authoritative expanded state is created.
+function getExpandedLobbyDeckPreview(room) {
+  const config = getRoomPrivateConfig(room);
+  if (room?.gameState !== 'waiting' || !isExpandedPrivateRoomConfig(config) || !Array.isArray(config.deck)) {
+    return null;
+  }
+  const cards = [];
+  for (const entry of config.deck) {
+    let definition;
+    try {
+      definition = getPrivateCardDefinition(entry.definitionId);
+    } catch {
+      // A frozen, server-normalized config should never reach this branch.
+      // Failing closed to no preview is safer than exposing an invented card.
+      return null;
+    }
+    for (let copy = 0; copy < entry.copies; copy += 1) {
+      cards.push(Object.freeze({
+        id: `preview-${definition.id}-${copy + 1}`,
+        definitionId: definition.id,
+        name: definition.name,
+        desc: definition.desc,
+        category: definition.category,
+        displayMark: definition.displayMark || '',
+        preview: true,
+        state: Object.freeze({ locked: false })
+      }));
+    }
+  }
+  return Object.freeze(cards);
+}
+
+function publicExpandedRoundEffect(effect) {
+  if (!effect || typeof effect !== 'object') return null;
+  const isSeat = (value) => value === 'p1' || value === 'p2';
+  const isSource = isSeat(effect.sourceSeat) && typeof effect.sourceDefinitionId === 'string';
+  const createdCopies = Array.isArray(effect.cardInstanceIds) ? effect.cardInstanceIds.length : 0;
+  if (effect.type === 'add-cards'
+    && isSource
+    && isSeat(effect.recipientSeat)
+    && typeof effect.definitionId === 'string'
+    && Array.isArray(effect.cardInstanceIds)) {
+    return {
+      type: 'add-cards',
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId,
+      recipientSeat: effect.recipientSeat,
+      definitionId: effect.definitionId,
+      createdCopies: effect.cardInstanceIds.length
+    };
+  }
+  if (effect.type === 'add-card-copy'
+    && isSource && isSeat(effect.recipientSeat)
+    && typeof effect.definitionId === 'string'
+    && Array.isArray(effect.cardInstanceIds)) {
+    return {
+      type: 'add-card-copy',
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId,
+      recipientSeat: effect.recipientSeat,
+      definitionId: effect.definitionId,
+      createdCopies,
+      capped: effect.capped === true
+    };
+  }
+  if (effect.type === 'add-noise-card'
+    && isSource && isSeat(effect.recipientSeat)
+    && Array.isArray(effect.cardInstanceIds)) {
+    // The Star must not reveal the generated card's definition through the
+    // shared round history.  The owning player already saw their chosen card
+    // in the short-lived target picker; everybody else only learns that a
+    // concealed card was added.
+    return {
+      type: 'add-noise-card',
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId,
+      recipientSeat: effect.recipientSeat,
+      createdCopies,
+      capped: effect.capped === true
+    };
+  }
+  if ((effect.type === 'lock-card' || effect.type === 'lock-cards')
+    && isSource && isSeat(effect.targetSeat)
+    && Number.isSafeInteger(effect.lockedCount) && effect.lockedCount >= 0
+    && Number.isSafeInteger(effect.releaseAfterRound)) {
+    return {
+      type: effect.type,
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId,
+      targetSeat: effect.targetSeat,
+      lockedCount: effect.lockedCount,
+      releaseAfterRound: effect.releaseAfterRound
+    };
+  }
+  if (effect.type === 'discard-won-cards'
+    && isSource && isSeat(effect.targetSeat)
+    && Number.isSafeInteger(effect.discardedCount) && effect.discardedCount >= 0) {
+    return {
+      type: 'discard-won-cards',
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId,
+      targetSeat: effect.targetSeat,
+      discardedCount: effect.discardedCount
+    };
+  }
+  if (effect.type === 'destroy-card'
+    && isSource && isSeat(effect.targetSeat)
+    && Number.isSafeInteger(effect.destroyedCount) && effect.destroyedCount >= 0) {
+    return {
+      type: 'destroy-card',
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId,
+      targetSeat: effect.targetSeat,
+      destroyedCount: effect.destroyedCount
+    };
+  }
+  if (effect.type === 'copy-played-history'
+    && isSource && Array.isArray(effect.cardInstanceIds)) {
+    return {
+      type: 'copy-played-history',
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId,
+      createdCopies
+    };
+  }
+  if (effect.type === 'transfer-won-card'
+    && isSource && isSeat(effect.targetSeat)
+    && Array.isArray(effect.cardInstanceIds)) {
+    return {
+      type: 'transfer-won-card',
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId,
+      targetSeat: effect.targetSeat,
+      createdCopies,
+      capped: effect.capped === true
+    };
+  }
+  if (effect.type === 'skipped-target-action' && isSource) {
+    return {
+      type: 'skipped-target-action',
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId
+    };
+  }
+  if (effect.type === 'round-limit-adjustment'
+    && isSource
+    && Number.isSafeInteger(effect.previousRoundLimit)
+    && Number.isSafeInteger(effect.nextRoundLimit)
+    && Number.isSafeInteger(effect.appliedDelta)) {
+    return {
+      type: 'round-limit-adjustment',
+      sourceSeat: effect.sourceSeat,
+      sourceDefinitionId: effect.sourceDefinitionId,
+      previousRoundLimit: effect.previousRoundLimit,
+      nextRoundLimit: effect.nextRoundLimit,
+      appliedDelta: effect.appliedDelta
+    };
+  }
+  return null;
 }
 
 function ensurePrivateRoomHost(room) {
@@ -676,7 +863,18 @@ function createRoom(id, { matchType = 'private', allowedRandomClientIds = [], cr
     configRevision: normalizedMatchType === 'private' ? 1 : 0,
     // Expanded matches use the isolated pure engine.  Classic/Random continue
     // to use the long-standing room fields and canonical legacy resolver.
-    privateGameState: null
+    privateGameState: null,
+    // Advanced Tarot actions are never inferred from a browser event. The
+    // room owns the queue, an opaque active action, and a short bounded
+    // idempotency ledger; none of these internals are serialized wholesale.
+    privateGameRevision: 0,
+    privateActionQueue: [],
+    privatePendingAction: null,
+    privatePreCommitEffects: { p1: null, p2: null },
+    privatePreCommitIntent: null,
+    privatePreCommitTurnDeadline: 0,
+    pausedPrivateActionRemainingMs: 0,
+    privateResolvedActionResults: new Map()
   };
 }
 
@@ -694,6 +892,24 @@ function clearTurnTimer(roomId) {
   const timer = roomTimers.get(roomId);
   if (timer) clearTimeout(timer);
   roomTimers.delete(roomId);
+}
+
+function clearPrivateActionTimer(roomId) {
+  const timer = privateActionTimers.get(roomId);
+  if (timer) clearTimeout(timer);
+  privateActionTimers.delete(roomId);
+}
+
+function clearPrivateActionState(room) {
+  if (!room) return;
+  clearPrivateActionTimer(room.id);
+  room.privatePendingAction = null;
+  room.privateActionQueue = [];
+  room.privatePreCommitEffects = { p1: null, p2: null };
+  room.privatePreCommitIntent = null;
+  room.privatePreCommitTurnDeadline = 0;
+  room.pausedPrivateActionRemainingMs = 0;
+  room.privateResolvedActionResults = new Map();
 }
 
 function clearDisconnectTimer(roomId, clientId) {
@@ -786,6 +1002,7 @@ function expirePrivateRoom(room) {
 
   clearPrivateRoomIdleTimer(room.id);
   clearTurnTimer(room.id);
+  clearPrivateActionState(room);
   room.players.forEach((player) => cancelReconnectGrace(room, player));
   room.reconnectDeadline = 0;
 
@@ -839,39 +1056,11 @@ function refreshPrivateRoomIdleExpiry(room, now = Date.now()) {
 }
 
 function publicExpandedCard(card, state = null, seat = '') {
-  if (card?.virtual === true) {
-    return {
-      ...publicVirtualBlankCard(),
-      category: 'blank',
-      ...(state && seat ? {
-        roundInfo: {
-          strength: 0,
-          detail: '',
-          conditional: false
-        }
-      } : {})
-    };
-  }
-  const publicCard = publicPrivateCard(card);
-  const preview = state && (seat === 'p1' || seat === 'p2')
-    ? getPrivateCardRoundPreview(state, seat, card)
-    : null;
-  return {
-    id: publicCard.instanceId,
-    definitionId: publicCard.definitionId,
-    name: publicCard.name,
-    desc: publicCard.desc,
-    category: preview?.category || publicCard.category || '',
-    displayMark: publicCard.displayMark || '',
-    state: { ...publicCard.state },
-    ...(preview ? {
-      roundInfo: {
-        strength: preview.displayStrength,
-        detail: preview.conditionDetail,
-        conditional: preview.isConditional
-      }
-    } : {})
-  };
+  return publicExpandedCardForViewer(card, {
+    state,
+    ownerSeat: seat,
+    viewerSeat: seat || null
+  });
 }
 
 function syncExpandedPrivateStateToRoom(room) {
@@ -898,7 +1087,10 @@ function syncExpandedPrivateStateToRoom(room) {
     awardedCards: record.awardedCards,
     canonicalResult: record.canonicalResult,
     p1Strength: record.p1Strength,
-    p2Strength: record.p2Strength
+    p2Strength: record.p2Strength,
+    effects: Array.isArray(record.effects)
+      ? record.effects.map(publicExpandedRoundEffect).filter(Boolean)
+      : []
   }));
   room.lastRound = room.history.at(-1) || null;
   return true;
@@ -924,6 +1116,10 @@ function initializeExpandedPrivateGame(room, config) {
 
 function resetGame(room) {
   clearTurnTimer(room.id);
+  clearPrivateActionState(room);
+  room.privateGameRevision = Number.isSafeInteger(room.privateGameRevision)
+    ? room.privateGameRevision + 1
+    : 1;
   room.round = 1;
   room.stack = [];
   room.history = [];
@@ -983,7 +1179,8 @@ function chooseTimeoutSelection(room, player) {
 
 function startTurnTimer(room, durationMs) {
   clearTurnTimer(room.id);
-  if (room.gameState !== 'playing' || room.players.length !== 2 || !room.players.every((player) => player.connected)) return;
+  if (room.gameState !== 'playing' || room.privatePendingAction
+    || room.players.length !== 2 || !room.players.every((player) => player.connected)) return;
 
   room.reconnectDeadline = 0;
   const turnTimeLimitMs = getRoomTurnTimeLimitMs(room);
@@ -1008,7 +1205,16 @@ function startTurnTimer(room, durationMs) {
 
 function pauseForReconnect(room, now = Date.now()) {
   if (!room || room.gameState !== 'playing') return false;
-  room.pausedRemainingMs = Math.max(0, room.deadline - now);
+  if (room.privatePendingAction) {
+    room.pausedPrivateActionRemainingMs = Math.max(0, room.privatePendingAction.expiresAt - now);
+    room.pausedRemainingMs = room.privatePendingAction.phase === 'pre-commit'
+      ? Math.max(0, room.privatePreCommitTurnDeadline - now)
+      : 0;
+    clearPrivateActionTimer(room.id);
+  } else {
+    room.pausedPrivateActionRemainingMs = 0;
+    room.pausedRemainingMs = Math.max(0, room.deadline - now);
+  }
   room.deadline = 0;
   room.gameState = 'reconnecting';
   room.reconnectDeadline = now + RECONNECT_GRACE_MS;
@@ -1037,7 +1243,14 @@ function resumeAfterReconnect(room) {
   }
   room.gameState = 'playing';
   room.reconnectDeadline = 0;
-  startTurnTimer(room, room.pausedRemainingMs);
+  if (room.privatePendingAction) {
+    if (room.privatePendingAction.phase === 'pre-commit') {
+      room.privatePreCommitTurnDeadline = Date.now() + Math.max(0, room.pausedRemainingMs);
+    }
+    schedulePrivateActionTimer(room, { remainingMs: room.pausedPrivateActionRemainingMs });
+  } else {
+    startTurnTimer(room, room.pausedRemainingMs);
+  }
   return true;
 }
 
@@ -1045,6 +1258,24 @@ function createRoomView(room, socketId) {
   const player = room.players.find((candidate) => candidate.id === socketId);
   const spectator = room.spectators.find((candidate) => candidate.id === socketId);
   const isSpectator = Boolean(spectator);
+  const viewerSeat = player ? (room.players.indexOf(player) === 0 ? 'p1' : 'p2') : null;
+  const expandedState = isExpandedPrivateGame(room) ? room.privateGameState : null;
+  const expandedLobbyPreview = expandedState ? null : getExpandedLobbyDeckPreview(room);
+  const projectedPendingAction = expandedState
+    ? publicPrivatePendingActionForViewer(room.privatePendingAction, expandedState, viewerSeat)
+    : null;
+  // Sun must choose its sacrifice before its own card is committed.  The
+  // opposing player deliberately receives no pending-action signal, so keep
+  // their ordinary turn deadline rather than exposing the short action timer.
+  const hidesPreCommitAction = Boolean(
+    room.privatePendingAction?.phase === 'pre-commit'
+      && viewerSeat !== room.privatePendingAction?.action?.actorSeat
+  );
+  const projectedDeadline = hidesPreCommitAction
+    && Number.isSafeInteger(room.privatePreCommitTurnDeadline)
+    && room.privatePreCommitTurnDeadline > 0
+    ? room.privatePreCommitTurnDeadline
+    : room.deadline;
   const startAgreements = room.startAgreements || new Set();
   const spectatorSeatQueue = getSpectatorSeatQueue(room, spectator);
   const isRoomHost = Boolean(
@@ -1059,11 +1290,17 @@ function createRoomView(room, socketId) {
     // This is safe public configuration only. It never includes a private
     // host/client identifier, cards, or any future hidden-rule material.
     rules: getPublicRoomRules(room),
-    players: room.players.map(({ id, name, suit, hand, score, connected }) => ({
+    players: room.players.map(({ id, name, suit, hand, score, connected }, index) => ({
       id,
       name,
       suit,
-      hand,
+      hand: expandedState
+        ? expandedState[index === 0 ? 'p1' : 'p2'].hand.map((card) => publicExpandedCardForViewer(card, {
+          state: expandedState,
+          ownerSeat: index === 0 ? 'p1' : 'p2',
+          viewerSeat
+        }))
+        : expandedLobbyPreview || hand,
       score,
       connected
     })),
@@ -1073,7 +1310,7 @@ function createRoomView(room, socketId) {
     history: room.history,
     lastRound: room.lastRound,
     gameState: room.gameState,
-    deadline: room.deadline,
+    deadline: projectedDeadline,
     reconnectDeadline: room.gameState === 'reconnecting'
       && Number.isSafeInteger(room.reconnectDeadline)
       && room.reconnectDeadline > 0
@@ -1093,7 +1330,8 @@ function createRoomView(room, socketId) {
       hasAgreedToStart: Boolean(player && startAgreements.has(player.clientId)),
       autoJoinWhenSeatAvailable: Boolean(spectator?.autoJoinWhenSeatAvailable),
       seatQueuePosition: spectatorSeatQueue.position,
-      seatQueueLength: spectatorSeatQueue.length
+      seatQueueLength: spectatorSeatQueue.length,
+      pendingAction: projectedPendingAction
     }
   };
 }
@@ -1164,6 +1402,7 @@ const SOCKET_EVENTS_WITH_OBJECT_PAYLOAD = new Set([
   'find_next_random_match',
   'send_chat',
   'confirm_card',
+  'resolve_private_action',
   'update_private_settings',
   'transfer_private_settings_owner',
   'agree_to_start',
@@ -1442,6 +1681,7 @@ function removeEmptyRoom(room) {
   if (!room || room.players.length > 0 || room.spectators.length > 0) return false;
   clearPrivateRoomIdleTimer(room.id);
   clearTurnTimer(room.id);
+  clearPrivateActionState(room);
   room.reconnectDeadline = 0;
   rooms.delete(room.id);
   startQueuedRandomMatches();
@@ -1587,10 +1827,285 @@ function finishExpandedPrivateGame(room, result) {
   refreshPrivateRoomIdleExpiry(room);
 }
 
+function getExpandedSeatForPlayer(room, player) {
+  if (!room || !player || !isExpandedPrivateGame(room)) return null;
+  if (room.players[0]?.id === player.id) return 'p1';
+  if (room.players[1]?.id === player.id) return 'p2';
+  return null;
+}
+
+function nextPrivateGameRevision(room) {
+  const current = Number.isSafeInteger(room?.privateGameRevision) && room.privateGameRevision >= 0
+    ? room.privateGameRevision : 0;
+  room.privateGameRevision = current >= Number.MAX_SAFE_INTEGER ? 1 : current + 1;
+  return room.privateGameRevision;
+}
+
+function rememberPrivateActionResult(room, pending, result) {
+  if (!room || !pending?.id) return;
+  if (!(room.privateResolvedActionResults instanceof Map)) room.privateResolvedActionResults = new Map();
+  room.privateResolvedActionResults.set(pending.id, {
+    nonce: pending.nonce,
+    actorSeat: pending.action.actorSeat,
+    result: { ok: true, ...result }
+  });
+  while (room.privateResolvedActionResults.size > 16) {
+    room.privateResolvedActionResults.delete(room.privateResolvedActionResults.keys().next().value);
+  }
+}
+
+function getRememberedPrivateActionResult(room, { actionId, nonce, actorSeat }) {
+  const remembered = room?.privateResolvedActionResults instanceof Map
+    ? room.privateResolvedActionResults.get(actionId)
+    : null;
+  if (!remembered || remembered.nonce !== nonce || remembered.actorSeat !== actorSeat) return null;
+  return { ...remembered.result, idempotent: true };
+}
+
+function schedulePrivateActionTimer(room, { remainingMs = null } = {}) {
+  clearPrivateActionTimer(room?.id);
+  const pending = room?.privatePendingAction;
+  if (!room || !pending || room.gameState !== 'playing'
+    || room.players.length !== 2 || !room.players.every((player) => player.connected)) return false;
+  const now = Date.now();
+  const requested = Number.isFinite(remainingMs) ? remainingMs : pending.expiresAt - now;
+  const safeDuration = Math.max(0, Math.min(Math.floor(requested), 20_000));
+  if (remainingMs !== null) {
+    room.privatePendingAction = Object.freeze({ ...pending, expiresAt: now + safeDuration });
+  }
+  const activePending = room.privatePendingAction;
+  room.deadline = activePending.expiresAt;
+  const timer = setTimeout(() => {
+    const latestRoom = getRoom(room.id);
+    if (!latestRoom || latestRoom.gameState !== 'playing'
+      || latestRoom.privatePendingAction?.id !== activePending.id) return;
+    const target = chooseExpiredPrivateActionTarget(latestRoom.privatePendingAction);
+    completePrivatePendingAction(latestRoom, target, { timedOut: true });
+  }, safeDuration);
+  timer.unref?.();
+  privateActionTimers.set(room.id, timer);
+  return true;
+}
+
+function failClosedExpandedPrivateRound(room, code = 'internal-action-state') {
+  if (!room) return false;
+  // Target actions are generated exclusively by the engine.  If an internal
+  // invariant is ever violated, do not guess a card, leave a half-resolved
+  // effect live, or let a timer callback escape as an uncaught exception.
+  // Ending this one Private game as a draw is conservative: no player gains
+  // cards or a win from an unverifiable state, and both can start a fresh
+  // game using the same frozen room settings.
+  clearTurnTimer(room.id);
+  clearPrivateActionState(room);
+  room.selections = {};
+  room.deadline = 0;
+  room.gameState = 'finished';
+  room.winner = '引き分け';
+  room.winnerSeat = null;
+  room.finishReason = {
+    id: `expanded-safe-stop-${Date.now()}`,
+    type: 'system',
+    code
+  };
+  room.needsFreshGame = true;
+  refreshPrivateRoomIdleExpiry(room);
+  broadcastRoom(room);
+  return false;
+}
+
+function finalizeExpandedPrivateTurn(room) {
+  let result;
+  try {
+    result = finalizeAdvancedPrivateRound(room.privateGameState);
+  } catch {
+    return failClosedExpandedPrivateRound(room, 'finalize-invariant');
+  }
+  room.privateGameState = result.state;
+  syncExpandedPrivateStateToRoom(room);
+  room.selections = {};
+  room.deadline = 0;
+  room.privateActionQueue = [];
+  room.privatePendingAction = null;
+  room.privatePreCommitEffects = { p1: null, p2: null };
+  room.privatePreCommitIntent = null;
+  room.privatePreCommitTurnDeadline = 0;
+  if (result.terminal) finishExpandedPrivateGame(room, result);
+  else startTurnTimer(room);
+  broadcastRoom(room);
+  return true;
+}
+
+function advancePrivateActionQueue(room) {
+  clearPrivateActionTimer(room?.id);
+  if (!room || !isExpandedPrivateGame(room)) return false;
+  const nextAction = Array.isArray(room.privateActionQueue) ? room.privateActionQueue.shift() : null;
+  if (!nextAction) return finalizeExpandedPrivateTurn(room);
+  const gameRevision = Number.isSafeInteger(room.privateGameRevision) && room.privateGameRevision > 0
+    ? room.privateGameRevision
+    : nextPrivateGameRevision(room);
+  try {
+    room.privatePendingAction = createPrivatePendingAction({
+      roomId: room.id,
+      gameRevision,
+      phase: 'post-result',
+      action: nextAction
+    });
+  } catch {
+    // A malformed internal queue item cannot be safely exposed. Mark the
+    // planned effect skipped, then continue with the remaining deterministic
+    // queue rather than leaving the room permanently waiting.
+    try {
+      room.privateGameState = skipAdvancedTargetAction(room.privateGameState, nextAction, 'invalid-action-plan').state;
+    } catch {
+      return failClosedExpandedPrivateRound(room, 'queue-invariant');
+    }
+    return advancePrivateActionQueue(room);
+  }
+  schedulePrivateActionTimer(room);
+  syncExpandedPrivateStateToRoom(room);
+  broadcastRoom(room);
+  return true;
+}
+
+function resumeTurnAfterSunPreCommit(room) {
+  const originalDeadline = room.privatePreCommitTurnDeadline;
+  room.privatePreCommitTurnDeadline = 0;
+  if (room.players.every((player) => room.selections[player.id])) {
+    processTurn(room);
+    return true;
+  }
+  const remaining = Math.max(0, originalDeadline - Date.now());
+  startTurnTimer(room, remaining);
+  broadcastRoom(room);
+  return true;
+}
+
+function completePrivatePendingAction(room, target, { timedOut = false } = {}) {
+  const pending = room?.privatePendingAction;
+  if (!room || !pending || room.gameState !== 'playing') return { ok: false, code: 'missing' };
+  clearPrivateActionTimer(room.id);
+  room.privatePendingAction = null;
+  room.deadline = 0;
+
+  if (pending.phase === 'pre-commit') {
+    const intent = room.privatePreCommitIntent;
+    const player = room.players[pending.action.sourceSeat === 'p1' ? 0 : 1];
+    if (!intent || intent.seat !== pending.action.sourceSeat || !player
+      || pending.action.sourceDefinitionId !== 'the-sun') {
+      // The browser never supplies a source card here; this branch is only an
+      // internal invariant guard for a superseded room action.
+      room.privatePreCommitIntent = null;
+      startTurnTimer(room);
+      broadcastRoom(room);
+      return { ok: false, code: 'stale' };
+    }
+    try {
+      const prepared = applySunPreCommitAction(
+        room.privateGameState,
+        intent.seat,
+        intent.sunInstanceId,
+        target
+      );
+      room.privatePreCommitEffects[intent.seat] = prepared.effect;
+      room.selections[player.id] = intent.sunInstanceId;
+      room.privatePreCommitIntent = null;
+      rememberPrivateActionResult(room, pending, { timedOut });
+      resumeTurnAfterSunPreCommit(room);
+      return { ok: true, timedOut };
+    } catch {
+      room.privatePreCommitIntent = null;
+      startTurnTimer(room);
+      broadcastRoom(room);
+      return { ok: false, code: 'target' };
+    }
+  }
+
+  try {
+    room.privateGameState = target === null
+      ? skipAdvancedTargetAction(room.privateGameState, pending.action, 'skipped-no-legal-target').state
+      : applyAdvancedTargetAction(room.privateGameState, pending.action, target).state;
+  } catch {
+    try {
+      room.privateGameState = skipAdvancedTargetAction(room.privateGameState, pending.action, 'stale-target').state;
+    } catch {
+      failClosedExpandedPrivateRound(room, 'resolve-invariant');
+      return { ok: false, code: 'internal' };
+    }
+  }
+  rememberPrivateActionResult(room, pending, { timedOut });
+  syncExpandedPrivateStateToRoom(room);
+  if (!advancePrivateActionQueue(room)) return { ok: false, code: 'internal' };
+  return { ok: true, timedOut };
+}
+
+function beginSunPreCommitAction(room, player, seat, sunInstanceId) {
+  const state = room?.privateGameState;
+  const candidates = state?.[seat]?.hand
+    ?.filter((card) => card.instanceId !== sunInstanceId)
+    .map((card) => card.instanceId) || [];
+  if (!candidates.length) return false;
+  const now = Date.now();
+  const originalDeadline = Number.isSafeInteger(room.deadline) && room.deadline > now
+    ? room.deadline
+    : now;
+  const action = {
+    type: 'sun-destroy',
+    round: state.round,
+    sourceSeat: seat,
+    sourceDefinitionId: 'the-sun',
+    actorSeat: seat,
+    targetSeat: seat,
+    actionKey: `${state.round}:${seat}:the-sun:sun-destroy:${sunInstanceId}`,
+    candidates
+  };
+  try {
+    room.privatePendingAction = createPrivatePendingAction({
+      roomId: room.id,
+      gameRevision: nextPrivateGameRevision(room),
+      phase: 'pre-commit',
+      timeoutMs: Math.max(1, Math.min(20_000, originalDeadline - now)),
+      action
+    });
+  } catch {
+    return false;
+  }
+  room.privatePreCommitIntent = { seat, sunInstanceId };
+  room.privatePreCommitTurnDeadline = originalDeadline;
+  clearTurnTimer(room.id);
+  schedulePrivateActionTimer(room);
+  broadcastRoom(room);
+  return true;
+}
+
 function processExpandedPrivateTurn(room) {
   const [firstPlayer, secondPlayer] = room.players;
   const firstSelectionId = room.selections[firstPlayer.id];
   const secondSelectionId = room.selections[secondPlayer.id];
+  if (requiresAdvancedPrivateRound(room.privateGameState, firstSelectionId, secondSelectionId)) {
+    let started;
+    try {
+      started = beginAdvancedPrivateRound(room.privateGameState, firstSelectionId, secondSelectionId, {
+        preCommitEffects: Object.values(room.privatePreCommitEffects || {}).filter(Boolean)
+      });
+    } catch {
+      room.selections = {};
+      room.privatePreCommitEffects = { p1: null, p2: null };
+      room.privatePreCommitIntent = null;
+      startTurnTimer(room);
+      broadcastRoom(room);
+      return;
+    }
+    room.privateGameState = started.state;
+    room.selections = {};
+    room.privatePreCommitEffects = { p1: null, p2: null };
+    room.privatePreCommitIntent = null;
+    room.privateGameRevision = nextPrivateGameRevision(room);
+    room.privateActionQueue = [...started.targetActions];
+    room.deadline = 0;
+    syncExpandedPrivateStateToRoom(room);
+    advancePrivateActionQueue(room);
+    return;
+  }
   let result;
   try {
     result = applyPrivateRound(room.privateGameState, firstSelectionId, secondSelectionId);
@@ -1615,6 +2130,7 @@ function processExpandedPrivateTurn(room) {
 function processTurn(room) {
   clearTurnTimer(room.id);
   if (room.gameState !== 'playing' || room.players.length !== 2) return;
+  if (room.privatePendingAction) return;
   if (isExpandedPrivateGame(room)) {
     processExpandedPrivateTurn(room);
     return;
@@ -1696,6 +2212,7 @@ function finishGameByForfeit(room, player) {
   if (!winner) return false;
 
   clearTurnTimer(room.id);
+  clearPrivateActionState(room);
   room.selections = {};
   room.deadline = 0;
   room.reconnectDeadline = 0;
@@ -2103,12 +2620,31 @@ io.on('connection', (socket) => {
     if (!room || room.gameState !== 'playing') return;
 
     const player = room.players.find((candidate) => candidate.id === socket.id);
-    if (!player || !player.connected || room.selections[player.id]) return;
+    const playerSeat = getExpandedSeatForPlayer(room, player);
+    const otherPlayerMayCommitDuringSunPreCommit = Boolean(
+      isExpandedPrivateGame(room)
+        && room.privatePendingAction?.phase === 'pre-commit'
+        && playerSeat
+        && playerSeat !== room.privatePendingAction.action.actorSeat
+    );
+    if (!player || !player.connected || room.selections[player.id]
+      || (room.privatePendingAction && !otherPlayerMayCommitDuringSunPreCommit)) return;
     const cardId = normalizeText(payload.cardId, 96);
     const legalCardIds = getSelectableCardIds(room, player);
     if (!cardId || !legalCardIds.includes(cardId)) {
       emitError(socket, 'そのカードは選択できません。もう一度選んでください。');
       return;
+    }
+
+    if (isExpandedPrivateGame(room)) {
+      const seat = getExpandedSeatForPlayer(room, player);
+      const selected = seat
+        ? room.privateGameState[seat].hand.find((card) => card.instanceId === cardId)
+        : null;
+      if (selected && selected.definitionId === 'the-sun'
+        && beginSunPreCommitAction(room, player, seat, cardId)) {
+        return;
+      }
     }
 
     room.selections[player.id] = cardId;
@@ -2117,6 +2653,51 @@ io.on('connection', (socket) => {
     } else {
       broadcastRoom(room);
     }
+  });
+
+  onSocketEvent('resolve_private_action', (payload = {}, acknowledge) => {
+    const room = getBoundRoom(socket, payload.roomId);
+    const player = room?.players.find((candidate) => candidate.id === socket.id);
+    const seat = getExpandedSeatForPlayer(room, player);
+    if (!room || !player || !player.connected || !seat || room.gameState !== 'playing') {
+      replyToChat(acknowledge, { ok: false, message: 'この能力操作は現在利用できません。' });
+      return;
+    }
+    const remembered = getRememberedPrivateActionResult(room, {
+      actionId: payload.actionId,
+      nonce: payload.nonce,
+      actorSeat: seat
+    });
+    if (remembered) {
+      replyToChat(acknowledge, remembered);
+      return;
+    }
+    const pending = room.privatePendingAction;
+    const checked = resolvePrivatePendingAction(pending, {
+      actionId: payload.actionId,
+      nonce: payload.nonce,
+      target: payload.target,
+      actorSeat: seat,
+      gameRevision: payload.gameRevision,
+      now: Date.now()
+    });
+    if (!checked.ok) {
+      if (checked.code === 'expired' && pending?.id === payload.actionId) {
+        completePrivatePendingAction(room, chooseExpiredPrivateActionTarget(pending), { timedOut: true });
+      }
+      const message = checked.code === 'forbidden'
+        ? 'この能力の対象を選べるのは、指定された対戦者だけです。'
+        : checked.code === 'target'
+          ? 'その対象は選べません。最新の表示を確認してください。'
+          : checked.code === 'expired'
+            ? '能力の選択時間が終了したため、サーバーが対象を決定しました。'
+            : 'この能力操作は期限切れか、既に処理されています。';
+      if (checked.code !== 'expired') emitError(socket, message);
+      replyToChat(acknowledge, { ok: false, code: checked.code, message });
+      return;
+    }
+    const result = completePrivatePendingAction(room, checked.target);
+    replyToChat(acknowledge, result);
   });
 
   onSocketEvent('update_private_settings', (payload = {}, acknowledge) => {
@@ -2314,7 +2895,9 @@ module.exports = {
   beginReconnectGrace,
   buildPrivateSettingsUpdate,
   buildDefaultAllowedOrigins,
+  beginSunPreCommitAction,
   cancelReconnectGrace,
+  completePrivatePendingAction,
   createRoomView,
   consumeChatIpQuota,
   createRoom,
@@ -2327,6 +2910,7 @@ module.exports = {
   io,
   normalizeJoinPreferences,
   processTurn,
+  publicExpandedRoundEffect,
   promoteVolunteerSpectators,
   pauseForReconnect,
   restoreReturningPlayer,

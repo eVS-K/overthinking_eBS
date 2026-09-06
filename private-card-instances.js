@@ -17,6 +17,26 @@ const {
 
 const CARD_DEFINITION_BY_ID = PRIVATE_CARD_DEFINITION_BY_ID;
 const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}:[A-Za-z0-9_-]{1,16}:[1-9][0-9]{0,5}$/;
+// Lock ids are server generated and include the card instance id. Instance
+// ids intentionally use ':' to separate their namespace/seat/ordinal.
+const LOCK_ID_PATTERN = /^[A-Za-z0-9:_-]{1,96}$/;
+const CARD_VISIBILITY_VALUES = new Set(['public', 'noise-owner-only']);
+
+function normalizeCardLocks(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 8) throw new RangeError('private card locks are invalid');
+  const seen = new Set();
+  return value.map((lock) => {
+    if (!lock || typeof lock !== 'object' || Array.isArray(lock)
+      || typeof lock.id !== 'string' || !LOCK_ID_PATTERN.test(lock.id)
+      || !Number.isSafeInteger(lock.releaseAfterRound) || lock.releaseAfterRound < 1 || lock.releaseAfterRound > 64
+      || seen.has(lock.id)) {
+      throw new RangeError('private card lock is invalid');
+    }
+    seen.add(lock.id);
+    return Object.freeze({ id: lock.id, releaseAfterRound: lock.releaseAfterRound });
+  });
+}
 
 function getClassicCardDefinition(definitionId) {
   return getClassicPrivateCardDefinition(definitionId);
@@ -39,14 +59,29 @@ function createPrivateCardInstance({ instanceId, definitionId, state = {} } = {}
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
     throw new TypeError('private card state must be an object');
   }
-  // State is deliberately narrow until lock/flip mechanics are defined. A
-  // caller cannot smuggle arbitrary effect data through an instance.
+  const locks = state.locks === undefined && state.locked === true
+    // Older in-memory fixtures only had a boolean.  Preserve their locked
+    // interpretation without allowing a client to pick a release time.
+    ? [Object.freeze({ id: 'legacy-lock', releaseAfterRound: 64 })]
+    : normalizeCardLocks(state.locks);
+  const visibility = state.visibility === undefined ? 'public' : state.visibility;
+  const revealOn = state.revealOn === undefined || state.revealOn === null ? null : state.revealOn;
+  if (!CARD_VISIBILITY_VALUES.has(visibility)
+    || (revealOn !== null && revealOn !== 'play')
+    || (visibility === 'noise-owner-only' && revealOn !== 'play')) {
+    throw new RangeError('private card visibility state is invalid');
+  }
+  // State is intentionally structured and closed.  A client cannot smuggle
+  // an ability, target list, arbitrary metadata, or code through a card.
   return {
     instanceId,
     definitionId,
     state: {
-      locked: state.locked === true,
-      flipped: state.flipped === true
+      locked: locks.length > 0 || state.locked === true,
+      flipped: state.flipped === true,
+      locks,
+      visibility,
+      revealOn
     }
   };
 }
@@ -93,6 +128,7 @@ function publicClassicCard(instance) {
 const publicPrivateCard = publicClassicCard;
 
 module.exports = {
+  CARD_VISIBILITY_VALUES,
   CARD_DEFINITION_BY_ID,
   INSTANCE_ID_PATTERN,
   assertInstanceId,

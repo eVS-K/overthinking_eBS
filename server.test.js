@@ -4,6 +4,9 @@ const http = require('http');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createInitialHand } = require('./game-rules');
+const { createExpandedPrivateRoomConfig } = require('./private-room-config');
+const { createExpandedPrivateGameState } = require('./private-game-engine');
+const { createPrivatePendingAction } = require('./private-action-queue');
 const {
   CLASSIC_ROUND_LIMIT,
   CLASSIC_SCORE_TARGET,
@@ -13,10 +16,12 @@ const {
   RECONNECT_GRACE_MS,
   areRandomMatchEntriesCompatible,
   app,
+  beginSunPreCommitAction,
   beginReconnectGrace,
   buildPrivateSettingsUpdate,
   buildDefaultAllowedOrigins,
   cancelReconnectGrace,
+  completePrivatePendingAction,
   consumeChatIpQuota,
   createRoom,
   createRoomView,
@@ -28,6 +33,7 @@ const {
   isPrivateRoomIdleExpired,
   normalizeJoinPreferences,
   processTurn,
+  publicExpandedRoundEffect,
   pauseForReconnect,
   promoteVolunteerSpectators,
   restoreReturningPlayer,
@@ -467,6 +473,32 @@ test('Private拡張ではBlankを手札外の選択肢として公開し、処�
   assert.equal(finishGameByForfeit(room, room.players[0]), true);
 });
 
+test('開始前のPrivate拡張ロビーは、古いクラシック手札でなく設定済みデッキをプレビューする', () => {
+  const room = createRoom('expanded-lobby-preview');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '先手', suit: '♠', hand: createInitialHand(), score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: createInitialHand(), score: 0, connected: true }
+  ];
+  room.privateConfig = createExpandedPrivateRoomConfig({
+    roundLimit: 5,
+    scoreTarget: null,
+    deck: [
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 },
+      { definitionId: 'the-sun', copies: 1 }
+    ]
+  });
+  const view = createRoomView(room, 'p1');
+  assert.deepEqual(
+    view.players[0].hand.map((card) => card.definitionId),
+    ['ace', 'king', 'queen', 'jack', 'the-sun']
+  );
+  assert.equal(view.players[1].hand.every((card) => card.preview === true), true);
+  assert.equal(view.players[0].hand.some((card) => card.definitionId === 'joker'), false);
+});
+
 test('BlankなしのPrivate拡張は、Blankを選択肢やタイムアウト候補として公開しない', () => {
   const room = createRoom('expanded-no-blank-room');
   room.players = [
@@ -579,6 +611,100 @@ test('Strengthの半分単位の強さは対局画面と履歴へ安全に公開
   const view = createRoomView(room, 'p1');
   assert.equal(view.history.at(-1).p2Strength, '1.5');
   assert.equal(finishGameByForfeit(room, room.players[0]), true);
+});
+
+test('生成・総ラウンドTarotはPrivate拡張だけで解決し、公開履歴は内部instanceIdを漏らさない', () => {
+  const magicianRoom = createRoom('expanded-magician-public-view');
+  magicianRoom.players = [
+    { id: 'p1', clientId: 'host-client', name: '先手', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  magicianRoom.hostClientId = 'host-client';
+  assert.equal(updatePrivateRoomSettings(magicianRoom, {
+    clientId: 'host-client',
+    configRevision: magicianRoom.configRevision,
+    ruleset: 'private-expanded-v1',
+    roundLimit: 5,
+    scoreTarget: null,
+    blankEnabled: false,
+    deck: [
+      { definitionId: 'the-magician', copies: 1 },
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'four', copies: 1 }
+    ]
+  }).ok, true);
+  magicianRoom.startAgreements.add('host-client');
+  magicianRoom.startAgreements.add('guest-client');
+  assert.equal(startWhenBothPlayersAgree(magicianRoom), true);
+  magicianRoom.selections = {
+    p1: magicianRoom.players[0].hand.find((card) => card.definitionId === 'the-magician').id,
+    p2: magicianRoom.players[1].hand.find((card) => card.definitionId === 'ace').id
+  };
+  processTurn(magicianRoom);
+  assert.equal(magicianRoom.players[0].hand.filter((card) => card.definitionId === 'ace').length, 3);
+  const magicianView = createRoomView(magicianRoom, 'p1');
+  assert.equal(magicianView.rules.effectiveRoundLimit, 5);
+  assert.deepEqual(magicianView.history[0].effects, [{
+    type: 'add-cards',
+    sourceSeat: 'p1',
+    sourceDefinitionId: 'the-magician',
+    recipientSeat: 'p1',
+    definitionId: 'ace',
+    createdCopies: 2
+  }]);
+  assert.equal('cardInstanceIds' in magicianView.history[0].effects[0], false);
+  assert.equal(finishGameByForfeit(magicianRoom, magicianRoom.players[0]), true);
+
+  const wheelRoom = createRoom('expanded-wheel-public-view');
+  wheelRoom.players = [
+    { id: 'p1', clientId: 'host-client', name: '先手', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  wheelRoom.hostClientId = 'host-client';
+  assert.equal(updatePrivateRoomSettings(wheelRoom, {
+    clientId: 'host-client',
+    configRevision: wheelRoom.configRevision,
+    ruleset: 'private-expanded-v1',
+    roundLimit: 2,
+    scoreTarget: null,
+    blankEnabled: false,
+    deck: [
+      { definitionId: 'wheel-of-fortune', copies: 1 },
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'four', copies: 1 }
+    ]
+  }).ok, true);
+  wheelRoom.startAgreements.add('host-client');
+  wheelRoom.startAgreements.add('guest-client');
+  assert.equal(startWhenBothPlayersAgree(wheelRoom), true);
+  wheelRoom.selections = {
+    p1: wheelRoom.players[0].hand.find((card) => card.definitionId === 'wheel-of-fortune').id,
+    p2: wheelRoom.players[1].hand.find((card) => card.definitionId === 'ace').id
+  };
+  processTurn(wheelRoom);
+  const wheelView = createRoomView(wheelRoom, 'p1');
+  assert.equal(wheelRoom.gameState, 'finished');
+  assert.equal(wheelView.rules.roundLimit, 2, '次戦用の凍結前設定は変更しない');
+  assert.equal(wheelView.rules.effectiveRoundLimit, 1);
+  assert.deepEqual(wheelView.history[0].effects, [{
+    type: 'round-limit-adjustment',
+    sourceSeat: 'p1',
+    sourceDefinitionId: 'wheel-of-fortune',
+    previousRoundLimit: 2,
+    nextRoundLimit: 1,
+    appliedDelta: -1
+  }]);
+  const nextMatchConfig = updatePrivateRoomSettings(wheelRoom, {
+    clientId: 'host-client',
+    configRevision: wheelRoom.configRevision,
+    roundLimit: 3
+  });
+  assert.equal(nextMatchConfig.ok, true);
+  assert.equal(nextMatchConfig.settings.effectiveRoundLimit, 3, '終了済み対局の派生値を次戦ロビーへ持ち込まない');
 });
 
 test('room viewは設定の公開情報だけを返し、ホスト退室後に残った対戦者へ管理権限を移せる', () => {
@@ -745,6 +871,179 @@ test('二人の対戦者がそれぞれ同意するまで対局は始まらず�
   assert.equal(room.gameState, 'playing');
   assert.equal(room.startAgreements.size, 0);
   finishGameByForfeit(room, room.players[0]);
+});
+
+function createAdvancedPrivateRoomForActionTest(id, deck) {
+  const room = createRoom(id);
+  room.players = [
+    { id: 'p1', clientId: 'p1-client', name: '先手', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'p2-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'p1-client';
+  const updated = updatePrivateRoomSettings(room, {
+    clientId: 'p1-client',
+    configRevision: room.configRevision,
+    ruleset: 'private-expanded-v1',
+    turnTimeLimitMs: 90_000,
+    roundLimit: 1,
+    scoreTarget: null,
+    blankEnabled: true,
+    deck: deck.map((definitionId) => ({ definitionId, copies: 1 }))
+  });
+  assert.equal(updated.ok, true);
+  room.startAgreements.add('p1-client');
+  room.startAgreements.add('p2-client');
+  assert.equal(startWhenBothPlayersAgree(room), true);
+  return room;
+}
+
+function handInstanceId(room, seat, definitionId) {
+  const card = room.privateGameState[seat].hand.find((candidate) => candidate.definitionId === definitionId);
+  assert.ok(card, `${seat} must hold ${definitionId}`);
+  return card.instanceId;
+}
+
+test('高度なPrivate対象操作は行為者だけに候補を公開し、一度だけラウンドへ反映する', (t) => {
+  const room = createAdvancedPrivateRoomForActionTest('advanced-justice-action', [
+    'justice', 'ace', 'king', 'queen', 'jack'
+  ]);
+  t.after(() => {
+    if (room.gameState !== 'finished') finishGameByForfeit(room, room.players[0]);
+  });
+  room.selections = {
+    p1: handInstanceId(room, 'p1', 'justice'),
+    p2: 'virtual-blank'
+  };
+  processTurn(room);
+  const pending = room.privatePendingAction;
+  assert.equal(pending?.phase, 'post-result');
+  assert.equal(pending?.action.type, 'lock-one');
+
+  const actorView = createRoomView(room, 'p1');
+  const otherView = createRoomView(room, 'p2');
+  assert.equal(actorView.viewer.pendingAction.candidates.length, 5);
+  assert.equal(typeof actorView.viewer.pendingAction.nonce, 'string');
+  assert.equal(otherView.viewer.pendingAction.candidates, undefined);
+  assert.equal(otherView.viewer.pendingAction.nonce, undefined);
+
+  const target = pending.action.candidates[0];
+  assert.deepEqual(completePrivatePendingAction(room, target), { ok: true, timedOut: false });
+  assert.equal(room.gameState, 'finished');
+  assert.equal(room.privateGameState.history[0].effects.filter((effect) => effect.type === 'lock-card').length, 1);
+  assert.equal(room.privateGameState.p2.hand.find((card) => card.instanceId === target).state.locks.length, 1);
+  assert.deepEqual(completePrivatePendingAction(room, target), { ok: false, code: 'missing' });
+});
+
+test('The Sunの破棄対象は確定前には状態を変えず、選択後だけ同時ラウンドへ反映する', (t) => {
+  const room = createAdvancedPrivateRoomForActionTest('advanced-sun-action', [
+    'the-sun', 'ace', 'king', 'queen', 'jack'
+  ]);
+  t.after(() => {
+    if (room.gameState !== 'finished') finishGameByForfeit(room, room.players[0]);
+  });
+  const sunId = handInstanceId(room, 'p1', 'the-sun');
+  const aceId = handInstanceId(room, 'p1', 'ace');
+  room.selections = { p2: handInstanceId(room, 'p2', 'king') };
+  assert.equal(beginSunPreCommitAction(room, room.players[0], 'p1', sunId), true);
+  assert.equal(room.privateGameState.p1.hand.some((card) => card.instanceId === aceId), true);
+  const pending = room.privatePendingAction;
+  assert.equal(pending?.phase, 'pre-commit');
+  const actorView = createRoomView(room, 'p1');
+  const otherView = createRoomView(room, 'p2');
+  assert.ok(actorView.viewer.pendingAction.candidates.some((candidate) => candidate.id === aceId));
+  assert.equal(otherView.viewer.pendingAction, null);
+  assert.equal(otherView.deadline, room.privatePreCommitTurnDeadline);
+
+  assert.deepEqual(completePrivatePendingAction(room, aceId), { ok: true, timedOut: false });
+  assert.equal(room.gameState, 'finished');
+  assert.equal(room.privateGameState.p1.hand.some((card) => card.instanceId === aceId), false);
+  assert.equal(room.privateGameState.discardPile.some((entry) => entry.card.instanceId === aceId && entry.reason === 'sun'), true);
+  assert.equal(room.privateGameState.history[0].p1Card.definitionId, 'the-sun');
+});
+
+test('対象選択中に切断しても、再接続後は同じ一回限りの操作だけを復帰する', (t) => {
+  const room = createAdvancedPrivateRoomForActionTest('advanced-reconnect', [
+    'justice', 'ace', 'king', 'queen', 'jack'
+  ]);
+  t.after(() => {
+    if (room.gameState !== 'finished') finishGameByForfeit(room, room.players[0]);
+  });
+  room.selections = {
+    p1: handInstanceId(room, 'p1', 'justice'),
+    p2: 'virtual-blank'
+  };
+  processTurn(room);
+  const actionId = room.privatePendingAction.id;
+  const nonce = room.privatePendingAction.nonce;
+  const now = Date.now();
+  room.players[1].connected = false;
+  assert.equal(pauseForReconnect(room, now), true);
+  assert.equal(room.gameState, 'reconnecting');
+  assert.equal(room.deadline, 0);
+  assert.equal(room.privatePendingAction.id, actionId);
+  room.players[1].connected = true;
+  assert.equal(resumeAfterReconnect(room), true);
+  assert.equal(room.gameState, 'playing');
+  assert.equal(room.privatePendingAction.id, actionId);
+  assert.equal(room.privatePendingAction.nonce, nonce);
+  assert.ok(createRoomView(room, 'p1').viewer.pendingAction.candidates.length > 0);
+  assert.equal(createRoomView(room, 'p2').viewer.pendingAction.candidates, undefined);
+});
+
+test('The Starの秘匿札と公開履歴はrecipientごとに投影され、内部対象IDを漏らさない', () => {
+  const config = createExpandedPrivateRoomConfig({
+    roundLimit: 5,
+    scoreTarget: null,
+    blankEnabled: false,
+    deck: ['the-star', 'ace', 'king', 'queen', 'jack'].map((definitionId) => ({ definitionId, copies: 1 }))
+  });
+  const state = createExpandedPrivateGameState({
+    instanceNamespace: 'server-view-noise',
+    rules: config,
+    deck: config.deck
+  });
+  const noise = state.p2.hand.find((card) => card.definitionId === 'king');
+  noise.state.visibility = 'noise-owner-only';
+  noise.state.revealOn = 'play';
+  const room = createRoom('advanced-noise-room');
+  room.players = [
+    { id: 'p1', clientId: 'p1-client', name: '先手', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'p2-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.spectators = [{ id: 'viewer', clientId: 'viewer-client', name: '観戦者', autoJoinWhenSeatAvailable: false }];
+  room.activePrivateConfig = config;
+  room.privateGameState = state;
+  room.gameState = 'playing';
+  room.privatePendingAction = createPrivatePendingAction({
+    roomId: room.id,
+    gameRevision: 1,
+    now: Date.now(),
+    randomBytes: () => Buffer.from('1234567890123456'),
+    action: {
+      type: 'lock-one', round: 1, sourceSeat: 'p1', sourceDefinitionId: 'justice',
+      actorSeat: 'p1', targetSeat: 'p2', actionKey: '1:p1:justice:lock-one:0', candidates: [noise.instanceId]
+    }
+  });
+  const actorView = createRoomView(room, 'p1');
+  const ownerView = createRoomView(room, 'p2');
+  const spectatorView = createRoomView(room, 'viewer');
+  const actorOpponentHand = actorView.players.find((player) => player.id === 'p2').hand;
+  const spectatorOpponentHand = spectatorView.players.find((player) => player.id === 'p2').hand;
+  const ownerHand = ownerView.players.find((player) => player.id === 'p2').hand;
+  assert.equal(JSON.stringify(actorOpponentHand).includes('king'), false);
+  assert.equal(JSON.stringify(spectatorOpponentHand).includes('king'), false);
+  assert.equal(JSON.stringify(ownerHand).includes('king'), true);
+  assert.equal(actorView.viewer.pendingAction.candidates[0].definitionId, undefined);
+  assert.equal(spectatorView.viewer.pendingAction.candidates, undefined);
+
+  const publicEffect = publicExpandedRoundEffect({
+    type: 'destroy-card', sourceSeat: 'p1', sourceDefinitionId: 'the-sun', targetSeat: 'p1',
+    targetInstanceId: noise.instanceId, destroyedCount: 1
+  });
+  assert.deepEqual(publicEffect, {
+    type: 'destroy-card', sourceSeat: 'p1', sourceDefinitionId: 'the-sun', targetSeat: 'p1', destroyedCount: 1
+  });
+  assert.equal(JSON.stringify(publicEffect).includes(noise.instanceId), false);
 });
 
 test('legacy applicationはRanked未設定でも起動し、Ranked入口を安全に配信する', async (t) => {

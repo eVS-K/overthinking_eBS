@@ -342,3 +342,75 @@ test('実Socket.IOで、入室・観戦・開始・確定・再接続・観戦�
     ['ランダム先手', '次の相手'].sort()
   );
 });
+
+test('太陽の確定前対象選択は相手へ伏せたまま、相手の同時カード確定を妨げない', async (t) => {
+  const port = await startServer();
+  const clients = [];
+  t.after(() => closeServer(clients));
+
+  const roomId = `sun-${crypto.randomBytes(8).toString('hex')}`;
+  const first = await connectClient(port);
+  const second = await connectClient(port);
+  clients.push(first, second);
+  const firstClientId = 'sun-first-client';
+  const secondClientId = 'sun-second-client';
+  let firstView = await joinRoom(first, roomId, firstClientId, '太陽の先手');
+  let secondView = await joinRoom(second, roomId, secondClientId, '通常の後手');
+
+  const settingsUpdated = waitForRoom(first, roomId, (room) => room.rules.ruleset === 'private-expanded-v1');
+  const update = await emitWithAcknowledgement(first, 'update_private_settings', {
+    roomId,
+    configRevision: firstView.rules.configRevision,
+    ruleset: 'private-expanded-v1',
+    roundLimit: 5,
+    scoreTarget: null,
+    deck: [
+      { definitionId: 'the-sun', copies: 1 },
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'jack', copies: 1 }
+    ]
+  });
+  assert.equal(update.ok, true);
+  firstView = await settingsUpdated;
+  secondView = await requestCurrentRoom(second, roomId, secondClientId, '通常の後手');
+
+  const firstPlaying = waitForRoom(first, roomId, (room) => room.gameState === 'playing');
+  const secondPlaying = waitForRoom(second, roomId, (room) => room.gameState === 'playing');
+  first.emit('agree_to_start', { roomId });
+  second.emit('agree_to_start', { roomId });
+  [firstView, secondView] = await Promise.all([firstPlaying, secondPlaying]);
+  const sunCardId = ownPlayer(firstView, first).hand.find((card) => card.definitionId === 'the-sun').id;
+  const kingCardId = ownPlayer(secondView, second).hand.find((card) => card.definitionId === 'king').id;
+  const originalDeadline = secondView.deadline;
+
+  const firstTargeting = waitForRoom(first, roomId, (room) => room.viewer.pendingAction?.type === 'sun-destroy');
+  const secondHidden = waitForRoom(second, roomId, (room) => room.viewer.pendingAction === null);
+  first.emit('confirm_card', { roomId, cardId: sunCardId });
+  firstView = await firstTargeting;
+  secondView = await secondHidden;
+  assert.ok(firstView.viewer.pendingAction.candidates.length > 0);
+  assert.equal(secondView.viewer.pendingAction, null);
+  assert.equal(secondView.deadline, originalDeadline);
+
+  const secondCommitted = waitForRoom(second, roomId, (room) => room.viewer.hasConfirmedSelection === true && room.viewer.pendingAction === null);
+  second.emit('confirm_card', { roomId, cardId: kingCardId });
+  secondView = await secondCommitted;
+  assert.equal(secondView.viewer.hasConfirmedSelection, true);
+
+  const resolved = waitForRoom(first, roomId, (room) => room.history.length === 1 && room.round === 2);
+  const chosenTarget = firstView.viewer.pendingAction.candidates[0].id;
+  const actionResult = await emitWithAcknowledgement(first, 'resolve_private_action', {
+    roomId,
+    actionId: firstView.viewer.pendingAction.id,
+    nonce: firstView.viewer.pendingAction.nonce,
+    target: chosenTarget,
+    gameRevision: firstView.viewer.pendingAction.gameRevision
+  });
+  assert.equal(actionResult.ok, true);
+  firstView = await resolved;
+  assert.equal(firstView.history[0].p1Card.definitionId, 'the-sun');
+  assert.equal(ownPlayer(firstView, first).hand.length, 3);
+  assert.equal(firstView.players.find((player) => player.id !== first.id).hand.length, 4);
+});

@@ -30,7 +30,13 @@ test('Privateカード実体は既知の定義と狭い状態だけを保持し�
   const clone = clonePrivateCardInstance(source);
   assert.notEqual(clone, source);
   assert.notEqual(clone.state, source.state);
-  assert.deepEqual(clone.state, { locked: true, flipped: false });
+  assert.deepEqual(clone.state, {
+    locked: true,
+    flipped: false,
+    locks: [{ id: 'legacy-lock', releaseAfterRound: 64 }],
+    visibility: 'public',
+    revealOn: null
+  });
   const publicCard = publicClassicCard(source);
   assert.equal(publicCard.name, 'Three');
   assert.equal(publicCard.desc, 'Jokerに勝利');

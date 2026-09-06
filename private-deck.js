@@ -24,6 +24,57 @@ function isAvailableDefinition(definition, ruleset, features) {
     && definition.requiresFeatures.every((feature) => features.has(feature));
 }
 
+function getPrivateDeckCompatibility(deckEntries, ruleset) {
+  assertPrivateRuleset(ruleset);
+  const features = new Set(getPrivateRulesetFeatures(ruleset));
+  const definitions = (deckEntries || []).map((entry) => getPrivateCardDefinition(entry.definitionId));
+  const providedTags = new Set(['private-expanded-v1']);
+  const uniqueGroups = new Map();
+  for (const definition of definitions) {
+    for (const tag of definition.providesTags || []) providedTags.add(tag);
+    if (definition.uniqueGroup) {
+      uniqueGroups.set(definition.uniqueGroup, (uniqueGroups.get(definition.uniqueGroup) || 0) + 1);
+    }
+  }
+  const conflicts = [];
+  definitions.forEach((definition, index) => {
+    const missingFeatures = (definition.requiresFeatures || []).filter((feature) => !features.has(feature));
+    if (missingFeatures.length > 0) {
+      conflicts.push({
+        definitionId: definition.id,
+        code: 'missing-capability',
+        details: missingFeatures
+      });
+    }
+    const excludedTags = (definition.excludesTags || []).filter((tag) => providedTags.has(tag));
+    if (excludedTags.length > 0) {
+      conflicts.push({
+        definitionId: definition.id,
+        code: 'excluded-tag',
+        details: excludedTags
+      });
+    }
+    if (definition.uniqueGroup && uniqueGroups.get(definition.uniqueGroup) > 1) {
+      conflicts.push({
+        definitionId: definition.id,
+        code: 'unique-group',
+        details: [definition.uniqueGroup]
+      });
+    }
+    // `index` deliberately ensures duplicate entries still receive a stable,
+    // card-specific diagnostic before normalization merges their copy counts.
+    void index;
+  });
+  return Object.freeze({
+    ok: conflicts.length === 0,
+    conflicts: Object.freeze(conflicts.map((conflict) => Object.freeze({
+      ...conflict,
+      details: Object.freeze([...conflict.details])
+    }))),
+    providedTags: Object.freeze([...providedTags].sort())
+  });
+}
+
 function normalizePrivateDeckEntries(entries, ruleset) {
   assertPrivateRuleset(ruleset);
   if (ruleset.ruleset !== EXPANDED_PRIVATE_RULESET_ID) {
@@ -67,6 +118,11 @@ function normalizePrivateDeckEntries(entries, ruleset) {
   if (ruleset.scoreTarget !== null && ruleset.scoreTarget > ruleset.roundLimit * 2) {
     throw new RangeError('private expanded score target cannot exceed obtainable cards');
   }
+  const compatibility = getPrivateDeckCompatibility(normalized, ruleset);
+  if (!compatibility.ok) {
+    const [conflict] = compatibility.conflicts;
+    throw new RangeError(`private expanded deck compatibility conflict: ${conflict.definitionId}:${conflict.code}`);
+  }
   return Object.freeze(normalized);
 }
 
@@ -79,5 +135,6 @@ module.exports = {
   EXPANDED_DECK_MAXIMUM_CARDS,
   EXPANDED_DECK_MINIMUM_CARDS,
   expandPrivateDeckEntries,
+  getPrivateDeckCompatibility,
   normalizePrivateDeckEntries
 };

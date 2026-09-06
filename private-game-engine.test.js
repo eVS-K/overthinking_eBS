@@ -9,6 +9,7 @@ const { VIRTUAL_BLANK_SELECTION_ID, createVirtualBlankCard } = require('./privat
 const {
   applyPrivateRound,
   assertPrivateGameState,
+  clonePrivateGameState,
   createClassicPrivateGameState,
   createExpandedPrivateGameState,
   getPrivateTerminalReason,
@@ -356,7 +357,148 @@ test('保存済みstateは仮想Blankの混入、カード消失、凍結deck分
   const played = applyPrivateRound(expanded, instanceIdFor(expanded, 'p1', 'ace'), instanceIdFor(expanded, 'p2', 'king')).state;
   const changedDefinition = structuredClone(played);
   changedDefinition.p1.hand.find((card) => card.definitionId === 'queen').definitionId = 'jack';
-  assert.throws(() => assertPrivateGameState(changedDefinition), /frozen deck snapshot/);
+  assert.throws(() => assertPrivateGameState(changedDefinition), /frozen deck snapshot|generated history/);
+
+  const stacked = applyPrivateRound(
+    expanded,
+    instanceIdFor(expanded, 'p1', 'ace'),
+    instanceIdFor(expanded, 'p2', 'ace')
+  ).state;
+  const changedStackDefinition = structuredClone(stacked);
+  changedStackDefinition.stack[0].definitionId = 'king';
+  assert.throws(() => assertPrivateGameState(changedStackDefinition), /stack cards do not match/);
+});
+
+test('The MagicianとThe Loversの生成札はstateへ反映され、履歴の改ざんを拒否する', () => {
+  const magicianState = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null, blankEnabled: false }),
+    instanceNamespace: 'magician-effect',
+    deck: [
+      { definitionId: 'the-magician', copies: 1 },
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'four', copies: 1 }
+    ]
+  });
+  const magician = applyPrivateRound(
+    magicianState,
+    instanceIdFor(magicianState, 'p1', 'the-magician'),
+    instanceIdFor(magicianState, 'p2', 'ace')
+  );
+  assert.equal(magician.winnerSeat, 'p2');
+  assert.deepEqual(
+    magician.state.p1.hand.filter((card) => card.definitionId === 'ace').map((card) => card.instanceId),
+    ['magician-effect:p1:1', 'magician-effect:p1:6', 'magician-effect:p1:7']
+  );
+  assert.equal(magician.effects[0].cardInstanceIds.length, 2);
+  assert.doesNotThrow(() => assertPrivateGameState(magician.state));
+
+  const forgedEffects = structuredClone(magician.state);
+  forgedEffects.history[0].effects[0].cardInstanceIds[0] = 'magician-effect:p1:99';
+  assert.throws(() => assertPrivateGameState(forgedEffects), /effects do not match/);
+
+  const forgedPlayedSource = structuredClone(magician.state);
+  forgedPlayedSource.history[0].p1Card.definitionId = 'ace';
+  assert.throws(() => assertPrivateGameState(forgedPlayedSource), /server-issued source/);
+
+  const loversState = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null, blankEnabled: false }),
+    instanceNamespace: 'lovers-effect',
+    deck: [
+      { definitionId: 'the-lovers', copies: 1 },
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'four', copies: 1 }
+    ]
+  });
+  const lovers = applyPrivateRound(
+    loversState,
+    instanceIdFor(loversState, 'p1', 'the-lovers'),
+    instanceIdFor(loversState, 'p2', 'four')
+  );
+  assert.equal(lovers.winnerSeat, 'p1');
+  assert.equal(lovers.state.p1.hand.filter((card) => card.definitionId === 'king').length, 2);
+  assert.equal(lovers.effects[0].recipientSeat, 'p1');
+  assert.equal(lovers.effects[0].definitionId, 'king');
+  assert.doesNotThrow(() => assertPrivateGameState(lovers.state));
+});
+
+test('Private state cloneは生成効果の配列を独立して複製し、旧クラシック履歴の効果省略も扱う', () => {
+  const expanded = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null, blankEnabled: false }),
+    instanceNamespace: 'clone-effects',
+    deck: [
+      { definitionId: 'the-magician', copies: 1 },
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'four', copies: 1 }
+    ]
+  });
+  const afterMagician = applyPrivateRound(
+    expanded,
+    instanceIdFor(expanded, 'p1', 'the-magician'),
+    instanceIdFor(expanded, 'p2', 'ace')
+  ).state;
+  const copied = clonePrivateGameState(afterMagician);
+  copied.history[0].effects[0].cardInstanceIds[0] = 'changed-only-in-clone';
+  assert.notEqual(copied.history[0].effects[0].cardInstanceIds[0], afterMagician.history[0].effects[0].cardInstanceIds[0]);
+
+  const classicInitial = createClassicPrivateGameState({ instanceNamespace: 'legacy-effect-omitted' });
+  const classic = applyPrivateRound(
+    classicInitial,
+    instanceIdFor(classicInitial, 'p1', 'ace'),
+    instanceIdFor(classicInitial, 'p2', 'king')
+  ).state;
+  delete classic.history[0].effects;
+  const classicCopy = clonePrivateGameState(classic);
+  assert.deepEqual(classicCopy.history[0].effects, []);
+});
+
+test('Wheel of Fortuneは勝敗後にのみ有効ラウンド数を変更し、終了判定へ使う', () => {
+  const winningState = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 5, scoreTarget: null, blankEnabled: false }),
+    instanceNamespace: 'wheel-win',
+    deck: [
+      { definitionId: 'wheel-of-fortune', copies: 1 },
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'four', copies: 1 }
+    ]
+  });
+  const win = applyPrivateRound(
+    winningState,
+    instanceIdFor(winningState, 'p1', 'wheel-of-fortune'),
+    instanceIdFor(winningState, 'p2', 'four')
+  );
+  assert.equal(win.state.effectiveRoundLimit, 6);
+  assert.equal(win.effects[0].appliedDelta, 1);
+  assert.equal(win.terminal, false);
+
+  const losingState = createExpandedPrivateGameState({
+    rules: createExpandedPrivateRuleset({ roundLimit: 2, scoreTarget: null, blankEnabled: false }),
+    instanceNamespace: 'wheel-loss',
+    deck: [
+      { definitionId: 'wheel-of-fortune', copies: 1 },
+      { definitionId: 'ace', copies: 1 },
+      { definitionId: 'king', copies: 1 },
+      { definitionId: 'queen', copies: 1 },
+      { definitionId: 'four', copies: 1 }
+    ]
+  });
+  const loss = applyPrivateRound(
+    losingState,
+    instanceIdFor(losingState, 'p1', 'wheel-of-fortune'),
+    instanceIdFor(losingState, 'p2', 'ace')
+  );
+  assert.equal(loss.state.effectiveRoundLimit, 1);
+  assert.equal(loss.effects[0].appliedDelta, -1);
+  assert.equal(loss.terminal, true);
+  assert.equal(loss.terminalReason, 'round-limit');
+  assert.doesNotThrow(() => assertPrivateGameState(loss.state));
 });
 
 test('Private終局のmatch scoreはp2勝利・引き分け・未終局を区別する', () => {

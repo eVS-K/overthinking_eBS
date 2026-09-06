@@ -31,7 +31,28 @@ const EXPANDED_PRIVATE_FEATURES = Object.freeze([
   // checks the opponent's already-determined strength before the canonical
   // numeric comparison. Both mechanics remain local to Private expansion.
   'scaled-strength-v1',
-  'compare-override-v1'
+  'compare-override-v1',
+  // The first post-round Tarot effects are fully deterministic: neither
+  // player chooses a target and all generated instances are allocated by the
+  // server-side Private engine within hard hand/card caps.
+  'card-generation-v1',
+  'round-extension-v1',
+  // The remaining Private-only Tarot cards share explicit, versioned engine
+  // facilities.  A deck can name cards and copies only; it never turns these
+  // capabilities on by itself or supplies executable effect logic.
+  'round-snapshot-v1',
+  'echo-profile-v1',
+  'target-actions-v1',
+  'pre-commit-target-v1',
+  'lock-state-v1',
+  'tarot-negation-v1',
+  'recipient-view-v1',
+  'noise-state-v1',
+  'won-pile-ledger-v1',
+  'acquired-card-discard-v1',
+  'destroy-card-v1',
+  'played-card-ledger-v1',
+  'acquired-card-transfer-v1'
 ]);
 
 // Expansion work must remain bounded before it is ever connected to a room.

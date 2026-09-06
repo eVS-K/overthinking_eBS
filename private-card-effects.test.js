@@ -104,3 +104,23 @@ test('The Chariotは相手の確定強さが15以上なら数値比較より先�
   );
   assert.equal(againstAce.canonicalResult, 'p2');
 });
+
+test('The Fool / The Hermit は対象選択・秘匿・状態変更Tarotを反響しない', () => {
+  const afterInteractiveTarot = {
+    ...state({ round: 2 }),
+    history: [{
+      p1Card: card('the-high-priestess'),
+      p2Card: card('the-star'),
+      p1Strength: 2,
+      p2Strength: 17,
+      p1EchoProfile: { resolvedStrengthUnits: 4, comparisonOverride: '', safePostEffectId: '' },
+      p2EchoProfile: { resolvedStrengthUnits: 34, comparisonOverride: '', safePostEffectId: '' }
+    }]
+  };
+  const fool = getPrivateCardRoundPreview(afterInteractiveTarot, 'p1', card('the-fool'));
+  const hermit = getPrivateCardRoundPreview(afterInteractiveTarot, 'p1', card('the-hermit'));
+  assert.equal(fool.displayStrength, 0);
+  assert.equal(hermit.displayStrength, 0);
+  assert.match(fool.conditionDetail, /反響できる直前の実カードがない/);
+  assert.match(hermit.conditionDetail, /反響できる直前の実カードがない/);
+});

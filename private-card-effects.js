@@ -23,6 +23,28 @@ const CONDITIONAL_STRENGTH_DEFINITION_IDS = Object.freeze([
 const CONDITIONAL_STRENGTH_DEFINITION_ID_SET = new Set(CONDITIONAL_STRENGTH_DEFINITION_IDS);
 const COMPARE_OVERRIDE_DEFINITION_IDS = Object.freeze(['the-chariot']);
 const CHARIOT_THRESHOLD_UNITS = 15 * STRENGTH_SCALE;
+const ECHOABLE_SAFE_POST_EFFECT_IDS = new Set(['the-magician', 'the-lovers', 'wheel-of-fortune']);
+// An echo may carry only a settled comparison profile plus one of the three
+// explicitly safe, non-interactive post-round effects.  Targeting, locks,
+// hidden information, pile mutation, destruction, and recursive echoing are
+// deliberately not a "partial copy": treating their strength as copyable
+// would make the user-visible rule ambiguous and lets later card additions
+// accidentally become echoable by omission.
+const NON_ECHOABLE_DEFINITION_IDS = new Set([
+  'the-fool',
+  'the-hermit',
+  'the-emperor',
+  'the-high-priestess',
+  'the-empress',
+  'the-hierophant',
+  'justice',
+  'the-hanged-man',
+  'the-star',
+  'the-moon',
+  'the-sun',
+  'judgement',
+  'the-world'
+]);
 
 function assertStrengthUnits(value) {
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -67,6 +89,72 @@ function getRoundContext(state, seat) {
   };
 }
 
+function opponentSeat(seat) {
+  if (seat === 'p1') return 'p2';
+  if (seat === 'p2') return 'p1';
+  throw new RangeError('unknown private seat');
+}
+
+function isTarotDefinitionId(definitionId) {
+  try {
+    return getPrivateCardDefinition(definitionId).category === 'tarot';
+  } catch {
+    return false;
+  }
+}
+
+function normalizeEchoProfile(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (!Number.isSafeInteger(value.resolvedStrengthUnits) || value.resolvedStrengthUnits < 0) return null;
+  const comparisonOverride = value.comparisonOverride === 'chariot' ? 'chariot' : '';
+  const safePostEffectId = ECHOABLE_SAFE_POST_EFFECT_IDS.has(value.safePostEffectId)
+    ? value.safePostEffectId
+    : '';
+  return {
+    resolvedStrengthUnits: value.resolvedStrengthUnits,
+    comparisonOverride,
+    safePostEffectId
+  };
+}
+
+function getEchoProfileFromHistory(state, seat) {
+  const history = Array.isArray(state?.history) ? state.history : [];
+  const previous = history.at(-1);
+  if (!previous || typeof previous !== 'object') return null;
+  const card = seat === 'p1' ? previous.p1Card : seat === 'p2' ? previous.p2Card : null;
+  if (!card || NON_ECHOABLE_DEFINITION_IDS.has(card.definitionId) || card.virtual === true) return null;
+  const stored = normalizeEchoProfile(seat === 'p1' ? previous.p1EchoProfile : previous.p2EchoProfile);
+  if (stored) return stored;
+  const strength = seat === 'p1' ? previous.p1Strength : previous.p2Strength;
+  const units = typeof strength === 'number'
+    ? strength * STRENGTH_SCALE
+    : typeof strength === 'string' && /^(?:0|[1-9][0-9]*)\.5$/.test(strength)
+      ? Number(strength.slice(0, -2)) * STRENGTH_SCALE + 1
+      : null;
+  if (!Number.isSafeInteger(units) || units < 0) return null;
+  return {
+    resolvedStrengthUnits: units,
+    comparisonOverride: card.definitionId === 'the-chariot' ? 'chariot' : '',
+    safePostEffectId: ECHOABLE_SAFE_POST_EFFECT_IDS.has(card.definitionId) ? card.definitionId : ''
+  };
+}
+
+function createEchoProfile({ card, resolvedStrengthUnits, copiedProfile = null } = {}) {
+  if (!card || NON_ECHOABLE_DEFINITION_IDS.has(card.definitionId) || isVirtualBlankLike(card)) return null;
+  if (!Number.isSafeInteger(resolvedStrengthUnits) || resolvedStrengthUnits < 0) return null;
+  const copied = normalizeEchoProfile(copiedProfile);
+  return {
+    resolvedStrengthUnits,
+    comparisonOverride: copied?.comparisonOverride || (card.definitionId === 'the-chariot' ? 'chariot' : ''),
+    safePostEffectId: copied?.safePostEffectId
+      || (ECHOABLE_SAFE_POST_EFFECT_IDS.has(card.definitionId) ? card.definitionId : '')
+  };
+}
+
+function isVirtualBlankLike(card) {
+  return card?.virtual === true || card?.definitionId === 'blank';
+}
+
 function getPrivateCardRoundPreview(state, seat, card) {
   if (!card || typeof card.definitionId !== 'string') throw new TypeError('private card requires a definition id');
   const definition = getPrivateCardDefinition(card.definitionId);
@@ -75,6 +163,8 @@ function getPrivateCardRoundPreview(state, seat, card) {
   let displayStrength = definition.id === 'joker' ? null : formatStrengthUnits(comparisonStrengthUnits);
   let conditionDetail = '';
   let isConditional = false;
+  let comparisonOverride = definition.id === 'the-chariot' ? 'chariot' : '';
+  let safePostEffectId = ECHOABLE_SAFE_POST_EFFECT_IDS.has(definition.id) ? definition.id : '';
 
   if (definition.id === 'death') {
     isConditional = true;
@@ -115,6 +205,17 @@ function getPrivateCardRoundPreview(state, seat, card) {
     // The card keeps its base strength 0. Its comparison override is applied
     // only after both cards (including Joker copies) have a settled strength.
     conditionDetail = '相手の確定した強さが15以上なら、数値比較より先に勝利します。';
+  } else if (definition.id === 'the-fool' || definition.id === 'the-hermit') {
+    isConditional = true;
+    const sourceSeat = definition.id === 'the-fool' ? seat : opponentSeat(seat);
+    const echo = getEchoProfileFromHistory(state, sourceSeat);
+    comparisonStrengthUnits = echo?.resolvedStrengthUnits || 0;
+    displayStrength = formatStrengthUnits(comparisonStrengthUnits);
+    comparisonOverride = echo?.comparisonOverride || '';
+    safePostEffectId = echo?.safePostEffectId || '';
+    conditionDetail = echo
+      ? `直前ラウンドの解決済み強さ${displayStrength}と、コピー可能な勝敗判定能力を反響します。`
+      : '反響できる直前の実カードがないため、強さ0・能力なしです。';
   }
 
   return {
@@ -126,6 +227,8 @@ function getPrivateCardRoundPreview(state, seat, card) {
     comparisonStrengthUnits,
     displayStrength,
     conditionDetail,
+    comparisonOverride,
+    safePostEffectId,
     isConditional: isConditional
       || CONDITIONAL_STRENGTH_DEFINITION_ID_SET.has(definition.id)
       || COMPARE_OVERRIDE_DEFINITION_IDS.includes(definition.id)
@@ -143,9 +246,9 @@ function resolveComparisonResult(p1Preview, p2Preview) {
   // The Chariot's threshold checks an opponent's settled strength, including
   // a copied Joker strength, before normal card-strength comparison. If both
   // conditions were ever true, the round is a draw rather than a double win.
-  const p1ChariotWins = p1Preview.definitionId === 'the-chariot'
+  const p1ChariotWins = p1Preview.comparisonOverride === 'chariot'
     && p2StrengthUnits >= CHARIOT_THRESHOLD_UNITS;
-  const p2ChariotWins = p2Preview.definitionId === 'the-chariot'
+  const p2ChariotWins = p2Preview.comparisonOverride === 'chariot'
     && p1StrengthUnits >= CHARIOT_THRESHOLD_UNITS;
   if (p1ChariotWins && !p2ChariotWins) return 'p1';
   if (p2ChariotWins && !p1ChariotWins) return 'p2';
@@ -159,7 +262,24 @@ function resolveComparisonResult(p1Preview, p2Preview) {
 function resolvePrivateRoundWithContext(state, p1Card, p2Card) {
   const p1Preview = getPrivateCardRoundPreview(state, 'p1', p1Card);
   const p2Preview = getPrivateCardRoundPreview(state, 'p2', p2Card);
-  const canonicalResult = resolveComparisonResult(p1Preview, p2Preview);
+  const p1Emperor = p1Preview.definitionId === 'the-emperor';
+  const p2Emperor = p2Preview.definitionId === 'the-emperor';
+  const p1OpponentIsTarot = isTarotDefinitionId(p2Preview.definitionId);
+  const p2OpponentIsTarot = isTarotDefinitionId(p1Preview.definitionId);
+  let canonicalResult;
+  let suppressedSeats = [];
+  if (p1Emperor && p2Emperor) {
+    canonicalResult = 'draw';
+    suppressedSeats = ['p1', 'p2'];
+  } else if (p1Emperor && p1OpponentIsTarot) {
+    canonicalResult = 'p1';
+    suppressedSeats = ['p2'];
+  } else if (p2Emperor && p2OpponentIsTarot) {
+    canonicalResult = 'p2';
+    suppressedSeats = ['p1'];
+  } else {
+    canonicalResult = resolveComparisonResult(p1Preview, p2Preview);
+  }
   const p1StrengthUnits = actualComparedStrengthUnits(p1Preview, p2Preview);
   const p2StrengthUnits = actualComparedStrengthUnits(p2Preview, p1Preview);
   return {
@@ -173,17 +293,22 @@ function resolvePrivateRoundWithContext(state, p1Card, p2Card) {
       ...p2Preview,
       resolvedStrengthUnits: p2StrengthUnits,
       resolvedStrength: formatStrengthUnits(p2StrengthUnits)
-    }
+    },
+    suppressedSeats
   };
 }
 
 module.exports = {
   CHARIOT_THRESHOLD_UNITS,
   CONDITIONAL_STRENGTH_DEFINITION_IDS,
+  ECHOABLE_SAFE_POST_EFFECT_IDS,
   STRENGTH_SCALE,
   actualComparedStrengthUnits,
   formatStrengthUnits,
   getPrivateCardRoundPreview,
+  getEchoProfileFromHistory,
+  createEchoProfile,
+  isTarotDefinitionId,
   resolveComparisonResult,
   resolvePrivateRoundWithContext
 };

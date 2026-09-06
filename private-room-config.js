@@ -27,13 +27,29 @@ function cloneDeck(deck) {
 
 function deckRequiresBlankFallback(deck) {
   if (!Array.isArray(deck)) return false;
-  return deck.some((entry) => getPrivateCardDefinition(entry.definitionId).mayPreventAllLegalPlays === true);
+  return deck.some((entry) => {
+    const definition = getPrivateCardDefinition(entry.definitionId);
+    return definition.playabilityRisk === 'temporary-all-hand-lock'
+      || definition.playabilityRisk === 'persistent-all-hand-lock'
+      || definition.mayPreventAllLegalPlays === true;
+  });
+}
+
+function getBlankRequiredBy(deck) {
+  if (!Array.isArray(deck)) return Object.freeze([]);
+  return Object.freeze(deck
+    .map((entry) => getPrivateCardDefinition(entry.definitionId))
+    .filter((definition) => definition.playabilityRisk === 'temporary-all-hand-lock'
+      || definition.playabilityRisk === 'persistent-all-hand-lock'
+      || definition.mayPreventAllLegalPlays === true)
+    .map((definition) => definition.id));
 }
 
 function createClassicPrivateRoomConfig(settings = {}) {
   return Object.freeze({
     ...createClassicPrivateRuleset(settings),
     blankRequired: false,
+    blankRequiredBy: Object.freeze([]),
     deck: cloneDeck(CLASSIC_PRIVATE_DECK)
   });
 }
@@ -42,15 +58,17 @@ function createExpandedPrivateRoomConfig(settings = {}) {
   const preliminaryRules = createExpandedPrivateRuleset(settings);
   const deckInput = Array.isArray(settings?.deck) ? settings.deck : DEFAULT_EXPANDED_PRIVATE_DECK;
   const deck = normalizePrivateDeckEntries(deckInput, preliminaryRules);
-  const blankRequired = deckRequiresBlankFallback(deck);
-  if (blankRequired && settings?.blankEnabled === false) {
-    throw new RangeError('this expanded deck requires the virtual Blank fallback');
-  }
+  const blankRequiredBy = getBlankRequiredBy(deck);
+  const blankRequired = blankRequiredBy.length > 0;
+  // Adding a card that may lock every physical choice must never leave a
+  // stale `blankEnabled: false` configuration behind.  The canonical config
+  // forces it on; the UI can then explain why its checkbox is unavailable.
   const blankEnabled = blankRequired || settings?.blankEnabled === true;
   const rules = createExpandedPrivateRuleset({ ...settings, blankEnabled });
   return Object.freeze({
     ...rules,
     blankRequired,
+    blankRequiredBy,
     deck: cloneDeck(deck)
   });
 }
@@ -77,6 +95,7 @@ module.exports = {
   createExpandedPrivateRoomConfig,
   createPrivateRoomConfig,
   deckRequiresBlankFallback,
+  getBlankRequiredBy,
   isClassicPrivateRoomConfig,
   isExpandedPrivateRoomConfig
 };

@@ -1,7 +1,7 @@
 # Private PvP 拡張カードカタログ — 導入・互換性設計
 
-最終更新: 2026-08-28
-状態: **Ten〜Four、共通デッキ、Blank、およびDeath／Temperance／The Devil／The Tower／The Chariot／StrengthはPrivate PvPで実装済み。対象選択・秘匿・生成系のTarotは未接続**
+最終更新: 2026-09-06
+状態: **Ten〜Four、共通デッキ、Blank、Death／Temperance／The Devil／The Tower／The Chariot／Strength、The Magician／The Lovers／Wheel of FortuneはPrivate PvPで実装済み。対象選択・秘匿・履歴コピー系のTarotは未接続**
 
 この文書は、dub-227さんの提案書にある追加通常カード、Blank、Tarot Cardを、安全に段階導入するための設計である。提案書に書かれたカード名・能力は候補であり、`available` と明記されるまで対局で使える仕様ではない。既存のクラシックルールの正本は `game-rules.js` と既存テストである。
 
@@ -9,6 +9,11 @@
 
 - `PRIVATE_PVP_EXPANSION_DESIGN.md`: デッキ編集、設定凍結、通信境界、上限
 - `CODEX_PRIVATE_EXPANSION_NOTES.md`: 作業メモと未確定事項
+- `PRIVATE_PVP_REMAINING_TAROT_SPEC.md`: κ〜χ、Blank必須化、対象選択・秘匿・獲得札の確定仕様
+
+> **実装前の正本:** 本文に残る「保留」「確認事項」は作成時点の経緯である。
+> κ〜χの能力文、発動順、対象、競合、Blankの扱いについては、後から確定した
+> `PRIVATE_PVP_REMAINING_TAROT_SPEC.md` を優先する。
 
 ## 1. カードを増やしても壊れない基本原則
 
@@ -112,7 +117,10 @@ Death、Temperance、The Devil、The Tower、Strength、The Chariotは実装済�
 | The Empress | 勝利時、相手の非Tarotを全てロック | `lock-state` | 対象上限、全札ロック時のBlank処理。 |
 | The Sun | プレイ時、自分のカード1枚を破壊 | `target-selection`、`destroy-card` | 選択期限、手札不足、総カード数の整合性。 |
 
-提案書のロック仕様は「ほかのカードがプレイされると解除」。実装では、どちらかがカードを出した直後に解除するのか、ロックされた本人が別カードを出した後に解除するのかを一文で確定する必要がある。確定するまでロックカードは `specified` のままにする。
+ロックは「ロックされた本人の次の解決済みラウンドの終了時に解除する一ターン制」と
+確定した。全札ロック時はBlankを必須にする。正確な重複ロック・ノイズ対象の扱いは
+`PRIVATE_PVP_REMAINING_TAROT_SPEC.md` を参照する。実装が未接続の間、ロックカードは
+`specified` のままにする。
 
 ### 3.5 第4段階: 伏せ札・ノイズ
 
@@ -120,7 +128,9 @@ Death、Temperance、The Devil、The Tower、Strength、The Chariotは実装済�
 | --- | --- | --- | --- |
 | The Star | 相手が望む札1枚をノイズ状態で相手の手札へ追加 | `card-generation`、`hidden-view`、`target-selection` | 相手・観戦者それぞれに送る情報を分離し、正体をCSSだけで隠さない。 |
 
-フリップ状態・ノイズ状態を導入する前に、受信者別room viewを完成させる。観戦者が常に両手札を見られる現行クラシックの仕様を、拡張ゲームへ安易に流用しない。
+ノイズは所有者だけが定義を見られ、実プレイ時にだけ公開するものとして確定した。
+受信者別room viewが完成するまで、観戦者が常に両手札を見られる現行クラシックの
+仕様を拡張ゲームへ流用しない。詳細は `PRIVATE_PVP_REMAINING_TAROT_SPEC.md` を参照する。
 
 ### 3.6 第5段階: コピー・生成・ラウンド延長
 
@@ -128,23 +138,27 @@ Death、Temperance、The Devil、The Tower、Strength、The Chariotは実装済�
 | --- | --- | --- | --- |
 | The Fool | 自分の前ラウンドの強さ・能力をコピー | `round-snapshot`、`copy-effect` | 初回ラウンド、コピーがコピーを指す場合、再帰禁止。 |
 | The Hermit | 相手の前ラウンドの強さ・能力をコピー | `round-snapshot`、`copy-effect` | 相手の情報公開、コピー範囲。 |
-| The Magician | 相手が出した札のコピー2枚を自分へ追加 | `card-generation` | 総実体数・手札上限・The Magician自身の除外。 |
+| The Magician | 相手が出した**実カード定義**のコピー2枚を自分へ追加 | `card-generation` | 実カードだけが対象。総実体数・手札上限に達すると追加数を縮める。 |
 | The High Priestess | 敗北時、相手札1枚のコピーを自分へ追加 | `target-selection`、`card-generation` | 相手の伏せ札を対象にできるか、選択者と公開範囲。 |
 | The Hierophant | 敗北時、自分札1枚のコピーを追加 | `target-selection`、`card-generation` | コピー元が伏せ札・ロック札の場合。 |
-| The Lovers | 勝利時King、敗北時相手へQueenを追加 | `card-generation` | 生成枚数上限、カード定義が無効化済みの場合。 |
+| The Lovers | 勝利時King、敗北時相手へQueenを追加 | `card-generation` | 生成枚数上限。引き分け時は不発。 |
 | The Hanged Man | 敗北時、相手が望む札を相手手札へ追加 | `target-selection`、`card-generation` | 選択者の認可、対象定義の許可範囲。 |
-| Wheel of Fortune | 勝利時は総ラウンド数を+1、敗北時は-1 | `round-extension` | 最小ラウンド数、最大20ラウンド、終了済み対局へ作用させない。 |
+| Wheel of Fortune | 勝利時は総ラウンド数を+1、敗北時は-1 | `round-extension` | 現在完了済みのラウンド未満には縮めず、最大20ラウンド。 |
 
-コピー対象は「その札の定義」ではなく、そのラウンドの**解決済みスナップショット**として扱う。コピー能力の再帰、元札の可視性、元札の一時的な強さ、効果の再発動可否をカードごとに明記する。
+The Magician、The Lovers、Wheel of Fortuneは実装済みで、比較・得点・持ち越しを確定した後に一回だけ解決する。The Magicianがコピーするのは相手の**カード定義**であり、コピーの能力をその場で再発動しない。追加札にはサーバー発行の新しい`instanceId`を与え、手札24枚・両者合計64実体・総ラウンド20回の上限を超えない。Wheel of Fortuneは凍結済みの対局内`effectiveRoundLimit`だけを変え、次戦用のルール設定は変えない。結果履歴には追加した枚数とラウンド変化を公開するが、内部の生成`instanceId`は送らない。
 
-### 3.7 高複雑度Tarot（能力文は確定、実装は保留）
+The Fool／The Hermitは、解決済み強さと安全な勝敗判定能力だけを反響し、反響の
+再帰や対象選択・秘匿・獲得札操作はコピーしないものとして確定した。詳細は
+`PRIVATE_PVP_REMAINING_TAROT_SPEC.md` を参照する。
+
+### 3.7 高複雑度Tarot（仕様確定、実装は保留）
 
 | カード | 保留理由 |
 | --- | --- |
-| The Emperor | Tarot効果無効化と即時勝利の優先順位が、コピー・Chariot・比較例外すべてへ影響する。 |
-| The Moon | 引き分け時・敗北時に自分の獲得札をすべて失う。獲得札の実体管理・破棄先・そのラウンドの授受順が先に必要。 |
-| Judgement | これまでプレイした全札を再生成するため、最大手札・総カード実体・履歴・効果連鎖へ強く影響する。 |
-| The World | 相手の獲得札を1枚奪い、そのコピーを自分の手札へ加える。獲得札の実体移送、対象選択、生成上限を同時に必要とする。 |
+| The Emperor | 現ラウンドTarotだけを無効化し、Tarot相手には比較前に勝つ。比較器へ未接続。 |
+| The Moon | `wonPile`から過去の獲得札を破棄する。物理札台帳へ未接続。 |
+| Judgement | 過去に出した物理札を古い順に再生成する。履歴台帳へ未接続。 |
+| The World | 相手のラウンド開始時の獲得札を破棄し、その定義コピーを加える。対象操作と物理札台帳へ未接続。 |
 
 ## 4. Blankの扱い（実装済み）
 
@@ -225,11 +239,8 @@ Blankは通常のデッキカードではないため、Moonなど将来の獲�
 
 ## 9. 現時点の決定と残る確認事項
 
-更新版の提案書により、Ten〜Four、総ラウンド終了時の獲得枚数比較、任意の即時勝利閾値、および全Tarotの能力文が提示された。Ten〜Four、Blank、同一の凍結済みデッキを双方に配る純粋エンジン、総ラウンド・即時勝利の終了判定、6枚の比較型Tarotは実装済みである。ロック、伏せ札、コピー、生成、残るTarotは上記の依存機能が仕様・テストともに揃うまで有効化しない。
+更新版の提案書により、Ten〜Four、総ラウンド終了時の獲得枚数比較、任意の即時勝利閾値、および全Tarotの能力文が提示された。Ten〜Four、Blank、同一の凍結済みデッキを双方に配る純粋エンジン、総ラウンド・即時勝利の終了判定、6枚の比較型Tarot、対象不要の生成／総ラウンドTarot 3枚は実装済みである。ロック、伏せ札、履歴コピー、対象選択を伴う生成、残るTarotは上記の依存機能が仕様・テストともに揃うまで有効化しない。
 
-dub-227さんへの確認事項は、特に次の順で優先する。
-
-1. ロック解除の正確なタイミングと、全札ロック時の扱い。
-2. コピーが「能力も再発動」なのか「解決済みの強さだけ」なのか。
-3. 伏せ札・ノイズを誰がいつまで見られるか。
-4. Emperor、Moon、Judgement、Worldを含む発動順と対象選択の期限・不選択時の扱い。
+κ〜χについて、追加の確認待ちで実装を止める必要はない。実装時は
+`PRIVATE_PVP_REMAINING_TAROT_SPEC.md` の発動順、対象期限、不選択時の乱数、
+受信者別公開をそのまま満たすことを要件にする。

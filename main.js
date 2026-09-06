@@ -14,10 +14,10 @@ const CARD_MARKS = Object.freeze({
 });
 const TAROT_CARD_MARKS = Object.freeze({
   death: 'α', temperance: 'β', 'the-devil': 'γ', 'the-tower': 'δ',
-  'the-chariot': 'ε', strength: 'ζ', 'the-fool': 'η', 'the-magician': 'θ',
-  'the-high-priestess': 'ι', 'the-empress': 'κ', 'the-emperor': 'λ',
-  'the-hierophant': 'μ', 'the-lovers': 'ν', 'the-hermit': 'ξ',
-  'wheel-of-fortune': 'ο', justice: 'π', 'the-hanged-man': 'ρ',
+  'the-chariot': 'ε', strength: 'ζ', 'the-magician': 'η', 'the-lovers': 'θ',
+  'wheel-of-fortune': 'ι', 'the-fool': 'κ', 'the-high-priestess': 'λ',
+  'the-empress': 'μ', 'the-emperor': 'ν', 'the-hierophant': 'ξ',
+  'the-hermit': 'ο', justice: 'π', 'the-hanged-man': 'ρ',
   'the-star': 'σ', 'the-moon': 'τ', 'the-sun': 'υ', judgement: 'φ',
   'the-world': 'χ'
 });
@@ -63,6 +63,8 @@ let onlineCount = null;
 let randomQueueCount = null;
 let mySelectedCardId = null;
 let committedCardId = null;
+let privateActionSubmittingId = '';
+let privateActionSubmissionTimeout = null;
 let joinedRoom = Boolean(savedSession);
 let currentRoom = null;
 let timerInterval = null;
@@ -137,6 +139,11 @@ const elements = {
   selectedCardName: document.getElementById('selected-card-name'),
   selectedCardStrength: document.getElementById('selected-card-strength'),
   selectedCardDescription: document.getElementById('selected-card-description'),
+  privateActionPanel: document.getElementById('private-action-panel'),
+  privateActionTitle: document.getElementById('private-action-title'),
+  privateActionTimer: document.getElementById('private-action-timer'),
+  privateActionInstruction: document.getElementById('private-action-instruction'),
+  privateActionCandidates: document.getElementById('private-action-candidates'),
   opponentName: document.getElementById('opp-name'),
   opponentSideLabel: document.getElementById('opp-side-label'),
   opponentScore: document.getElementById('opp-score'),
@@ -588,6 +595,7 @@ function getRoomRules(room) {
   const source = room?.rules && typeof room.rules === 'object' ? room.rules : {};
   const configuredTurnTime = Number(source.turnTimeLimitMs);
   const configuredRoundLimit = Number(source.roundLimit);
+  const configuredEffectiveRoundLimit = Number(source.effectiveRoundLimit);
   const rawScoreTarget = source.scoreTarget ?? source.scoreLimit;
   const configuredScoreTarget = Number(rawScoreTarget);
   const configuredRevision = Number(source.configRevision ?? room?.configRevision);
@@ -612,6 +620,11 @@ function getRoomRules(room) {
     ? EXPANDED_PRIVATE_RULESET_ID
     : CLASSIC_PRIVATE_RULESET_ID;
   const blankEnabled = ruleset === EXPANDED_PRIVATE_RULESET_ID && source.blankEnabled === true;
+  const blankRequiredBy = Array.isArray(source.blankRequiredBy)
+    ? source.blankRequiredBy
+      .filter((value) => typeof value === 'string' && /^[a-z0-9-]{1,64}$/.test(value))
+      .slice(0, 14)
+    : [];
   return {
     ruleset,
     turnTimeLimitMs: Number.isSafeInteger(configuredTurnTime)
@@ -624,6 +637,15 @@ function getRoomRules(room) {
       && configuredRoundLimit <= 99
       ? configuredRoundLimit
       : 7,
+    effectiveRoundLimit: Number.isSafeInteger(configuredEffectiveRoundLimit)
+      && configuredEffectiveRoundLimit >= 1
+      && configuredEffectiveRoundLimit <= 20
+      ? configuredEffectiveRoundLimit
+      : Number.isSafeInteger(configuredRoundLimit)
+        && configuredRoundLimit >= 1
+        && configuredRoundLimit <= 99
+        ? configuredRoundLimit
+        : 7,
     scoreTarget: rawScoreTarget === null
       ? null
       : Number.isSafeInteger(configuredScoreTarget)
@@ -633,12 +655,19 @@ function getRoomRules(room) {
         : 9,
     blankEnabled,
     blankRequired: ruleset === EXPANDED_PRIVATE_RULESET_ID && source.blankRequired === true,
+    blankRequiredBy,
     timeoutPolicy: blankEnabled ? 'random-legal-with-blank' : 'random-legal',
     deck,
     deckCatalog,
     configRevision: Number.isSafeInteger(configuredRevision) && configuredRevision >= 0 ? configuredRevision : 0,
     locked: source.locked === true || ['playing', 'reconnecting'].includes(room?.gameState)
   };
+}
+
+function getDisplayedRoundLimit(rules) {
+  return Number.isSafeInteger(rules?.effectiveRoundLimit)
+    ? rules.effectiveRoundLimit
+    : rules?.roundLimit || 7;
 }
 
 function formatTurnTime(turnTimeLimitMs) {
@@ -1163,10 +1192,13 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
   elements.expandedScoreTargetLabel.classList.toggle('is-disabled', rules.scoreTarget === null);
   elements.expandedBlankEnabled.checked = rules.blankEnabled;
   elements.expandedBlankEnabled.disabled = disabled || rules.blankRequired;
+  const blankRequiredCards = rules.blankRequiredBy
+    .map((definitionId) => formatCardDisplayName(rules.deckCatalog.find((card) => card.id === definitionId) || { definitionId, name: definitionId }))
+    .join('・');
   setText(
     elements.expandedBlankNote,
     rules.blankRequired
-      ? 'このデッキには選択不能な状態を作り得るカードがあるため、Blankは必須です。'
+      ? `${blankRequiredCards || 'このデッキのカード'}は選択不能な状態を作り得るため、Blankは必須です。`
       : '有効にすると、手札外のBlankを選択でき、時間切れ時の抽選にも入ります。'
   );
 }
@@ -1189,6 +1221,7 @@ function renderRoomRules(room) {
   }
 
   const deckCount = isExpanded ? deckCardCount(rules.deck) : 7;
+  const displayedRoundLimit = getDisplayedRoundLimit(rules);
   const immediateText = rules.scoreTarget === null ? '早期決着なし' : `${rules.scoreTarget}枚を先取で早期決着`;
   const cardNames = new Map((rules.deckCatalog || []).map((card) => [card.id, card.name]));
   const deckText = isExpanded
@@ -1205,11 +1238,11 @@ function renderRoomRules(room) {
           ? '現在の設定担当者 — 変更できます'
           : '現在の設定担当者が変更できます'
   );
-  setText(elements.roomRulesSummary, `共通の${deckCount}枚で最大${rules.roundLimit}ラウンド。1ラウンド ${formatTurnTime(rules.turnTimeLimitMs)}、${immediateText}です。`);
+  setText(elements.roomRulesSummary, `共通の${deckCount}枚で最大${displayedRoundLimit}ラウンド。1ラウンド ${formatTurnTime(rules.turnTimeLimitMs)}、${immediateText}です。`);
   setText(elements.roomRulesDeck, deckText);
   setText(elements.roomRulesEnd, rules.scoreTarget === null
-    ? `第${rules.roundLimit}ラウンド終了時に、獲得枚数が多い側の勝ちです。`
-    : `${rules.scoreTarget}枚獲得、または第${rules.roundLimit}ラウンド終了時に獲得枚数が多い側の勝ちです。`);
+    ? `第${displayedRoundLimit}ラウンド終了時に、獲得枚数が多い側の勝ちです。`
+    : `${rules.scoreTarget}枚獲得、または第${displayedRoundLimit}ラウンド終了時に獲得枚数が多い側の勝ちです。`);
   setText(elements.roomRulesTimeout, rules.blankEnabled
     ? '時間切れ時は、合法な手札と手札外のBlankからサーバーが1つをランダムに選びます。'
     : '時間切れ時は、残った合法な手札からサーバーが1枚をランダムに選びます。');
@@ -1350,12 +1383,14 @@ function renderTimer(room) {
     return;
   }
   if (room.gameState !== 'playing' || !room.deadline) return;
-  const turnTimeLimitMs = getRoomRules(room).turnTimeLimitMs;
+  const pendingAction = getPrivatePendingAction(room);
+  const timerLimitMs = pendingAction ? 20_000 : getRoomRules(room).turnTimeLimitMs;
 
   const updateTimer = () => {
     const remainingMs = Math.max(0, room.deadline - Date.now());
     setText(elements.timer, Math.ceil(remainingMs / 1000));
-    elements.timerProgress.style.width = `${Math.min(100, (remainingMs / turnTimeLimitMs) * 100)}%`;
+    elements.timerProgress.style.width = `${Math.min(100, (remainingMs / timerLimitMs) * 100)}%`;
+    if (pendingAction) renderPrivateActionCountdown(room);
   };
   updateTimer();
   timerInterval = window.setInterval(updateTimer, 300);
@@ -1380,7 +1415,12 @@ function getSelectableDisplayHand(hand, room, isInteractive) {
 
 function getCurrentInteractiveHand() {
   const me = currentRoom?.players?.find((player) => player.id === socket?.id);
-  const canChoose = Boolean(me && currentRoom?.gameState === 'playing' && !currentRoom.viewer?.hasConfirmedSelection);
+  const canChoose = Boolean(
+    me
+    && currentRoom?.gameState === 'playing'
+    && !currentRoom.viewer?.hasConfirmedSelection
+    && !getPrivatePendingAction(currentRoom)
+  );
   return getSelectableDisplayHand(me?.hand, currentRoom, canChoose);
 }
 
@@ -1399,6 +1439,7 @@ function isNoAbilityCard(card) {
 
 function hasNonTarotAbilityCard(card) {
   return card?.virtual !== true
+    && card?.category !== 'noise'
     && !isTarotCard(card)
     && typeof card?.desc === 'string'
     && card.desc !== ''
@@ -1413,23 +1454,31 @@ function formatCardDisplayName(card) {
 function createCard(card, suitType, isInteractive) {
   const cardElement = document.createElement('div');
   // 両プレイヤーは同じIDのカードを持つため、選択状態は操作できる自分の手札だけに適用する。
-  const isSelected = isInteractive && card.id === mySelectedCardId;
-  const isCommitting = isInteractive && card.id === committedCardId;
+  const isLocked = card?.state?.locked === true;
+  const isNoise = card?.category === 'noise';
+  const isPreview = card?.preview === true;
+  const canChooseCard = isInteractive && !isLocked;
+  const isSelected = canChooseCard && card.id === mySelectedCardId;
+  const isCommitting = canChooseCard && card.id === committedCardId;
   const cardMark = getCardMark(card);
   const isTarot = isTarotCard(card);
   const isNoAbility = isNoAbilityCard(card);
   const hasNonTarotAbility = hasNonTarotAbilityCard(card);
-  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isTarot ? ' card-tarot' : ''}${hasNonTarotAbility ? ' card-has-ability' : ''}${isNoAbility ? ' card-no-ability' : ''}${card.roundInfo?.conditional ? ' card-conditional' : ''}${isInteractive ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
+  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isPreview ? ' card-preview' : ''}${isTarot ? ' card-tarot' : ''}${isNoise ? ' card-noise' : ''}${isLocked ? ' card-locked' : ''}${hasNonTarotAbility ? ' card-has-ability' : ''}${isNoAbility ? ' card-no-ability' : ''}${card.roundInfo?.conditional ? ' card-conditional' : ''}${canChooseCard ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.dataset.cardId = card.id;
   cardElement.setAttribute(
     'aria-label',
-    isSelected
+    isPreview
+      ? `${card.name}。開始時に使う設定デッキの札です。`
+      : isLocked
+      ? `${card.name}。ロック中のため、今は選べません。`
+      : isSelected
       ? `${card.name}、選択中。能力は選択中のカード欄に表示されています。`
       : `${card.name}。選択すると能力を表示します。`
   );
   if (isSelected) cardElement.setAttribute('aria-describedby', 'selected-card-description');
 
-  if (isInteractive) {
+  if (canChooseCard) {
     cardElement.setAttribute('role', 'button');
     cardElement.tabIndex = 0;
     const selectCard = () => {
@@ -1463,14 +1512,18 @@ function createCard(card, suitType, isInteractive) {
   name.textContent = card.name;
   const suit = document.createElement('span');
   suit.textContent = suitType === 'spade' ? '♠' : '♥';
+  const lock = document.createElement('span');
+  lock.className = 'card-lock-badge';
+  lock.textContent = '🔒';
+  lock.setAttribute('aria-hidden', 'true');
   if (isSelected) {
     const selectedMark = document.createElement('span');
     selectedMark.className = 'card-selected-mark';
     selectedMark.textContent = '✓';
     selectedMark.setAttribute('aria-hidden', 'true');
-    top.append(name, selectedMark, suit);
+    top.append(name, selectedMark, isLocked ? lock : '', suit);
   } else {
-    top.append(name, suit);
+    top.append(name, isLocked ? lock : '', suit);
   }
 
   const center = document.createElement('div');
@@ -1652,6 +1705,14 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   }
   outcome.append(outcomeLabel, outcomeTitle, outcomeDetail);
 
+  const effectDetail = formatExpandedRoundEffects(lastRound);
+  if (effectDetail) {
+    const effects = document.createElement('p');
+    effects.className = 'round-effect-detail';
+    effects.textContent = effectDetail;
+    outcome.append(effects);
+  }
+
   const firstOwner = currentRoom?.viewer?.isSpectator
     ? getSeatOwnerLabel(currentRoom, 'p1', '♠側')
     : firstPlayer?.id === socket?.id ? 'あなた' : '相手';
@@ -1753,9 +1814,9 @@ function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
   } else if (room.finishReason?.type === 'score-limit') {
     detail.textContent = `${getRoomRules(room).scoreTarget ?? '設定された'}枚以上を先取して決着しました。`;
   } else if (isDraw) {
-    detail.textContent = `${getRoomRules(room).roundLimit}ラウンド終了。獲得枚数は同じです。`;
+    detail.textContent = `${getDisplayedRoundLimit(getRoomRules(room))}ラウンド終了。獲得枚数は同じです。`;
   } else {
-    detail.textContent = `第${getRoomRules(room).roundLimit}ラウンド終了。${winnerName} が最終勝者です。`;
+    detail.textContent = `第${getDisplayedRoundLimit(getRoomRules(room))}ラウンド終了。${winnerName} が最終勝者です。`;
   }
   panel.replaceChildren(kicker, title, score, scoreCaption, detail);
 
@@ -1811,6 +1872,82 @@ function formatRoundCardLabel(card, strength) {
   return displayStrength ? `${name}（強さ${displayStrength}）` : name;
 }
 
+function getEffectCardLabel(definitionId) {
+  const mark = TAROT_CARD_MARKS[definitionId] || CARD_MARKS[definitionId] || '';
+  const card = getRoomRules(currentRoom).deckCatalog.find((candidate) => candidate.id === definitionId);
+  return mark && card?.name ? `${mark} ${card.name}` : mark || card?.name || definitionId;
+}
+
+function formatExpandedRoundEffects(round) {
+  if (!Array.isArray(round?.effects) || round.effects.length === 0) return '';
+  const labels = [];
+  for (const effect of round.effects) {
+    const source = getEffectCardLabel(effect?.sourceDefinitionId);
+    if (effect?.type === 'add-cards'
+      && (effect.recipientSeat === 'p1' || effect.recipientSeat === 'p2')
+      && typeof effect.definitionId === 'string'
+      && Number.isSafeInteger(effect.createdCopies)) {
+      const recipient = getSeatOwnerLabel(currentRoom, effect.recipientSeat, effect.recipientSeat === 'p1' ? '♠側' : '♥側');
+      const card = getEffectCardLabel(effect.definitionId);
+      labels.push(effect.createdCopies > 0
+        ? `${source}：${recipient}の手札へ ${card} を${effect.createdCopies}枚追加`
+        : `${source}：追加できる空きがないため、札は増えませんでした`);
+    } else if (effect?.type === 'add-card-copy'
+      && (effect.recipientSeat === 'p1' || effect.recipientSeat === 'p2')
+      && typeof effect.definitionId === 'string'
+      && Number.isSafeInteger(effect.createdCopies)) {
+      const recipient = getSeatOwnerLabel(currentRoom, effect.recipientSeat, effect.recipientSeat === 'p1' ? '♠側' : '♥側');
+      const card = getEffectCardLabel(effect.definitionId);
+      labels.push(effect.createdCopies > 0
+        ? `${source}：${recipient}の手札へ ${card} を追加`
+        : `${source}：手札の上限により、札は増えませんでした`);
+    } else if (effect?.type === 'add-noise-card'
+      && (effect.recipientSeat === 'p1' || effect.recipientSeat === 'p2')
+      && Number.isSafeInteger(effect.createdCopies)) {
+      const recipient = getSeatOwnerLabel(currentRoom, effect.recipientSeat, effect.recipientSeat === 'p1' ? '♠側' : '♥側');
+      labels.push(effect.createdCopies > 0
+        ? `${source}：${recipient}の手札へ正体を伏せた札を追加`
+        : `${source}：手札の上限により、札は増えませんでした`);
+    } else if ((effect?.type === 'lock-card' || effect?.type === 'lock-cards')
+      && (effect.targetSeat === 'p1' || effect.targetSeat === 'p2')
+      && Number.isSafeInteger(effect.lockedCount)) {
+      const target = getSeatOwnerLabel(currentRoom, effect.targetSeat, effect.targetSeat === 'p1' ? '♠側' : '♥側');
+      labels.push(`${source}：${target}の札を${effect.lockedCount}枚ロック`);
+    } else if (effect?.type === 'discard-won-cards'
+      && (effect.targetSeat === 'p1' || effect.targetSeat === 'p2')
+      && Number.isSafeInteger(effect.discardedCount)) {
+      const target = getSeatOwnerLabel(currentRoom, effect.targetSeat, effect.targetSeat === 'p1' ? '♠側' : '♥側');
+      labels.push(`${source}：${target}の獲得札を${effect.discardedCount}枚破棄`);
+    } else if (effect?.type === 'destroy-card'
+      && (effect.targetSeat === 'p1' || effect.targetSeat === 'p2')
+      && Number.isSafeInteger(effect.destroyedCount)) {
+      const target = getSeatOwnerLabel(currentRoom, effect.targetSeat, effect.targetSeat === 'p1' ? '♠側' : '♥側');
+      labels.push(`${source}：${target}の手札を${effect.destroyedCount}枚破棄`);
+    } else if (effect?.type === 'copy-played-history' && Number.isSafeInteger(effect.createdCopies)) {
+      labels.push(effect.createdCopies > 0
+        ? `${source}：過去に出した札を${effect.createdCopies}枚複製`
+        : `${source}：複製できる札はありませんでした`);
+    } else if (effect?.type === 'transfer-won-card'
+      && (effect.targetSeat === 'p1' || effect.targetSeat === 'p2')
+      && Number.isSafeInteger(effect.createdCopies)) {
+      const target = getSeatOwnerLabel(currentRoom, effect.targetSeat, effect.targetSeat === 'p1' ? '♠側' : '♥側');
+      labels.push(effect.createdCopies > 0
+        ? `${source}：${target}の獲得札を1枚奪い、手札へ追加`
+        : `${source}：手札の上限により、札は増えませんでした`);
+    } else if (effect?.type === 'skipped-target-action') {
+      labels.push(`${source}：選べる対象がないため、能力は発動しませんでした`);
+    } else if (effect?.type === 'round-limit-adjustment'
+      && Number.isSafeInteger(effect.previousRoundLimit)
+      && Number.isSafeInteger(effect.nextRoundLimit)
+      && Number.isSafeInteger(effect.appliedDelta)) {
+      labels.push(effect.appliedDelta === 0
+        ? `${source}：総ラウンド数は ${effect.nextRoundLimit} のままです`
+        : `${source}：総ラウンド数 ${effect.previousRoundLimit} → ${effect.nextRoundLimit}`);
+    }
+  }
+  return labels.join('　');
+}
+
 function formatDisplayedStrength(value) {
   if (Number.isSafeInteger(value) && value >= 0) return String(value);
   return typeof value === 'string' && /^(?:0|[1-9][0-9]*)\.5$/.test(value)
@@ -1845,7 +1982,14 @@ function renderHistory(history) {
       : `${getSeatOwnerLabel(currentRoom, winnerSeat, winnerName)} が獲得`;
     const cards = document.createElement('span');
     cards.textContent = `${formatRoundCardLabel(round.p1Card, round.p1Strength)}  対  ${formatRoundCardLabel(round.p2Card, round.p2Strength)}`;
+    const effects = formatExpandedRoundEffects(round);
     detail.append(winner, cards);
+    if (effects) {
+      const effect = document.createElement('span');
+      effect.className = 'history-effect';
+      effect.textContent = effects;
+      detail.append(effect);
+    }
     item.append(number, detail);
     elements.history.append(item);
   });
@@ -2015,6 +2159,17 @@ function renderStatus(room, me, opponent) {
     setText(elements.status, '接続が切れました。自動的に再接続しています…');
     return;
   }
+  const pendingAction = getPrivatePendingAction(room);
+  if (pendingAction) {
+    const remaining = Math.max(0, Math.ceil((Number(pendingAction.expiresAt) - Date.now()) / 1_000));
+    setText(
+      elements.status,
+      Array.isArray(pendingAction.candidates)
+        ? `能力の対象を選んでください。あと ${remaining} 秒です。`
+        : `能力の対象を選択中です。あと ${remaining} 秒です。`
+    );
+    return;
+  }
   if (room.viewer.isSpectator) {
     const position = Number.isSafeInteger(room.viewer.seatQueuePosition) ? room.viewer.seatQueuePosition : 0;
     const length = Number.isSafeInteger(room.viewer.seatQueueLength) ? room.viewer.seatQueueLength : 0;
@@ -2055,6 +2210,10 @@ function renderStatus(room, me, opponent) {
       ? 'カードを伏せました。相手の選択を待っています…'
       : '一枚を選び、相手の思考を読んでください。');
   } else if (room.gameState === 'finished') {
+    if (room.finishReason?.type === 'system') {
+      setText(elements.status, '状態を安全に保つため、この対局を終了しました。もう一度開始してください。');
+      return;
+    }
     const opponentDisconnected = opponent?.connected === false;
     const winnerSeat = getWinnerSeat(room);
     const mySeat = getSeatForPlayer(room, me);
@@ -2146,6 +2305,96 @@ function renderSpectatorTarotGuide(room) {
   setText(elements.spectatorTarotDescription, `能力：${selectedCard.desc || '能力なし'}`);
 }
 
+function getPrivatePendingAction(room = currentRoom) {
+  const pending = room?.viewer?.pendingAction;
+  return pending?.active === true && room?.gameState === 'playing' ? pending : null;
+}
+
+function renderPrivateActionCountdown(room = currentRoom) {
+  const pending = getPrivatePendingAction(room);
+  if (!pending || !elements.privateActionTimer) return;
+  const remainingMs = Math.max(0, Number(pending.expiresAt) - Date.now());
+  setText(elements.privateActionTimer, `残り ${Math.ceil(remainingMs / 1_000)}秒`);
+}
+
+function clearPrivateActionSubmission() {
+  if (privateActionSubmissionTimeout) window.clearTimeout(privateActionSubmissionTimeout);
+  privateActionSubmissionTimeout = null;
+  privateActionSubmittingId = '';
+}
+
+function submitPrivateActionChoice(action, candidateId) {
+  if (!socket?.connected || !currentRoomId || !action?.id || !action?.nonce
+    || typeof candidateId !== 'string' || privateActionSubmittingId === action.id) return;
+  privateActionSubmittingId = action.id;
+  renderPrivatePendingAction(currentRoom);
+  const submittedActionId = action.id;
+  privateActionSubmissionTimeout = window.setTimeout(() => {
+    if (privateActionSubmittingId !== submittedActionId) return;
+    clearPrivateActionSubmission();
+    if (getPrivatePendingAction(currentRoom)?.id === submittedActionId) {
+      setText(elements.status, '能力の対象を確認しています。通信状態を確認して、もう一度選んでください。');
+      renderPrivatePendingAction(currentRoom);
+    }
+  }, 5_000);
+  socket.emit('resolve_private_action', {
+    roomId: currentRoomId,
+    actionId: action.id,
+    nonce: action.nonce,
+    target: candidateId,
+    gameRevision: action.gameRevision
+  }, (result) => {
+    if (privateActionSubmittingId !== submittedActionId) return;
+    clearPrivateActionSubmission();
+    if (!result?.ok && getPrivatePendingAction(currentRoom)?.id === submittedActionId) {
+      setText(elements.status, result?.message || '対象を確定できませんでした。最新の表示を確認してください。');
+      renderPrivatePendingAction(currentRoom);
+    }
+  });
+}
+
+function renderPrivatePendingAction(room) {
+  if (!elements.privateActionPanel) return;
+  const action = getPrivatePendingAction(room);
+  elements.privateActionPanel.classList.toggle('hidden', !action);
+  if (!action) {
+    clearPrivateActionSubmission();
+    elements.privateActionCandidates.replaceChildren();
+    setText(elements.privateActionTimer, '—');
+    return;
+  }
+  if (privateActionSubmittingId && privateActionSubmittingId !== action.id) clearPrivateActionSubmission();
+  const canChoose = Array.isArray(action.candidates) && typeof action.id === 'string'
+    && typeof action.nonce === 'string' && Number.isSafeInteger(action.gameRevision);
+  setText(elements.privateActionTitle, canChoose ? '能力の対象を選ぶ' : '能力の対象を選択中');
+  setText(
+    elements.privateActionInstruction,
+    action.instruction || action.message || (canChoose
+      ? '対象を1つ選んでください。選択後は取り消せません。'
+      : '対戦者が能力の対象を選んでいます。')
+  );
+  renderPrivateActionCountdown(room);
+  elements.privateActionCandidates.replaceChildren();
+  if (!canChoose) return;
+  const fragment = document.createDocumentFragment();
+  action.candidates.slice(0, 32).forEach((candidate) => {
+    if (!candidate || typeof candidate.id !== 'string' || candidate.id.length > 96) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `private-action-candidate private-action-candidate-${candidate.category || 'card'}`;
+    button.disabled = !socket?.connected || privateActionSubmittingId === action.id;
+    const label = document.createElement('strong');
+    label.textContent = typeof candidate.label === 'string' ? candidate.label : '対象';
+    const description = document.createElement('span');
+    description.textContent = typeof candidate.description === 'string' ? candidate.description : '';
+    button.append(label);
+    if (description.textContent) button.append(description);
+    button.addEventListener('click', () => submitPrivateActionChoice(action, candidate.id));
+    fragment.append(button);
+  });
+  elements.privateActionCandidates.append(fragment);
+}
+
 function updateConfirmButton() {
   const canConfirm = Boolean(
     currentRoom
@@ -2153,6 +2402,7 @@ function updateConfirmButton() {
     && !currentRoom.viewer.isSpectator
     && currentRoom.gameState === 'playing'
     && !currentRoom.viewer.hasConfirmedSelection
+    && !getPrivatePendingAction(currentRoom)
     && mySelectedCardId
   );
   elements.confirmButton.disabled = !canConfirm;
@@ -2197,7 +2447,7 @@ function renderRoom(room) {
   setText(elements.roomChipLabel, isRandomMatch ? 'マッチ' : 'ルーム');
   setText(elements.roomId, isRandomMatch ? 'ランダム' : roomView.id);
   setText(elements.round, roomView.round);
-  setText(elements.roundLimit, `/ ${getRoomRules(roomView).roundLimit}`);
+  setText(elements.roundLimit, `/ ${getDisplayedRoundLimit(getRoomRules(roomView))}`);
   setText(elements.stack, roomView.stack.length);
 
   const isSpectator = roomView.viewer.isSpectator;
@@ -2207,7 +2457,13 @@ function renderRoom(room) {
   const heartPlayer = roomView.players.find((player) => player.suit === '♥');
   const displayedBottomPlayer = isSpectator ? spadePlayer : me;
   const displayedTopPlayer = isSpectator ? heartPlayer : opponent;
-  const isInteractive = Boolean(me && !roomView.viewer.isSpectator && roomView.gameState === 'playing' && !roomView.viewer.hasConfirmedSelection);
+  const isInteractive = Boolean(
+    me
+    && !roomView.viewer.isSpectator
+    && roomView.gameState === 'playing'
+    && !roomView.viewer.hasConfirmedSelection
+    && !roomView.viewer.pendingAction?.active
+  );
   const displayedBottomHand = getSelectableDisplayHand(displayedBottomPlayer?.hand, roomView, isInteractive);
   if (isSpectator) {
     mySelectedCardId = null;
@@ -2258,7 +2514,10 @@ function renderRoom(room) {
   const canFindNextRandom = playerCanAct
     && isRandomMatch
     && ['waiting', 'finished'].includes(roomView.gameState);
-  elements.confirmButton.classList.toggle('hidden', !playerCanAct || roomView.gameState !== 'playing');
+  elements.confirmButton.classList.toggle(
+    'hidden',
+    !playerCanAct || roomView.gameState !== 'playing' || Boolean(roomView.viewer.pendingAction?.active)
+  );
   elements.surrenderButton.classList.toggle('hidden', !canSurrender);
   elements.restartButton.classList.toggle('hidden', !canAgreeToStart);
   elements.nextRandomButton.classList.toggle('hidden', !canFindNextRandom);
@@ -2283,6 +2542,7 @@ function renderRoom(room) {
   renderSpectatorSeatPanel(roomView);
   renderSpectatorTarotGuide(roomView);
   renderRoomRules(roomView);
+  renderPrivatePendingAction(roomView);
   renderTimer(roomView);
   renderReveal(roomView.lastRound || roomView.history?.[roomView.history.length - 1], roomView.finishReason, roomView.winner);
   renderHistory(roomView.history);
@@ -2709,6 +2969,7 @@ if (socket) {
     chatSending = false;
     chatRequestId += 1;
     chatReady = false;
+    clearPrivateActionSubmission();
     updateChatControls();
     if (currentRoom) renderStatus(currentRoom, null, null);
   });

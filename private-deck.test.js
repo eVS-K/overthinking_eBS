@@ -28,6 +28,23 @@ test('Private拡張デッキはカード定義IDと枚数だけから正規化�
   assert.deepEqual(expandPrivateDeckEntries(deck), ['ace', 'ten', 'ten', 'nine', 'eight', 'seven']);
 });
 
+test('使用可能Tarotは各1枚までデッキへ入り、生成・総ラウンド系の新カードも同じ制約を守る', () => {
+  const deck = normalizePrivateDeckEntries([
+    { definitionId: 'the-magician', copies: 1 },
+    { definitionId: 'the-lovers', copies: 1 },
+    { definitionId: 'wheel-of-fortune', copies: 1 },
+    { definitionId: 'ace', copies: 1 },
+    { definitionId: 'king', copies: 1 }
+  ], expandedRules());
+  assert.deepEqual(deck.map((entry) => entry.definitionId), [
+    'ace', 'king', 'the-magician', 'the-lovers', 'wheel-of-fortune'
+  ]);
+  assert.throws(() => normalizePrivateDeckEntries([
+    ...deck,
+    { definitionId: 'the-magician', copies: 1 }
+  ], expandedRules()), /copy limit/);
+});
+
 test('Private拡張デッキは未実装カード、無効な枚数、未到達の終了条件を拒否する', () => {
   assert.throws(() => normalizePrivateDeckEntries([
     { definitionId: 'ace', copies: 1 },

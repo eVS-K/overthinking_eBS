@@ -38,7 +38,23 @@ const AVAILABLE_TAROT_DISPLAY_ORDER = Object.freeze([
   'the-devil',
   'the-tower',
   'the-chariot',
-  'strength'
+  'strength',
+  'the-magician',
+  'the-lovers',
+  'wheel-of-fortune',
+  'the-fool',
+  'the-high-priestess',
+  'the-empress',
+  'the-emperor',
+  'the-hierophant',
+  'the-hermit',
+  'justice',
+  'the-hanged-man',
+  'the-star',
+  'the-moon',
+  'the-sun',
+  'judgement',
+  'the-world'
 ]);
 const AVAILABLE_TAROT_IDS = new Set(AVAILABLE_TAROT_DISPLAY_ORDER);
 // The display sequence reflects the order in which the Private expansion
@@ -51,15 +67,15 @@ const TAROT_GREEK_MARKS_BY_ID = Object.freeze({
   'the-tower': 'δ',
   'the-chariot': 'ε',
   strength: 'ζ',
-  'the-fool': 'η',
-  'the-magician': 'θ',
-  'the-high-priestess': 'ι',
-  'the-empress': 'κ',
-  'the-emperor': 'λ',
-  'the-hierophant': 'μ',
-  'the-lovers': 'ν',
-  'the-hermit': 'ξ',
-  'wheel-of-fortune': 'ο',
+  'the-magician': 'η',
+  'the-lovers': 'θ',
+  'wheel-of-fortune': 'ι',
+  'the-fool': 'κ',
+  'the-high-priestess': 'λ',
+  'the-empress': 'μ',
+  'the-emperor': 'ν',
+  'the-hierophant': 'ξ',
+  'the-hermit': 'ο',
   justice: 'π',
   'the-hanged-man': 'ρ',
   'the-star': 'σ',
@@ -75,10 +91,18 @@ function freezeDefinition(definition) {
     availability: Object.freeze([...(definition.availability || [])]),
     requiresFeatures: Object.freeze([...(definition.requiresFeatures || [])]),
     excludesTags: Object.freeze([...(definition.excludesTags || [])]),
+    providesTags: Object.freeze([...(definition.providesTags || [])]),
     // This is deliberately descriptive metadata, not client-provided rule
     // code. It lets the preset require a virtual Blank fallback only when a
     // selected card could leave a player with no legal hand selection.
-    mayPreventAllLegalPlays: definition.mayPreventAllLegalPlays === true
+    mayPreventAllLegalPlays: definition.mayPreventAllLegalPlays === true,
+    playabilityRisk: typeof definition.playabilityRisk === 'string'
+      ? definition.playabilityRisk
+      : definition.mayPreventAllLegalPlays === true
+        ? 'temporary-all-hand-lock'
+        : 'none',
+    effectProfileId: typeof definition.effectProfileId === 'string' ? definition.effectProfileId : '',
+    uniqueGroup: typeof definition.uniqueGroup === 'string' ? definition.uniqueGroup : ''
   });
 }
 
@@ -116,9 +140,9 @@ const EXTRA_NORMAL_CARD_CATALOG = Object.freeze([
 })));
 
 // Blank is implemented as a virtual, hand-external choice rather than a deck
-// entry. Tarot records are catalogued before their effects are implemented;
-// their status and feature requirements ensure they cannot be smuggled into
-// the first expanded preset through a forged deck payload.
+// entry. Tarot availability is derived from the required, server-owned effect
+// components in the current expanded ruleset; the browser cannot enable a
+// mechanic merely by naming a card definition.
 const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   {
     id: 'blank', name: 'Blank', strength: 0, desc: '能力なし', category: 'blank',
@@ -126,30 +150,34 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   },
   {
     id: 'the-fool', name: 'The Fool', strength: null, desc: '自分の前ラウンドの強さ・能力をコピー', category: 'tarot',
-    requiresFeatures: ['round-snapshot-v1', 'copy-effect-v1'], excludesTags: []
+    requiresFeatures: ['round-snapshot-v1', 'echo-profile-v1'], excludesTags: [], effectProfileId: 'echo-own-v1'
   },
   {
-    id: 'the-magician', name: 'The Magician', strength: 1, desc: '相手が出した札のコピーを2枚加える', category: 'tarot',
+    id: 'the-magician', name: 'The Magician', strength: 1, desc: '相手が出した実カードのコピーを、自分の手札へ2枚加える', category: 'tarot',
     requiresFeatures: ['card-generation-v1'], excludesTags: []
   },
   {
     id: 'the-high-priestess', name: 'The High Priestess', strength: 2, desc: '敗北時、相手札のコピーを1枚加える', category: 'tarot',
-    requiresFeatures: ['target-selection-v1', 'card-generation-v1'], excludesTags: []
+    requiresFeatures: ['target-actions-v1', 'card-generation-v1'], excludesTags: [], effectProfileId: 'copy-opponent-hand-v1'
   },
   {
     id: 'the-empress', name: 'The Empress', strength: 3, desc: '勝利時、相手の非Tarot札を全てロック', category: 'tarot',
-    requiresFeatures: ['lock-state-v1'], excludesTags: [], mayPreventAllLegalPlays: true
+    requiresFeatures: ['lock-state-v1'], excludesTags: [],
+    // Keep the original boolean for older preset/configuration readers while
+    // the richer risk tag tells new code why Blank is compulsory.
+    mayPreventAllLegalPlays: true,
+    playabilityRisk: 'temporary-all-hand-lock', effectProfileId: 'lock-all-non-tarot-v1'
   },
   {
     id: 'the-emperor', name: 'The Emperor', strength: 0, desc: 'Tarot効果を無効化して勝利', category: 'tarot',
-    requiresFeatures: ['tarot-negation-v1'], excludesTags: []
+    requiresFeatures: ['tarot-negation-v1'], excludesTags: [], effectProfileId: 'emperor-override-v1'
   },
   {
     id: 'the-hierophant', name: 'The Hierophant', strength: 5, desc: '敗北時、自分札のコピーを1枚加える', category: 'tarot',
-    requiresFeatures: ['target-selection-v1', 'card-generation-v1'], excludesTags: []
+    requiresFeatures: ['target-actions-v1', 'card-generation-v1'], excludesTags: [], effectProfileId: 'copy-own-hand-v1'
   },
   {
-    id: 'the-lovers', name: 'The Lovers', strength: 6, desc: '勝敗に応じてKingまたはQueenを加える', category: 'tarot',
+    id: 'the-lovers', name: 'The Lovers', strength: 6, desc: '勝利時は自分へKing、敗北時は相手へQueenを1枚加える', category: 'tarot',
     requiresFeatures: ['card-generation-v1'], excludesTags: []
   },
   {
@@ -162,7 +190,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   },
   {
     id: 'the-hermit', name: 'The Hermit', strength: null, desc: '相手の前ラウンドの強さ・能力をコピー', category: 'tarot',
-    requiresFeatures: ['round-snapshot-v1', 'copy-effect-v1'], excludesTags: []
+    requiresFeatures: ['round-snapshot-v1', 'echo-profile-v1'], excludesTags: [], effectProfileId: 'echo-opponent-v1'
   },
   {
     id: 'wheel-of-fortune', name: 'Wheel of Fortune', strength: 10, desc: '勝利時は総ラウンド数+1、敗北時は-1', category: 'tarot',
@@ -170,11 +198,13 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   },
   {
     id: 'justice', name: 'Justice', strength: 11, desc: '勝利時、相手札1枚をロック', category: 'tarot',
-    requiresFeatures: ['target-selection-v1', 'lock-state-v1'], excludesTags: [], mayPreventAllLegalPlays: true
+    requiresFeatures: ['target-actions-v1', 'lock-state-v1'], excludesTags: [],
+    mayPreventAllLegalPlays: true,
+    playabilityRisk: 'temporary-all-hand-lock', effectProfileId: 'lock-one-v1'
   },
   {
     id: 'the-hanged-man', name: 'The Hanged Man', strength: 12, desc: '敗北時、相手が望む札を相手手札へ加える', category: 'tarot',
-    requiresFeatures: ['target-selection-v1', 'card-generation-v1'], excludesTags: []
+    requiresFeatures: ['target-actions-v1', 'card-generation-v1'], excludesTags: [], effectProfileId: 'opponent-choose-copy-v1'
   },
   {
     id: 'death', name: 'Death', strength: null, desc: '獲得札が相手以下なら13、上回ると0', category: 'tarot',
@@ -194,23 +224,24 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   },
   {
     id: 'the-star', name: 'The Star', strength: 17, desc: '相手が望む札をノイズ状態で相手手札へ加える', category: 'tarot',
-    requiresFeatures: ['target-selection-v1', 'card-generation-v1', 'hidden-view-v1'], excludesTags: []
+    requiresFeatures: ['target-actions-v1', 'card-generation-v1', 'recipient-view-v1', 'noise-state-v1'], excludesTags: [], effectProfileId: 'opponent-choose-noise-v1'
   },
   {
     id: 'the-moon', name: 'The Moon', strength: 18, desc: '引き分け時・敗北時に獲得カードを全て失う', category: 'tarot',
-    requiresFeatures: ['acquired-card-loss-v1'], excludesTags: []
+    requiresFeatures: ['won-pile-ledger-v1', 'acquired-card-discard-v1'], excludesTags: [], effectProfileId: 'discard-own-won-pile-v1'
   },
   {
     id: 'the-sun', name: 'The Sun', strength: 19, desc: '自分札を1枚選び破壊', category: 'tarot',
-    requiresFeatures: ['target-selection-v1', 'destroy-card-v1'], excludesTags: [], mayPreventAllLegalPlays: true
+    requiresFeatures: ['pre-commit-target-v1', 'destroy-card-v1'], excludesTags: [],
+    playabilityRisk: 'hand-exhaustion-ends-game', effectProfileId: 'destroy-own-hand-v1'
   },
   {
     id: 'judgement', name: 'Judgement', strength: 0, desc: '過去に出した全札のコピーを加える', category: 'tarot',
-    requiresFeatures: ['history-copy-v1', 'card-generation-v1'], excludesTags: []
+    requiresFeatures: ['played-card-ledger-v1', 'card-generation-v1'], excludesTags: [], effectProfileId: 'copy-played-history-v1'
   },
   {
     id: 'the-world', name: 'The World', strength: 0, desc: '相手の獲得札を奪い、そのコピーを手札へ加える', category: 'tarot',
-    requiresFeatures: ['target-selection-v1', 'acquired-card-transfer-v1', 'card-generation-v1'], excludesTags: []
+    requiresFeatures: ['target-actions-v1', 'won-pile-ledger-v1', 'acquired-card-transfer-v1', 'card-generation-v1'], excludesTags: [], effectProfileId: 'transfer-won-card-v1'
   }
 ].map((definition) => freezeDefinition({
   ...definition,
@@ -232,7 +263,7 @@ const FUTURE_PRIVATE_CARD_DEFINITION_BY_ID = new Map(
 );
 
 // The same catalog order drives both the deck editor and canonical deck
-// summaries.  Put the familiar base deck first, playable Tarot in α–ζ order,
+// summaries.  Put the familiar base deck first, playable Tarot in α–χ order,
 // then the optional no-ability Four–Ten cards that are less commonly used.
 // Unavailable designs remain in the catalog after those visible choices so
 // they cannot alter a live deck's presentation before implementation.
