@@ -58,19 +58,27 @@ test('開始前の拡張デッキ札は設定プレビューとして明示し�
   assert.match(client, /const canChooseCard = isInteractive && !isLocked;/);
 });
 
-test('高度なTarotの対象選択は手札直下の専用パネルで行い、候補トークンは選択者だけが送る', () => {
+test('高度なTarotの対象選択は盤面上の札を選んでから確定し、候補情報は選択者だけが送る', () => {
   const html = read('index.html');
   const client = read('main.js');
   const server = read('server.js');
   const css = read('style.css');
 
   assert.match(html, /id="private-action-panel"[^>]*aria-live="polite"/);
-  assert.match(html, /id="private-action-candidates"[^>]*role="group"/);
+  assert.match(html, /id="private-action-confirm"[^>]*type="button"/);
+  assert.match(html, /id="opp-action-target-tray"/);
+  assert.match(html, /id="my-action-target-tray"/);
+  assert.doesNotMatch(html, /id="private-action-candidates"/);
   assert.ok(
     html.indexOf('id="selected-card-panel"') < html.indexOf('id="private-action-panel"')
       && html.indexOf('id="private-action-panel"') < html.indexOf('id="final-result-panel"'),
-    '対象選択は選択中カードと最終結果の間に置き、盤面を覆わない'
+    '対象を選んだ後の確定操作は選択中カードと最終結果の間に置く'
   );
+  assert.match(client, /function getPrivateActionTarget\(/);
+  assert.match(client, /function renderPrivateActionTargetTrays\(/);
+  assert.match(client, /privateActionSelectedTargetId/);
+  assert.match(client, /card-effect-target/);
+  assert.match(client, /effect-target-selected/);
   assert.match(client, /function renderPrivatePendingAction\(/);
   assert.match(client, /function submitPrivateActionChoice\(/);
   assert.match(client, /socket\.emit\('resolve_private_action'/);
@@ -81,8 +89,9 @@ test('高度なTarotの対象選択は手札直下の専用パネルで行い、
   assert.match(server, /publicPrivatePendingActionForViewer/);
   assert.match(server, /onSocketEvent\('resolve_private_action'/);
   assert.match(css, /\.private-action-panel\s*\{/);
-  assert.match(css, /\.private-action-candidate\s*\{[^}]*min-height:\s*55px;/);
-  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.private-action-candidate\s*\{[^}]*min-height:\s*48px;/);
+  assert.match(css, /\.card-effect-target\s*\{/);
+  assert.match(css, /\.private-action-confirm\s*\{[^}]*min-height:\s*44px;/);
+  assert.match(css, /\.private-action-target-tray\s*\{/);
 });
 
 test('ロック札とThe Starのノイズ札は、色だけに頼らず状態を明示して操作不能にする', () => {
@@ -90,13 +99,14 @@ test('ロック札とThe Starのノイズ札は、色だけに頼らず状態を
   const css = read('style.css');
 
   assert.match(client, /const isLocked = card\?\.state\?\.locked === true;/);
-  assert.match(client, /const isNoise = card\?\.category === 'noise';/);
+  assert.match(client, /const isNoise = card\?\.category === 'noise' \|\| card\?\.state\?\.ownerOnlyNoise === true;/);
   assert.match(client, /const canChooseCard = isInteractive && !isLocked;/);
   assert.match(client, /ロック中のため、今は選べません。/);
   assert.match(client, /card-lock-badge/);
   assert.match(css, /\.card-locked\s*\{[^}]*border-style:\s*dashed;/);
   assert.match(css, /\.card-lock-badge\s*\{/);
   assert.match(css, /\.card-noise\s*\{[^}]*border-style:\s*dashed;/);
+  assert.match(css, /\.card-generated\.card-noise .*card-generated-glitch/);
 });
 
 test('クラシック書体はカード中央だけへ適用し、Jokerも同じ大きさと幅で読める', () => {
@@ -167,12 +177,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v34/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v34/);
+  assert.match(html, /style\.css\?v=pvp-v35/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v35/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v34/);
+  assert.match(loader, /main\.js\?v=pvp-v35/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -230,10 +240,15 @@ test('Private対戦のルール概要と制限時間設定は、現在の設定�
   assert.match(client, /function isRoomHost\(room\) \{\s*return \(room\?\.viewer\?\.isRoomHost \?\? room\?\.viewer\?\.isHost\)/);
   assert.match(client, /socket\.emit\('update_private_settings'/);
   assert.match(client, /room\.matchType === 'random'/);
-  assert.match(client, /const timerLimitMs = pendingAction \? 20_000 : getRoomRules\(room\)\.turnTimeLimitMs;/);
+  assert.match(client, /const timerLimitMs = pendingAction \? 30_000 : getRoomRules\(room\)\.turnTimeLimitMs;/);
   assert.match(client, /\(remainingMs \/ timerLimitMs\) \* 100/);
   assert.match(css, /\.room-rules-panel\s*\{/);
   assert.match(css, /\.private-settings-controls\s*\{/);
+  assert.match(html, /id="room-rules-concepts"/);
+  assert.match(html, /id="room-rules-concepts-list"/);
+  assert.match(client, /activeConcepts/);
+  assert.match(client, /room-rule-concept/);
+  assert.match(css, /\.room-rules-concepts\s*\{/);
 });
 
 test('Private拡張では共通デッキ・終了条件・Blankを待機中だけ編集し、Blankを選択札として描画する', () => {
@@ -321,6 +336,11 @@ test('生成・総ラウンドTarotの効果は結果と履歴へ表示し、対
   assert.match(client, /function getDisplayedRoundLimit\(/);
   assert.match(client, /effectiveRoundLimit/);
   assert.match(client, /function formatExpandedRoundEffects\(/);
+  assert.match(client, /function getExpandedEffectBurstKind\(/);
+  assert.match(client, /function getExpandedEffectBurstId\(/);
+  assert.match(client, /hasNewExpandedEffect/);
+  assert.match(client, /function playExpandedRoundEffects\(/);
+  assert.match(client, /playExpandedRoundEffects\(lastRound\.effects\)/);
   assert.match(client, /round-effect-detail/);
   assert.match(client, /history-effect/);
   assert.match(server, /function publicExpandedRoundEffect\(/);
@@ -328,6 +348,8 @@ test('生成・総ラウンドTarotの効果は結果と履歴へ表示し、対
   assert.match(server, /effectiveRoundLimit: runtimeRoundLimit/);
   assert.match(css, /\.round-outcome \.round-effect-detail\s*\{/);
   assert.match(css, /\.history-detail \.history-effect\s*\{/);
+  assert.match(css, /\.reveal-area\.effect-burst-generate::before/);
+  assert.match(css, /\.reveal-area\.effect-burst-noise::before/);
 });
 
 test('Tarotはギリシャ文字で表示し、観戦者も対局の下で使用中の能力を確認できる', () => {
@@ -380,12 +402,12 @@ test('Joker・2・3の能力カードは青い通常札に半透明の緑を重�
   const css = read('style.css');
 
   assert.match(css, /\.card-has-ability\s*\{[^}]*border-color:\s*#8ccbb7;[^}]*rgba\(57, 70, 108/);
-  assert.match(css, /\.card-has-ability::after\s*\{[^}]*rgba\(84, 189, 151, \.22\)/);
+  assert.match(css, /\.card-has-ability::after\s*\{[^}]*rgba\(94, 174, 149, \.13\)/);
   assert.match(css, /\.selected-card-panel\.selected-card-has-ability\s*\{[^}]*border-color:\s*#8ccbb7;[^}]*rgba\(84, 189, 151, \.18\)/);
-  assert.match(css, /\.expanded-deck-card-has-ability\s*\{[^}]*border-color:\s*#8ccbb7;[^}]*rgba\(84, 189, 151, \.17\)/);
+  assert.match(css, /\.expanded-deck-card-has-ability\s*\{[^}]*border-color:\s*#8ccbb7;[^}]*rgba\(94, 174, 149, \.1\)/);
 });
 
-test('拡張デッキ一覧は、続きがあるときにフェードとスクロール案内を出す', () => {
+test('拡張デッキ一覧は、続きがあるときにフェードとスクロール案内を出し、高さを安全な範囲で調整できる', () => {
   const html = read('index.html');
   const client = read('main.js');
   const css = read('style.css');
@@ -393,13 +415,23 @@ test('拡張デッキ一覧は、続きがあるときにフェードとスク�
   assert.match(html, /id="expanded-deck-scroll"/);
   assert.match(html, /id="expanded-deck-scroll-hint"/);
   assert.match(html, /id="expanded-deck-scroll-description"/);
+  assert.match(html, /id="expanded-deck-height-range"[^>]*type="range"[^>]*min="180"[^>]*max="440"/);
+  assert.match(html, /id="expanded-deck-height-value"/);
+  assert.match(html, /上下にだけ調整できます。最大440pxまでです。/);
   assert.match(html, /aria-describedby="expanded-deck-scroll-description"/);
   assert.match(html, /下へスクロールして、すべてのカードを見る/);
   assert.match(client, /function updateExpandedDeckScrollCue\(/);
+  assert.match(client, /function normalizeExpandedDeckListHeight\(/);
+  assert.match(client, /function applyExpandedDeckListHeight\(/);
+  assert.match(client, /EXPANDED_DECK_HEIGHT_MIN_PX = 180/);
+  assert.match(client, /EXPANDED_DECK_HEIGHT_MAX_PX = 440/);
+  assert.match(client, /expandedDeckHeightRange\?\.addEventListener\('input'/);
   assert.match(client, /elements\.expandedDeckList\.addEventListener\('scroll', updateExpandedDeckScrollCue/);
   assert.match(client, /window\.addEventListener\('resize', \(\) => \{[\s\S]*?updateExpandedDeckScrollCue\(\);/);
   assert.match(css, /\.expanded-deck-scroll\.has-more-below::after\s*\{\s*opacity:\s*1;/);
   assert.match(css, /\.expanded-deck-scroll\.has-more-below \.expanded-deck-scroll-hint\s*\{\s*opacity:\s*1;/);
+  assert.match(css, /\.expanded-deck-list\s*\{[^}]*max-height:\s*var\(--expanded-deck-list-height, 270px\)/);
+  assert.match(css, /\.expanded-deck-height-control\s*\{/);
 });
 
 test('モバイルの手札と組み合わせ早見表は、横に続きがある側だけをフェードで示す', () => {

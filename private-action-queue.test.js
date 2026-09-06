@@ -31,6 +31,7 @@ test('Private対象操作は一回限りトークン・対象者・revisionを�
     roomId: 'private-room', gameRevision: 7, action: action(), now: 1_000, randomBytes
   });
   assert.equal(pending.expiresAt, 1_000 + PRIVATE_ACTION_TIMEOUT_MS);
+  assert.equal(PRIVATE_ACTION_TIMEOUT_MS, 30_000);
   assert.notEqual(pending.id, pending.nonce);
   assert.deepEqual(resolvePrivatePendingAction(pending, {
     actionId: pending.id, nonce: pending.nonce, target: 'room:p2:2', actorSeat: 'p1', gameRevision: 7, now: 1_001

@@ -24,10 +24,14 @@ function idFor(state, seat, definitionId) {
   return card.instanceId;
 }
 
-function makeState(namespace, definitionIds, { blankEnabled = false, roundLimit = definitionIds.length } = {}) {
+function makeState(namespace, definitionIds, {
+  blankEnabled = false,
+  roundLimit = definitionIds.length,
+  scoreTarget = null
+} = {}) {
   return createExpandedPrivateGameState({
     instanceNamespace: namespace,
-    rules: createExpandedPrivateRuleset({ roundLimit, scoreTarget: null, blankEnabled }),
+    rules: createExpandedPrivateRuleset({ roundLimit, scoreTarget, blankEnabled }),
     deck: definitionIds.map((definitionId) => ({ definitionId, copies: 1 }))
   });
 }
@@ -122,7 +126,9 @@ test('敗北時のコピーTarotは対象候補だけを使い、生成札は一
   const priestessAction = highPriestessStart.targetActions[0];
   assert.equal(priestessAction.type, 'copy-opponent-hand');
   const priestess = finalizeStarted(highPriestessStart, [idFor(highPriestessState, 'p2', 'king')]);
-  assert.equal(priestess.state.p1.hand.filter((card) => card.definitionId === 'king').length, 2);
+  const priestessCopies = priestess.state.p1.hand.filter((card) => card.definitionId === 'king');
+  assert.equal(priestessCopies.length, 2);
+  assert.equal(priestessCopies.some((card) => card.state.generated === true), true);
 
   const hierophantState = makeState('advanced-hierophant', ['the-hierophant', 'ace', 'king', 'queen', 'jack']);
   const hierophantStart = beginAdvancedPrivateRound(
@@ -163,6 +169,7 @@ test('The Hanged Man と The Star は凍結デッキ内だけを生成し、Star
   const star = finalizeStarted(starStart, ['king']);
   const noise = star.state.p2.hand.find((card) => card.definitionId === 'king' && isNoiseCard(card));
   assert.ok(noise);
+  assert.equal(noise.state.generated, true);
   assert.doesNotThrow(() => assertPrivateGameState(star.state));
 });
 
@@ -240,6 +247,10 @@ test('高度な履歴では勝敗スナップショット、対象計画、カ�
   forgedLock.p2.hand[0].state.locks.push({ id: 'forged', releaseAfterRound: 99 });
   forgedLock.p2.hand[0].state.locked = true;
   assert.throws(() => assertPrivateGameState(forgedLock), /private card lock is invalid|round does not match|card state is not canonical|advanced private/);
+
+  const forgedGeneratedFlag = structuredClone(done);
+  forgedGeneratedFlag.history[0].p1Card.state.generated = true;
+  assert.throws(() => assertPrivateGameState(forgedGeneratedFlag), /advanced private history card is invalid|card state is not canonical/);
 });
 
 test('期限切れなどで対象選択を飛ばしても、その操作だけを一度安全に完了できる', () => {
@@ -266,4 +277,38 @@ test('期限切れなどで対象選択を飛ばしても、その操作だけ�
 
   const completed = finalizeAdvancedPrivateRound(skipped.state);
   assert.doesNotThrow(() => assertPrivateGameState(completed.state));
+});
+
+test('決着した高度ラウンドは対象効果を待たず、計画を監査可能なskipとして一度だけ完了する', () => {
+  const state = makeState(
+    'advanced-terminal-before-target',
+    ['justice', 'four', 'ace', 'king', 'queen'],
+    { scoreTarget: 2 }
+  );
+  const started = beginAdvancedPrivateRound(
+    state,
+    idFor(state, 'p1', 'justice'),
+    idFor(state, 'p2', 'four')
+  );
+
+  // Justice normally produces a target picker. Winning the two cards reaches
+  // the configured score target, so no player may be kept in an effect UI.
+  assert.equal(started.terminalReasonBeforeTargetActions, 'score-target');
+  assert.equal(started.skippedTargetActionCount, 1);
+  assert.deepEqual(started.targetActions, []);
+  assert.equal(started.record.actionPlan.length, 1);
+  assert.deepEqual(started.record.resolvedActionKeys, [started.record.actionPlan[0].actionKey]);
+  assert.deepEqual(started.record.effects.at(-1), {
+    type: 'skipped-target-action',
+    advanced: true,
+    sourceSeat: 'p1',
+    sourceDefinitionId: 'justice',
+    actionKey: started.record.actionPlan[0].actionKey,
+    reason: 'game-ended-before-target-selection'
+  });
+
+  const finalized = finalizeAdvancedPrivateRound(started.state);
+  assert.equal(finalized.terminal, true);
+  assert.equal(finalized.terminalReason, 'score-target');
+  assert.doesNotThrow(() => assertPrivateGameState(finalized.state));
 });

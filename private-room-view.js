@@ -35,6 +35,8 @@ function publicExpandedCardForViewer(card, {
     return {
       ...publicVirtualBlankCard(),
       category: 'blank',
+      faceLabel: 'Blank',
+      visualRole: 'blank',
       state: { locked: false },
       ...(state && isSeat(ownerSeat) && includeRoundPreview ? {
         roundInfo: { strength: 0, detail: '', conditional: false }
@@ -49,6 +51,8 @@ function publicExpandedCardForViewer(card, {
       desc: '正体は、この札が出されたときに公開されます。',
       category: 'noise',
       displayMark: '?',
+      faceLabel: 'Noise',
+      visualRole: 'noise',
       state: publicCardState(card)
     };
   }
@@ -63,6 +67,9 @@ function publicExpandedCardForViewer(card, {
     desc: publicCard.desc,
     category: preview?.category || publicCard.category || '',
     displayMark: publicCard.displayMark || '',
+    faceLabel: publicCard.faceLabel || publicCard.name,
+    visualRole: publicCard.visualRole || '',
+    generated: publicCard.generated === true,
     state: publicCardState(card, { owner }),
     ...(preview ? {
       roundInfo: {
@@ -82,25 +89,28 @@ function findCandidateCard(state, seat, candidateId) {
 }
 
 function publicCandidate(card, context) {
-  const cardView = publicExpandedCardForViewer(card, { ...context, includeRoundPreview: false });
-  return {
-    id: cardView.id,
-    label: cardView.displayMark ? `${cardView.displayMark} ${cardView.name}` : cardView.name,
-    description: cardView.desc,
-    category: cardView.category,
-    ...(cardView.definitionId ? { definitionId: cardView.definitionId } : {})
-  };
+  return publicExpandedCardForViewer(card, { ...context, includeRoundPreview: false });
 }
 
 function publicDefinitionCandidate(definitionId) {
   const definition = getPrivateCardDefinition(definitionId);
   return {
     id: definition.id,
-    label: definition.displayMark ? `${definition.displayMark} ${definition.name}` : definition.name,
-    description: definition.desc,
+    definitionId: definition.id,
+    name: definition.name,
+    desc: definition.desc,
     category: definition.category,
-    definitionId: definition.id
+    displayMark: definition.displayMark || '',
+    faceLabel: definition.faceLabel || definition.name,
+    visualRole: definition.visualRole || '',
+    state: { locked: false }
   };
+}
+
+function getPendingActionTargetSurface(type) {
+  if (type === 'opponent-choose-copy' || type === 'opponent-choose-noise') return 'addition';
+  if (type === 'transfer-won-card') return 'won-pile';
+  return 'hand';
 }
 
 function actionInstruction(type) {
@@ -110,7 +120,8 @@ function actionInstruction(type) {
     'lock-one': '相手の札を1枚選び、次の相手ラウンドの終了までロックします。',
     'opponent-choose-copy': '自分の手札へ追加したい札を1枚選びます。',
     'opponent-choose-noise': '自分の手札へ追加したい札を1枚選びます。相手にはノイズとして見えます。',
-    'transfer-won-card': '相手の過去の獲得札を1枚選び、そのコピーを自分の手札へ加えます。'
+    'transfer-won-card': '相手の過去の獲得札を1枚選び、その札を自分の手札へ複製します。',
+    'sun-destroy': '自分の手札から、破壊する札を1枚選びます。'
   };
   return messages[type] || '能力の対象を1つ選んでください。';
 }
@@ -132,16 +143,32 @@ function publicPrivatePendingActionForViewer(pending, state, viewerSeat) {
     // A vanished card is never silently exposed or selectable on reconnect.
     return card
       ? publicCandidate(card, { state, ownerSeat: pending.action.targetSeat, viewerSeat })
-      : { id: candidateId, label: '対象なし', description: 'この対象は既に使えません。', category: 'unavailable' };
+      : {
+        id: candidateId,
+        name: '対象なし',
+        desc: 'この対象は既に使えません。',
+        category: 'unavailable',
+        displayMark: '—',
+        faceLabel: '—',
+        visualRole: 'unavailable',
+        state: { locked: true }
+      };
   });
+  const { candidates: candidateIds, ...safeActionView } = actionView;
   return {
-    ...actionView,
+    ...safeActionView,
     instruction: actionInstruction(actionView.type),
-    candidates
+    target: Object.freeze({
+      surface: getPendingActionTargetSurface(actionView.type),
+      seat: pending.action.targetSeat,
+      candidateIds: Object.freeze([...candidateIds]),
+      cards: Object.freeze(candidates.map((candidate) => Object.freeze({ ...candidate })))
+    })
   };
 }
 
 module.exports = {
+  getPendingActionTargetSurface,
   publicExpandedCardForViewer,
   publicPrivatePendingActionForViewer
 };

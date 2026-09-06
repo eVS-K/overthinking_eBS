@@ -18,6 +18,14 @@ const COVERAGE_CHECKS = Object.freeze([
   // complete test suite for this state machine, while retaining a deliberately
   // high per-module floor for the source file itself.
   { file: 'private-game-engine.js', tests: [], lines: 90, branches: 84, functions: 95 },
+  // These modules form the Private expansion's recipient-specific boundary:
+  // card instances close presentation state, the queue protects one-shot
+  // target actions, the room view redacts secrets, and rule concepts expose
+  // only capabilities actually present in the frozen deck.
+  { file: 'private-card-instances.js', tests: ['private-card-instances.test.js', 'private-room-view.test.js', 'private-advanced-tarot.test.js'], lines: 92, branches: 80, functions: 100 },
+  { file: 'private-action-queue.js', tests: ['private-action-queue.test.js', 'server.test.js'], lines: 92, branches: 78, functions: 100 },
+  { file: 'private-room-view.js', tests: ['private-room-view.test.js'], lines: 88, branches: 80, functions: 100 },
+  { file: 'private-rule-concepts.js', tests: ['private-rule-concepts.test.js'], lines: 100, branches: 85, functions: 100 },
   // The state-engine tests intentionally exercise this validator through the
   // public game-state boundary, so include them instead of measuring only the
   // direct constructor calls in private-ruleset.test.js.

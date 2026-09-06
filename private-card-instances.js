@@ -79,6 +79,11 @@ function createPrivateCardInstance({ instanceId, definitionId, state = {} } = {}
     state: {
       locked: locks.length > 0 || state.locked === true,
       flipped: state.flipped === true,
+      // A generated card is still an ordinary, server-issued card for game
+      // logic. This closed flag supports a shared visual treatment without
+      // accepting arbitrary display data from a client. Omit false so old
+      // pre-feature room snapshots remain canonical on reconnect.
+      ...(state.generated === true ? { generated: true } : {}),
       locks,
       visibility,
       revealOn
@@ -121,6 +126,9 @@ function publicClassicCard(instance) {
     desc: definition.desc,
     category: definition.category || '',
     displayMark: definition.displayMark || '',
+    faceLabel: definition.faceLabel || definition.name,
+    visualRole: definition.visualRole || '',
+    generated: normalized.state.generated === true,
     state: { ...normalized.state }
   };
 }

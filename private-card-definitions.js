@@ -85,6 +85,40 @@ const TAROT_GREEK_MARKS_BY_ID = Object.freeze({
   'the-world': 'χ'
 });
 
+// Presentation metadata deliberately lives alongside the immutable card
+// definition, rather than being inferred from the Japanese description in
+// the browser. It is descriptive only: neither the client nor the game
+// engine may use it to decide which effect is legal.
+//
+// `faceLabel` is the compact name intended for the centre of a physical card;
+// the full `name` remains available for accessible labels and detailed text.
+// `visualRole` gives the UI a stable semantic hook even as more Tarot cards
+// are added. Do not turn it into gameplay branching.
+const TAROT_PRESENTATION_BY_ID = Object.freeze({
+  death: Object.freeze({ faceLabel: 'Death', visualRole: 'conditional', ruleConceptIds: ['conditional-strength'] }),
+  temperance: Object.freeze({ faceLabel: 'Temperance', visualRole: 'conditional', ruleConceptIds: ['conditional-strength'] }),
+  'the-devil': Object.freeze({ faceLabel: 'Devil', visualRole: 'conditional', ruleConceptIds: ['conditional-strength'] }),
+  'the-tower': Object.freeze({ faceLabel: 'Tower', visualRole: 'conditional', ruleConceptIds: ['conditional-strength'] }),
+  'the-chariot': Object.freeze({ faceLabel: 'Chariot', visualRole: 'conditional', ruleConceptIds: ['conditional-strength'] }),
+  strength: Object.freeze({ faceLabel: 'Strength', visualRole: 'conditional', ruleConceptIds: ['conditional-strength'] }),
+  'the-magician': Object.freeze({ faceLabel: 'Magician', visualRole: 'generation', ruleConceptIds: ['card-duplication'] }),
+  'the-lovers': Object.freeze({ faceLabel: 'Lovers', visualRole: 'generation', ruleConceptIds: ['card-addition'] }),
+  'wheel-of-fortune': Object.freeze({ faceLabel: 'Wheel', visualRole: 'other', ruleConceptIds: ['round-limit-change'] }),
+  'the-fool': Object.freeze({ faceLabel: 'Fool', visualRole: 'conditional', ruleConceptIds: ['ability-echo'] }),
+  'the-high-priestess': Object.freeze({ faceLabel: 'High Priestess', visualRole: 'generation', ruleConceptIds: ['card-duplication', 'target-selection'] }),
+  'the-empress': Object.freeze({ faceLabel: 'Empress', visualRole: 'lock', ruleConceptIds: ['lock'] }),
+  'the-emperor': Object.freeze({ faceLabel: 'Emperor', visualRole: 'emperor', ruleConceptIds: ['tarot-negation'] }),
+  'the-hierophant': Object.freeze({ faceLabel: 'Hierophant', visualRole: 'generation', ruleConceptIds: ['card-duplication', 'target-selection'] }),
+  'the-hermit': Object.freeze({ faceLabel: 'Hermit', visualRole: 'conditional', ruleConceptIds: ['ability-echo'] }),
+  justice: Object.freeze({ faceLabel: 'Justice', visualRole: 'lock', ruleConceptIds: ['lock', 'target-selection'] }),
+  'the-hanged-man': Object.freeze({ faceLabel: 'Hanged Man', visualRole: 'generation', ruleConceptIds: ['card-addition', 'target-selection'] }),
+  'the-star': Object.freeze({ faceLabel: 'Star', visualRole: 'generation', ruleConceptIds: ['card-addition', 'noise', 'target-selection'] }),
+  'the-moon': Object.freeze({ faceLabel: 'Moon', visualRole: 'other', ruleConceptIds: ['destroy-discard', 'won-pile-operation'] }),
+  'the-sun': Object.freeze({ faceLabel: 'Sun', visualRole: 'other', ruleConceptIds: ['destroy-discard', 'target-selection'] }),
+  judgement: Object.freeze({ faceLabel: 'Judgement', visualRole: 'generation', ruleConceptIds: ['card-duplication'] }),
+  'the-world': Object.freeze({ faceLabel: 'World', visualRole: 'other', ruleConceptIds: ['card-duplication', 'destroy-discard', 'won-pile-operation', 'target-selection'] })
+});
+
 function freezeDefinition(definition) {
   return Object.freeze({
     ...definition,
@@ -102,7 +136,12 @@ function freezeDefinition(definition) {
         ? 'temporary-all-hand-lock'
         : 'none',
     effectProfileId: typeof definition.effectProfileId === 'string' ? definition.effectProfileId : '',
-    uniqueGroup: typeof definition.uniqueGroup === 'string' ? definition.uniqueGroup : ''
+    uniqueGroup: typeof definition.uniqueGroup === 'string' ? definition.uniqueGroup : '',
+    ruleConceptIds: Object.freeze([...(definition.ruleConceptIds || [])]),
+    visualRole: typeof definition.visualRole === 'string' ? definition.visualRole : '',
+    faceLabel: typeof definition.faceLabel === 'string' && definition.faceLabel.length > 0
+      ? definition.faceLabel
+      : definition.name
   });
 }
 
@@ -114,6 +153,8 @@ const CLASSIC_PRIVATE_CARD_CATALOG = Object.freeze(CLASSIC_PRIVATE_CARD_DEFINITI
   maxCopiesPerDeck: 3,
   requiresFeatures: ['public-cards-v1'],
   excludesTags: [],
+  ruleConceptIds: [],
+  visualRole: 'standard',
   visibilityModel: 'public'
 })));
 
@@ -136,6 +177,8 @@ const EXTRA_NORMAL_CARD_CATALOG = Object.freeze([
   maxCopiesPerDeck: 3,
   requiresFeatures: ['public-cards-v1'],
   excludesTags: [],
+  ruleConceptIds: [],
+  visualRole: 'standard',
   visibilityModel: 'public'
 })));
 
@@ -146,18 +189,18 @@ const EXTRA_NORMAL_CARD_CATALOG = Object.freeze([
 const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
   {
     id: 'blank', name: 'Blank', strength: 0, desc: '能力なし', category: 'blank',
-    requiresFeatures: ['blank-semantics-v1'], excludesTags: []
+    requiresFeatures: ['blank-semantics-v1'], excludesTags: [], visualRole: 'blank', ruleConceptIds: ['blank']
   },
   {
     id: 'the-fool', name: 'The Fool', strength: null, desc: '自分の前ラウンドの強さ・能力をコピー', category: 'tarot',
     requiresFeatures: ['round-snapshot-v1', 'echo-profile-v1'], excludesTags: [], effectProfileId: 'echo-own-v1'
   },
   {
-    id: 'the-magician', name: 'The Magician', strength: 1, desc: '相手が出した実カードのコピーを、自分の手札へ2枚加える', category: 'tarot',
+    id: 'the-magician', name: 'The Magician', strength: 1, desc: '相手が出した実カードを、自分の手札へ2枚複製', category: 'tarot',
     requiresFeatures: ['card-generation-v1'], excludesTags: []
   },
   {
-    id: 'the-high-priestess', name: 'The High Priestess', strength: 2, desc: '敗北時、相手札のコピーを1枚加える', category: 'tarot',
+    id: 'the-high-priestess', name: 'The High Priestess', strength: 2, desc: '敗北時、相手札を1枚選び自分の手札へ複製', category: 'tarot',
     requiresFeatures: ['target-actions-v1', 'card-generation-v1'], excludesTags: [], effectProfileId: 'copy-opponent-hand-v1'
   },
   {
@@ -173,7 +216,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
     requiresFeatures: ['tarot-negation-v1'], excludesTags: [], effectProfileId: 'emperor-override-v1'
   },
   {
-    id: 'the-hierophant', name: 'The Hierophant', strength: 5, desc: '敗北時、自分札のコピーを1枚加える', category: 'tarot',
+    id: 'the-hierophant', name: 'The Hierophant', strength: 5, desc: '敗北時、自分札を1枚選び複製', category: 'tarot',
     requiresFeatures: ['target-actions-v1', 'card-generation-v1'], excludesTags: [], effectProfileId: 'copy-own-hand-v1'
   },
   {
@@ -236,15 +279,16 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
     playabilityRisk: 'hand-exhaustion-ends-game', effectProfileId: 'destroy-own-hand-v1'
   },
   {
-    id: 'judgement', name: 'Judgement', strength: 0, desc: '過去に出した全札のコピーを加える', category: 'tarot',
+    id: 'judgement', name: 'Judgement', strength: 0, desc: '過去に出した全札を手札へ複製', category: 'tarot',
     requiresFeatures: ['played-card-ledger-v1', 'card-generation-v1'], excludesTags: [], effectProfileId: 'copy-played-history-v1'
   },
   {
-    id: 'the-world', name: 'The World', strength: 0, desc: '相手の獲得札を奪い、そのコピーを手札へ加える', category: 'tarot',
+    id: 'the-world', name: 'The World', strength: 0, desc: '相手の獲得札を1枚破棄し、その札を自分の手札へ複製', category: 'tarot',
     requiresFeatures: ['target-actions-v1', 'won-pile-ledger-v1', 'acquired-card-transfer-v1', 'card-generation-v1'], excludesTags: [], effectProfileId: 'transfer-won-card-v1'
   }
 ].map((definition) => freezeDefinition({
   ...definition,
+  ...(definition.category === 'tarot' ? TAROT_PRESENTATION_BY_ID[definition.id] : {}),
   displayMark: definition.category === 'tarot'
     ? TAROT_GREEK_MARKS_BY_ID[definition.id]
     : '',
@@ -307,6 +351,7 @@ module.exports = {
   AVAILABLE_TAROT_DISPLAY_ORDER,
   AVAILABLE_TAROT_IDS,
   TAROT_GREEK_MARKS_BY_ID,
+  TAROT_PRESENTATION_BY_ID,
   getClassicPrivateCardDefinition,
   getPrivateCardDefinition
 };

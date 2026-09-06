@@ -8,7 +8,10 @@
  */
 const crypto = require('crypto');
 
-const PRIVATE_ACTION_TIMEOUT_MS = 20_000;
+// Target effects are deliberate, potentially irreversible choices. Keep this
+// distinct from the normal turn clock and long enough to inspect a changing
+// board on touch devices.
+const PRIVATE_ACTION_TIMEOUT_MS = 30_000;
 const MAX_PRIVATE_ACTION_CANDIDATES = 32;
 const ACTION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 const TARGET_PATTERN = /^[A-Za-z0-9:_-]{1,96}$/;

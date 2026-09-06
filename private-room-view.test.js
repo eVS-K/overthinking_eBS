@@ -35,6 +35,8 @@ test('The Starのノイズ札は所有者以外のpayloadへ定義・能力・�
       desc: '正体は、この札が出されたときに公開されます。',
       category: 'noise',
       displayMark: '?',
+      faceLabel: 'Noise',
+      visualRole: 'noise',
       state: { locked: false }
     });
     assert.doesNotMatch(JSON.stringify(view), /king|能力|revealOn|visibility|locks/);
@@ -53,10 +55,13 @@ test('対象操作は行為者にだけ候補を見せ、ノイズ対象でも�
   });
   const actor = publicPrivatePendingActionForViewer(pending, state, 'p1');
   const outsider = publicPrivatePendingActionForViewer(pending, state, 'p2');
-  assert.equal(actor.candidates[0].label, '? Noise');
-  assert.equal(actor.candidates[0].definitionId, undefined);
+  assert.equal(actor.target.surface, 'hand');
+  assert.equal(actor.target.seat, 'p2');
+  assert.deepEqual(actor.target.candidateIds, [noise.instanceId]);
+  assert.equal(actor.target.cards[0].name, 'Noise');
+  assert.equal(actor.target.cards[0].definitionId, undefined);
   assert.doesNotMatch(JSON.stringify(actor), /king/);
-  assert.equal(outsider.candidates, undefined);
+  assert.equal(outsider.target, undefined);
   assert.equal(outsider.nonce, undefined);
 });
 
@@ -73,5 +78,44 @@ test('太陽の確定前対象操作は、行為者以外へ操作中である�
   });
   assert.equal(publicPrivatePendingActionForViewer(pending, state, 'p2'), null);
   assert.equal(publicPrivatePendingActionForViewer(pending, state, null), null);
-  assert.equal(publicPrivatePendingActionForViewer(pending, state, 'p1').type, 'sun-destroy');
+  const actor = publicPrivatePendingActionForViewer(pending, state, 'p1');
+  assert.equal(actor.type, 'sun-destroy');
+  assert.equal(actor.target.surface, 'hand');
+  assert.equal(actor.target.seat, 'p1');
+});
+
+test('追加候補と獲得札候補は盤面に必要な安全な札情報だけを行為者へ送る', () => {
+  const { state } = createState();
+  const additionPending = createPrivatePendingAction({
+    roomId: 'addition-view', gameRevision: 1, now: 100,
+    randomBytes: () => Buffer.from('1234567890123456'),
+    action: {
+      type: 'opponent-choose-copy', round: 1, sourceSeat: 'p1', sourceDefinitionId: 'the-hanged-man',
+      actorSeat: 'p2', targetSeat: 'p2', actionKey: '1:p1:hang:choose:0', candidates: ['ace']
+    }
+  });
+  const addition = publicPrivatePendingActionForViewer(additionPending, state, 'p2');
+  assert.equal(addition.target.surface, 'addition');
+  assert.deepEqual(addition.target.cards[0], {
+    id: 'ace', definitionId: 'ace', name: 'Ace', desc: '能力なし', category: 'classic',
+    displayMark: '', faceLabel: 'Ace', visualRole: 'standard', state: { locked: false }
+  });
+  assert.equal(publicPrivatePendingActionForViewer(additionPending, state, 'p1').target, undefined);
+
+  const wonCard = state.p2.hand.pop();
+  state.p2.wonPile.push(wonCard);
+  const worldPending = createPrivatePendingAction({
+    roomId: 'world-view', gameRevision: 1, now: 100,
+    randomBytes: () => Buffer.from('abcdefghijklmnop'),
+    action: {
+      type: 'transfer-won-card', round: 2, sourceSeat: 'p1', sourceDefinitionId: 'the-world',
+      actorSeat: 'p1', targetSeat: 'p2', actionKey: '2:p1:world:transfer:0', candidates: [wonCard.instanceId]
+    }
+  });
+  const world = publicPrivatePendingActionForViewer(worldPending, state, 'p1');
+  assert.equal(world.target.surface, 'won-pile');
+  assert.equal(world.target.cards[0].id, wonCard.instanceId);
+  assert.equal(world.target.cards[0].definitionId, wonCard.definitionId);
+  assert.equal(typeof world.target.cards[0].name, 'string');
+  assert.equal(typeof world.target.cards[0].desc, 'string');
 });

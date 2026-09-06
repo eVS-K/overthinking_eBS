@@ -28,6 +28,7 @@ const {
   ensurePrivateRoomHost,
   expireDisconnectedPlayer,
   finishGameByForfeit,
+  getPublicRoomRules,
   getSelectableCardIds,
   getRoomTurnTimeLimitMs,
   isPrivateRoomIdleExpired,
@@ -154,6 +155,63 @@ test('Private設定イベントは拡張ルールの全フィールドを権威�
     blankEnabled: true,
     deck: [{ definitionId: 'ace', copies: 2 }]
   });
+});
+
+test('公開する部屋ルールは凍結済み拡張デッキから能力用語集と安全な表示メタデータを生成する', () => {
+  const room = createRoom('public-expanded-concepts');
+  room.privateConfig = createExpandedPrivateRoomConfig({
+    ruleset: 'private-expanded-v1',
+    deck: [
+      { definitionId: 'the-emperor', copies: 1 },
+      { definitionId: 'the-star', copies: 1 },
+      { definitionId: 'ace', copies: 3 }
+    ],
+    roundLimit: 5,
+    blankEnabled: true
+  });
+  const rules = getPublicRoomRules(room);
+  assert.deepEqual(rules.activeConcepts.map((concept) => concept.id), [
+    'card-addition', 'noise', 'tarot-negation', 'target-selection', 'blank'
+  ]);
+  const emperor = rules.deckCatalog.find((card) => card.id === 'the-emperor');
+  assert.deepEqual(emperor, {
+    id: 'the-emperor',
+    name: 'The Emperor',
+    desc: 'Tarot効果を無効化して勝利',
+    category: 'tarot',
+    displayMark: 'ν',
+    faceLabel: 'Emperor',
+    visualRole: 'emperor',
+    maxCopiesPerDeck: 1
+  });
+
+  const classicRules = getPublicRoomRules({ matchType: 'random' });
+  assert.deepEqual(classicRules.activeConcepts, []);
+  assert.deepEqual(classicRules.deckCatalog, []);
+});
+
+test('公開効果は両者向けの対象側を保ち、終局で省略された対象選択だけを安全に説明する', () => {
+  assert.deepEqual(publicExpandedRoundEffect({
+    type: 'discard-won-cards', sourceSeat: 'p2', sourceDefinitionId: 'the-moon',
+    targetSeat: 'p2', discardedCount: 4, privateCardId: 'must-not-leak'
+  }), {
+    type: 'discard-won-cards', sourceSeat: 'p2', sourceDefinitionId: 'the-moon', targetSeat: 'p2', discardedCount: 4
+  });
+  assert.deepEqual(publicExpandedRoundEffect({
+    type: 'skipped-target-action', sourceSeat: 'p1', sourceDefinitionId: 'justice',
+    reason: 'game-ended-before-target-selection', privateReason: 'must-not-leak'
+  }), {
+    type: 'skipped-target-action', sourceSeat: 'p1', sourceDefinitionId: 'justice',
+    reason: 'game-ended-before-target-selection'
+  });
+  assert.deepEqual(publicExpandedRoundEffect({
+    type: 'skipped-target-action', sourceSeat: 'p1', sourceDefinitionId: 'justice', reason: 'arbitrary-engine-detail'
+  }), {
+    type: 'skipped-target-action', sourceSeat: 'p1', sourceDefinitionId: 'justice'
+  });
+  assert.equal(publicExpandedRoundEffect({
+    type: 'discard-won-cards', sourceSeat: 'p2', sourceDefinitionId: 'the-moon', discardedCount: 4
+  }), null, 'missing target seat must fail closed instead of emitting an ambiguous event');
 });
 
 test('観戦参加・空席への参加は明示的なboolean opt-inだけを受け入れる', () => {
@@ -873,7 +931,7 @@ test('二人の対戦者がそれぞれ同意するまで対局は始まらず�
   finishGameByForfeit(room, room.players[0]);
 });
 
-function createAdvancedPrivateRoomForActionTest(id, deck) {
+function createAdvancedPrivateRoomForActionTest(id, deck, { roundLimit = 2 } = {}) {
   const room = createRoom(id);
   room.players = [
     { id: 'p1', clientId: 'p1-client', name: '先手', suit: '♠', hand: [], score: 0, connected: true },
@@ -885,7 +943,7 @@ function createAdvancedPrivateRoomForActionTest(id, deck) {
     configRevision: room.configRevision,
     ruleset: 'private-expanded-v1',
     turnTimeLimitMs: 90_000,
-    roundLimit: 1,
+    roundLimit,
     scoreTarget: null,
     blankEnabled: true,
     deck: deck.map((definitionId) => ({ definitionId, copies: 1 }))
@@ -921,14 +979,14 @@ test('高度なPrivate対象操作は行為者だけに候補を公開し、一�
 
   const actorView = createRoomView(room, 'p1');
   const otherView = createRoomView(room, 'p2');
-  assert.equal(actorView.viewer.pendingAction.candidates.length, 5);
+  assert.equal(actorView.viewer.pendingAction.target.candidateIds.length, 5);
   assert.equal(typeof actorView.viewer.pendingAction.nonce, 'string');
-  assert.equal(otherView.viewer.pendingAction.candidates, undefined);
+  assert.equal(otherView.viewer.pendingAction.target, undefined);
   assert.equal(otherView.viewer.pendingAction.nonce, undefined);
 
   const target = pending.action.candidates[0];
   assert.deepEqual(completePrivatePendingAction(room, target), { ok: true, timedOut: false });
-  assert.equal(room.gameState, 'finished');
+  assert.equal(room.gameState, 'playing');
   assert.equal(room.privateGameState.history[0].effects.filter((effect) => effect.type === 'lock-card').length, 1);
   assert.equal(room.privateGameState.p2.hand.find((card) => card.instanceId === target).state.locks.length, 1);
   assert.deepEqual(completePrivatePendingAction(room, target), { ok: false, code: 'missing' });
@@ -950,12 +1008,12 @@ test('The Sunの破棄対象は確定前には状態を変えず、選択後だ�
   assert.equal(pending?.phase, 'pre-commit');
   const actorView = createRoomView(room, 'p1');
   const otherView = createRoomView(room, 'p2');
-  assert.ok(actorView.viewer.pendingAction.candidates.some((candidate) => candidate.id === aceId));
+  assert.ok(actorView.viewer.pendingAction.target.candidateIds.includes(aceId));
   assert.equal(otherView.viewer.pendingAction, null);
   assert.equal(otherView.deadline, room.privatePreCommitTurnDeadline);
 
   assert.deepEqual(completePrivatePendingAction(room, aceId), { ok: true, timedOut: false });
-  assert.equal(room.gameState, 'finished');
+  assert.equal(room.gameState, 'playing');
   assert.equal(room.privateGameState.p1.hand.some((card) => card.instanceId === aceId), false);
   assert.equal(room.privateGameState.discardPile.some((entry) => entry.card.instanceId === aceId && entry.reason === 'sun'), true);
   assert.equal(room.privateGameState.history[0].p1Card.definitionId, 'the-sun');
@@ -986,8 +1044,8 @@ test('対象選択中に切断しても、再接続後は同じ一回限りの�
   assert.equal(room.gameState, 'playing');
   assert.equal(room.privatePendingAction.id, actionId);
   assert.equal(room.privatePendingAction.nonce, nonce);
-  assert.ok(createRoomView(room, 'p1').viewer.pendingAction.candidates.length > 0);
-  assert.equal(createRoomView(room, 'p2').viewer.pendingAction.candidates, undefined);
+  assert.ok(createRoomView(room, 'p1').viewer.pendingAction.target.candidateIds.length > 0);
+  assert.equal(createRoomView(room, 'p2').viewer.pendingAction.target, undefined);
 });
 
 test('The Starの秘匿札と公開履歴はrecipientごとに投影され、内部対象IDを漏らさない', () => {
@@ -1033,8 +1091,8 @@ test('The Starの秘匿札と公開履歴はrecipientごとに投影され、内
   assert.equal(JSON.stringify(actorOpponentHand).includes('king'), false);
   assert.equal(JSON.stringify(spectatorOpponentHand).includes('king'), false);
   assert.equal(JSON.stringify(ownerHand).includes('king'), true);
-  assert.equal(actorView.viewer.pendingAction.candidates[0].definitionId, undefined);
-  assert.equal(spectatorView.viewer.pendingAction.candidates, undefined);
+  assert.equal(actorView.viewer.pendingAction.target.cards[0].definitionId, undefined);
+  assert.equal(spectatorView.viewer.pendingAction.target, undefined);
 
   const publicEffect = publicExpandedRoundEffect({
     type: 'destroy-card', sourceSeat: 'p1', sourceDefinitionId: 'the-sun', targetSeat: 'p1',

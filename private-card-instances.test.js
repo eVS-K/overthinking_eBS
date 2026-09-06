@@ -41,9 +41,23 @@ test('Privateカード実体は既知の定義と狭い状態だけを保持し�
   assert.equal(publicCard.name, 'Three');
   assert.equal(publicCard.desc, 'Jokerに勝利');
   assert.equal(publicCard.category, 'classic');
+  assert.equal(publicCard.generated, false);
   assert.equal(getClassicCardDefinition('three').id, 'three');
   assert.throws(() => createPrivateCardInstance({ instanceId: 'not-an-instance', definitionId: 'ace' }), /instance id/);
   assert.throws(() => createPrivateCardInstance({ instanceId: 'roomSeed:p2:2', definitionId: 'forged' }), /definition/);
+});
+
+test('生成札の表示状態は閉じたbooleanとして複製・公開され、任意の装飾値を通さない', () => {
+  const generated = createPrivateCardInstance({
+    instanceId: 'roomSeed:p1:8',
+    definitionId: 'the-magician',
+    state: { generated: true, generatedStyle: 'forged' }
+  });
+  assert.equal(generated.state.generated, true);
+  assert.equal(Object.hasOwn(generated.state, 'generatedStyle'), false);
+  const view = publicClassicCard(generated);
+  assert.equal(view.generated, true);
+  assert.equal(view.state.generated, true);
 });
 
 test('公開用のTarotカードは能力表示に必要な種類とギリシャ記号だけを持つ', () => {

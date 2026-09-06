@@ -28,7 +28,9 @@ const {
   skipAdvancedTargetAction
 } = require('./private-game-engine');
 const { PRIVATE_CARD_CATALOG, getPrivateCardDefinition } = require('./private-card-definitions');
+const { getPrivateRuleConceptsForDeck } = require('./private-rule-concepts');
 const {
+  PRIVATE_ACTION_TIMEOUT_MS,
   chooseExpiredPrivateActionTarget,
   createPrivatePendingAction,
   resolvePrivatePendingAction
@@ -418,12 +420,14 @@ function getPublicRoomRules(room) {
   const expandedDeckCatalog = isExpandedPrivateRoomConfig(config)
     ? PRIVATE_CARD_CATALOG
       .filter((definition) => definition.status === 'available' && definition.availability.includes(config.ruleset))
-      .map(({ id, name, desc, category, displayMark, maxCopiesPerDeck }) => ({
+      .map(({ id, name, desc, category, displayMark, faceLabel, visualRole, maxCopiesPerDeck }) => ({
         id,
         name,
         desc,
         category,
         displayMark: displayMark || '',
+        faceLabel: faceLabel || name,
+        visualRole: visualRole || '',
         maxCopiesPerDeck
       }))
     : [];
@@ -431,6 +435,11 @@ function getPublicRoomRules(room) {
     ...config,
     effectiveRoundLimit: runtimeRoundLimit,
     deckCatalog: expandedDeckCatalog,
+    activeConcepts: getPrivateRuleConceptsForDeck({
+      ruleset: config.ruleset,
+      deck: config.deck,
+      blankEnabled: config.blankEnabled
+    }),
     // Config revisions only apply to private-room setup. It is still safe and
     // useful to expose a stable zero to legacy/Random clients.
     configRevision: room?.matchType === 'private' && Number.isSafeInteger(room.configRevision)
@@ -469,6 +478,8 @@ function getExpandedLobbyDeckPreview(room) {
         desc: definition.desc,
         category: definition.category,
         displayMark: definition.displayMark || '',
+        faceLabel: definition.faceLabel || definition.name,
+        visualRole: definition.visualRole || '',
         preview: true,
         state: Object.freeze({ locked: false })
       }));
@@ -586,7 +597,12 @@ function publicExpandedRoundEffect(effect) {
     return {
       type: 'skipped-target-action',
       sourceSeat: effect.sourceSeat,
-      sourceDefinitionId: effect.sourceDefinitionId
+      sourceDefinitionId: effect.sourceDefinitionId,
+      // Keep the one public terminal explanation, but never forward an
+      // arbitrary internal reason string into a shared history payload.
+      ...(effect.reason === 'game-ended-before-target-selection'
+        ? { reason: 'game-ended-before-target-selection' }
+        : {})
     };
   }
   if (effect.type === 'round-limit-adjustment'
@@ -1869,7 +1885,7 @@ function schedulePrivateActionTimer(room, { remainingMs = null } = {}) {
     || room.players.length !== 2 || !room.players.every((player) => player.connected)) return false;
   const now = Date.now();
   const requested = Number.isFinite(remainingMs) ? remainingMs : pending.expiresAt - now;
-  const safeDuration = Math.max(0, Math.min(Math.floor(requested), 20_000));
+  const safeDuration = Math.max(0, Math.min(Math.floor(requested), PRIVATE_ACTION_TIMEOUT_MS));
   if (remainingMs !== null) {
     room.privatePendingAction = Object.freeze({ ...pending, expiresAt: now + safeDuration });
   }
@@ -2063,7 +2079,7 @@ function beginSunPreCommitAction(room, player, seat, sunInstanceId) {
       roomId: room.id,
       gameRevision: nextPrivateGameRevision(room),
       phase: 'pre-commit',
-      timeoutMs: Math.max(1, Math.min(20_000, originalDeadline - now)),
+      timeoutMs: Math.max(1, Math.min(PRIVATE_ACTION_TIMEOUT_MS, originalDeadline - now)),
       action
     });
   } catch {
@@ -2905,6 +2921,7 @@ module.exports = {
   expireDisconnectedPlayer,
   finishGameByForfeit,
   getSelectableCardIds,
+  getPublicRoomRules,
   getRoomTurnTimeLimitMs,
   isPrivateRoomIdleExpired,
   io,

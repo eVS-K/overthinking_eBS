@@ -28,6 +28,9 @@ const MIN_EXPANDED_DECK_SIZE = 5;
 const MAX_EXPANDED_DECK_SIZE = 14;
 const MAX_EXPANDED_CARD_COPIES = 3;
 const MAX_PRIVATE_PRESETS = 10;
+const EXPANDED_DECK_HEIGHT_MIN_PX = 180;
+const EXPANDED_DECK_HEIGHT_MAX_PX = 440;
+const EXPANDED_DECK_HEIGHT_STEP_PX = 10;
 const DEFAULT_EXPANDED_DECK = Object.freeze([
   { definitionId: 'ace', copies: 1 },
   { definitionId: 'king', copies: 1 },
@@ -65,6 +68,8 @@ let mySelectedCardId = null;
 let committedCardId = null;
 let privateActionSubmittingId = '';
 let privateActionSubmissionTimeout = null;
+let privateActionSelectedActionId = '';
+let privateActionSelectedTargetId = '';
 let joinedRoom = Boolean(savedSession);
 let currentRoom = null;
 let timerInterval = null;
@@ -77,9 +82,15 @@ let privatePresetLoading = false;
 let privatePresetWriting = false;
 let privatePresetFeedback = '';
 let spectatorTarotSelectionId = '';
+let expandedDeckListHeight = readExpandedDeckListHeight();
 let lastRoundId = null;
+// A target action resolves after its cards were already revealed.  Its effects
+// therefore need a separate identity from the round itself; otherwise the
+// one-time reveal animation would have consumed the only animation chance.
+let lastExpandedEffectBurstId = '';
 let lastFinaleId = null;
 let finalResultAnimationTimer = null;
+let expandedEffectBurstTimer = null;
 const previousScores = new Map();
 let chatMessages = [];
 let chatSentCount = 0;
@@ -134,6 +145,9 @@ const elements = {
   myScore: document.getElementById('my-score'),
   myHandScroll: document.getElementById('my-hand-scroll'),
   myHand: document.getElementById('my-hand'),
+  myActionTargetTray: document.getElementById('my-action-target-tray'),
+  myActionTargetLabel: document.getElementById('my-action-target-label'),
+  myActionTargetCards: document.getElementById('my-action-target-cards'),
   selectedCardPanel: document.getElementById('selected-card-panel'),
   selectedCardSuit: document.getElementById('selected-card-suit'),
   selectedCardName: document.getElementById('selected-card-name'),
@@ -143,12 +157,16 @@ const elements = {
   privateActionTitle: document.getElementById('private-action-title'),
   privateActionTimer: document.getElementById('private-action-timer'),
   privateActionInstruction: document.getElementById('private-action-instruction'),
-  privateActionCandidates: document.getElementById('private-action-candidates'),
+  privateActionSelection: document.getElementById('private-action-selection'),
+  privateActionConfirm: document.getElementById('private-action-confirm'),
   opponentName: document.getElementById('opp-name'),
   opponentSideLabel: document.getElementById('opp-side-label'),
   opponentScore: document.getElementById('opp-score'),
   opponentHandScroll: document.getElementById('opp-hand-scroll'),
   opponentHand: document.getElementById('opp-hand'),
+  opponentActionTargetTray: document.getElementById('opp-action-target-tray'),
+  opponentActionTargetLabel: document.getElementById('opp-action-target-label'),
+  opponentActionTargetCards: document.getElementById('opp-action-target-cards'),
   matchupTableScroll: document.getElementById('matchup-table-scroll'),
   matchupTableWrap: document.getElementById('matchup-table-wrap'),
   opponentZone: document.getElementById('opponent-zone'),
@@ -175,6 +193,8 @@ const elements = {
   roomRulesDeck: document.getElementById('room-rules-deck'),
   roomRulesEnd: document.getElementById('room-rules-end'),
   roomRulesTimeout: document.getElementById('room-rules-timeout'),
+  roomRulesConcepts: document.getElementById('room-rules-concepts'),
+  roomRulesConceptsList: document.getElementById('room-rules-concepts-list'),
   privateSettingsControls: document.getElementById('private-settings-controls'),
   privateSettingsOwnerName: document.getElementById('private-settings-owner-name'),
   transferPrivateSettingsOwnerButton: document.getElementById('transfer-private-settings-owner-btn'),
@@ -184,6 +204,8 @@ const elements = {
   expandedDeckTotal: document.getElementById('expanded-deck-total'),
   expandedDeckScroll: document.getElementById('expanded-deck-scroll'),
   expandedDeckList: document.getElementById('expanded-deck-list'),
+  expandedDeckHeightRange: document.getElementById('expanded-deck-height-range'),
+  expandedDeckHeightValue: document.getElementById('expanded-deck-height-value'),
   expandedRoundLimitInput: document.getElementById('expanded-round-limit-input'),
   expandedScoreTargetEnabled: document.getElementById('expanded-score-target-enabled'),
   expandedScoreTargetLabel: document.getElementById('expanded-score-target-label'),
@@ -374,6 +396,7 @@ function resetLocalRoomForRandomSearch(message) {
   mySelectedCardId = null;
   committedCardId = null;
   lastRoundId = null;
+  lastExpandedEffectBurstId = '';
   lastFinaleId = null;
   previousScores.clear();
   resetChat();
@@ -613,8 +636,19 @@ function getRoomRules(room) {
         desc: typeof card.desc === 'string' ? card.desc : '',
         category: typeof card.category === 'string' ? card.category : '',
         displayMark: typeof card.displayMark === 'string' ? card.displayMark : '',
+        faceLabel: typeof card.faceLabel === 'string' && card.faceLabel.length > 0 ? card.faceLabel : card.name,
+        visualRole: typeof card.visualRole === 'string' ? card.visualRole : '',
         maxCopiesPerDeck: Number.isSafeInteger(card.maxCopiesPerDeck) ? card.maxCopiesPerDeck : MAX_EXPANDED_CARD_COPIES
       }))
+    : [];
+  const activeConcepts = Array.isArray(source.activeConcepts)
+    ? source.activeConcepts
+      .filter((concept) => concept
+        && typeof concept.id === 'string' && /^[a-z0-9-]{1,64}$/.test(concept.id)
+        && typeof concept.title === 'string' && concept.title.length > 0 && concept.title.length <= 80
+        && typeof concept.description === 'string' && concept.description.length > 0 && concept.description.length <= 320)
+      .slice(0, 16)
+      .map((concept) => ({ id: concept.id, title: concept.title, description: concept.description }))
     : [];
   const ruleset = source.ruleset === EXPANDED_PRIVATE_RULESET_ID
     ? EXPANDED_PRIVATE_RULESET_ID
@@ -659,6 +693,7 @@ function getRoomRules(room) {
     timeoutPolicy: blankEnabled ? 'random-legal-with-blank' : 'random-legal',
     deck,
     deckCatalog,
+    activeConcepts,
     configRevision: Number.isSafeInteger(configuredRevision) && configuredRevision >= 0 ? configuredRevision : 0,
     locked: source.locked === true || ['playing', 'reconnecting'].includes(room?.gameState)
   };
@@ -1093,6 +1128,42 @@ function updateExpandedDeckScrollCue() {
   wrapper.classList.toggle('has-more-below', hasMoreBelow);
 }
 
+function normalizeExpandedDeckListHeight(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const rounded = Math.round(parsed / EXPANDED_DECK_HEIGHT_STEP_PX) * EXPANDED_DECK_HEIGHT_STEP_PX;
+  return Math.max(EXPANDED_DECK_HEIGHT_MIN_PX, Math.min(EXPANDED_DECK_HEIGHT_MAX_PX, rounded));
+}
+
+function readExpandedDeckListHeight() {
+  try {
+    const stored = normalizeExpandedDeckListHeight(window.sessionStorage.getItem('overthinking-expanded-deck-height'));
+    if (stored !== null) return stored;
+  } catch {
+    // A visual preference must never prevent a guest room from rendering.
+  }
+  return window.matchMedia?.('(max-width: 660px)').matches ? 300 : 270;
+}
+
+function applyExpandedDeckListHeight(height, { persist = false } = {}) {
+  const normalized = normalizeExpandedDeckListHeight(height);
+  if (normalized === null) return;
+  expandedDeckListHeight = normalized;
+  if (elements.expandedDeckList) {
+    elements.expandedDeckList.style.setProperty('--expanded-deck-list-height', `${normalized}px`);
+  }
+  if (elements.expandedDeckHeightRange) elements.expandedDeckHeightRange.value = String(normalized);
+  if (elements.expandedDeckHeightValue) setText(elements.expandedDeckHeightValue, `${normalized}px`);
+  if (persist) {
+    try {
+      window.sessionStorage.setItem('overthinking-expanded-deck-height', String(normalized));
+    } catch {
+      // This setting is optional and has no effect on the rules snapshot.
+    }
+  }
+  window.requestAnimationFrame(updateExpandedDeckScrollCue);
+}
+
 // On small screens, card rows and the rules matrix deliberately keep their
 // readable fixed-size contents.  These cues make that horizontal overflow
 // visible without widening the page itself.
@@ -1110,6 +1181,17 @@ function updateHorizontalScrollCues() {
   updateHorizontalScrollCue(elements.myHand, elements.myHandScroll);
   updateHorizontalScrollCue(elements.opponentHand, elements.opponentHandScroll);
   updateHorizontalScrollCue(elements.matchupTableWrap, elements.matchupTableScroll);
+}
+
+function getTarotVisualRoleLabel(card) {
+  const labels = {
+    conditional: '変動',
+    lock: 'ロック',
+    generation: '複製・追加',
+    other: '特殊',
+    emperor: 'Tarot無効化'
+  };
+  return labels[card?.visualRole] || '特殊';
 }
 
 function scheduleHorizontalScrollCueUpdate() {
@@ -1135,13 +1217,16 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
     const isTarot = isTarotCard(card);
     const isNoAbility = isNoAbilityCard(card);
     const hasNonTarotAbility = hasNonTarotAbilityCard(card);
-    row.className = `expanded-deck-card${isTarot ? ' expanded-deck-card-tarot' : ''}${hasNonTarotAbility ? ' expanded-deck-card-has-ability' : ''}${isNoAbility ? ' expanded-deck-card-no-ability' : ''}`;
+    const visualRole = typeof card.visualRole === 'string' && /^[a-z-]{1,24}$/.test(card.visualRole)
+      ? card.visualRole
+      : '';
+    row.className = `expanded-deck-card${isTarot ? ' expanded-deck-card-tarot' : ''}${visualRole ? ` expanded-deck-card-role-${visualRole}` : ''}${hasNonTarotAbility ? ' expanded-deck-card-has-ability' : ''}${isNoAbility ? ' expanded-deck-card-no-ability' : ''}`;
     const copy = document.createElement('div');
     const name = document.createElement('strong');
     name.textContent = cardDisplayName;
     const type = document.createElement('span');
     type.className = 'expanded-deck-card-type';
-    type.textContent = isTarot ? '特殊 TAROT' : '';
+    type.textContent = isTarot ? `TAROT · ${getTarotVisualRoleLabel(card)}` : '';
     const description = document.createElement('small');
     description.textContent = card.desc || '能力なし';
     copy.append(name);
@@ -1246,6 +1331,22 @@ function renderRoomRules(room) {
   setText(elements.roomRulesTimeout, rules.blankEnabled
     ? '時間切れ時は、合法な手札と手札外のBlankからサーバーが1つをランダムに選びます。'
     : '時間切れ時は、残った合法な手札からサーバーが1枚をランダムに選びます。');
+  const concepts = isExpanded ? rules.activeConcepts : [];
+  if (elements.roomRulesConcepts && elements.roomRulesConceptsList) {
+    elements.roomRulesConcepts.classList.toggle('hidden', concepts.length === 0);
+    elements.roomRulesConceptsList.replaceChildren();
+    for (const concept of concepts) {
+      const item = document.createElement('article');
+      item.className = 'room-rule-concept';
+      item.setAttribute('role', 'listitem');
+      const title = document.createElement('strong');
+      title.textContent = concept.title;
+      const description = document.createElement('p');
+      description.textContent = concept.description;
+      item.append(title, description);
+      elements.roomRulesConceptsList.append(item);
+    }
+  }
 
   // Presets are personal, account-owned convenience data. Showing this panel
   // never grants room-edit permission; the existing Socket boundary remains
@@ -1384,7 +1485,7 @@ function renderTimer(room) {
   }
   if (room.gameState !== 'playing' || !room.deadline) return;
   const pendingAction = getPrivatePendingAction(room);
-  const timerLimitMs = pendingAction ? 20_000 : getRoomRules(room).turnTimeLimitMs;
+  const timerLimitMs = pendingAction ? 30_000 : getRoomRules(room).turnTimeLimitMs;
 
   const updateTimer = () => {
     const remainingMs = Math.max(0, room.deadline - Date.now());
@@ -1451,20 +1552,36 @@ function formatCardDisplayName(card) {
   return mark ? `${mark} ${card.name}` : card.name;
 }
 
-function createCard(card, suitType, isInteractive) {
+function createCard(card, suitType, isInteractive, { effectTargetAction = null } = {}) {
   const cardElement = document.createElement('div');
   // 両プレイヤーは同じIDのカードを持つため、選択状態は操作できる自分の手札だけに適用する。
   const isLocked = card?.state?.locked === true;
-  const isNoise = card?.category === 'noise';
+  // The owner may know a Noise card's real definition, but the card remains
+  // Noise for presentation and for the later reveal contract.
+  const isNoise = card?.category === 'noise' || card?.state?.ownerOnlyNoise === true;
   const isPreview = card?.preview === true;
   const canChooseCard = isInteractive && !isLocked;
+  const effectCandidateIds = Array.isArray(effectTargetAction?.target?.candidateIds)
+    ? effectTargetAction.target.candidateIds
+    : [];
+  const isEffectCandidate = typeof effectTargetAction?.id === 'string'
+    && effectCandidateIds.includes(card?.id);
+  const canChooseEffectTarget = isEffectCandidate
+    && socket?.connected
+    && privateActionSubmittingId !== effectTargetAction.id;
   const isSelected = canChooseCard && card.id === mySelectedCardId;
   const isCommitting = canChooseCard && card.id === committedCardId;
+  const isEffectTargetSelected = isEffectCandidate
+    && privateActionSelectedActionId === effectTargetAction?.id
+    && card.id === privateActionSelectedTargetId;
   const cardMark = getCardMark(card);
   const isTarot = isTarotCard(card);
   const isNoAbility = isNoAbilityCard(card);
   const hasNonTarotAbility = hasNonTarotAbilityCard(card);
-  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isPreview ? ' card-preview' : ''}${isTarot ? ' card-tarot' : ''}${isNoise ? ' card-noise' : ''}${isLocked ? ' card-locked' : ''}${hasNonTarotAbility ? ' card-has-ability' : ''}${isNoAbility ? ' card-no-ability' : ''}${card.roundInfo?.conditional ? ' card-conditional' : ''}${canChooseCard ? ' card-action' : ''}${isSelected ? ' selected' : ''}${isCommitting ? ' committing' : ''}`;
+  const visualRole = typeof card?.visualRole === 'string' && /^[a-z-]{1,24}$/.test(card.visualRole)
+    ? card.visualRole
+    : '';
+  cardElement.className = `card card-${suitType} card-${card.id}${card.virtual === true ? ' card-virtual-blank' : ''}${isPreview ? ' card-preview' : ''}${isTarot ? ' card-tarot' : ''}${visualRole ? ` card-role-${visualRole}` : ''}${card.generated === true ? ' card-generated' : ''}${isNoise ? ' card-noise' : ''}${isLocked ? ' card-locked' : ''}${hasNonTarotAbility ? ' card-has-ability' : ''}${isNoAbility ? ' card-no-ability' : ''}${card.roundInfo?.conditional ? ' card-conditional' : ''}${canChooseCard ? ' card-action' : ''}${canChooseEffectTarget ? ' card-effect-target' : ''}${isSelected ? ' selected' : ''}${isEffectTargetSelected ? ' effect-target-selected' : ''}${isCommitting ? ' committing' : ''}`;
   cardElement.dataset.cardId = card.id;
   cardElement.setAttribute(
     'aria-label',
@@ -1472,11 +1589,16 @@ function createCard(card, suitType, isInteractive) {
       ? `${card.name}。開始時に使う設定デッキの札です。`
       : isLocked
       ? `${card.name}。ロック中のため、今は選べません。`
+      : isEffectTargetSelected
+      ? `${card.name}。能力の対象として選択中です。下の確定ボタンで効果を適用します。`
+      : canChooseEffectTarget
+      ? `${card.name}。能力の対象候補です。選択してから効果を確定します。`
       : isSelected
       ? `${card.name}、選択中。能力は選択中のカード欄に表示されています。`
       : `${card.name}。選択すると能力を表示します。`
   );
   if (isSelected) cardElement.setAttribute('aria-describedby', 'selected-card-description');
+  if (canChooseEffectTarget) cardElement.setAttribute('aria-describedby', 'private-action-instruction');
 
   if (canChooseCard) {
     cardElement.setAttribute('role', 'button');
@@ -1505,20 +1627,39 @@ function createCard(card, suitType, isInteractive) {
       }
     });
   }
+  if (canChooseEffectTarget) {
+    cardElement.setAttribute('role', 'button');
+    cardElement.tabIndex = 0;
+    const selectEffectTarget = () => {
+      if (!currentRoom || getPrivatePendingAction(currentRoom)?.id !== effectTargetAction.id) return;
+      privateActionSelectedActionId = effectTargetAction.id;
+      privateActionSelectedTargetId = privateActionSelectedTargetId === card.id ? '' : card.id;
+      renderRoom(currentRoom);
+    };
+    cardElement.addEventListener('click', selectEffectTarget);
+    cardElement.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        selectEffectTarget();
+      }
+    });
+  }
 
   const top = document.createElement('div');
   top.className = 'card-top';
   const name = document.createElement('span');
-  name.textContent = card.name;
+  name.className = 'card-face-label';
+  name.textContent = card.faceLabel || card.name;
+  if (name.textContent !== card.name) name.title = card.name;
   const suit = document.createElement('span');
   suit.textContent = suitType === 'spade' ? '♠' : '♥';
   const lock = document.createElement('span');
   lock.className = 'card-lock-badge';
   lock.textContent = '🔒';
   lock.setAttribute('aria-hidden', 'true');
-  if (isSelected) {
+  if (isSelected || isEffectTargetSelected) {
     const selectedMark = document.createElement('span');
-    selectedMark.className = 'card-selected-mark';
+    selectedMark.className = isEffectTargetSelected ? 'card-effect-target-mark' : 'card-selected-mark';
     selectedMark.textContent = '✓';
     selectedMark.setAttribute('aria-hidden', 'true');
     top.append(name, selectedMark, isLocked ? lock : '', suit);
@@ -1551,16 +1692,29 @@ function createCard(card, suitType, isInteractive) {
   cornerPip.append(cornerRank, cornerSuit);
 
   cardElement.append(top, center, cornerPip);
+  if (card.generated === true) {
+    const generatedOverlay = document.createElement('i');
+    generatedOverlay.className = 'card-generated-glitch';
+    generatedOverlay.setAttribute('aria-hidden', 'true');
+    const generatedMark = document.createElement('span');
+    generatedMark.className = 'card-generated-mark';
+    generatedMark.setAttribute('aria-hidden', 'true');
+    generatedMark.textContent = '✦';
+    cardElement.append(generatedOverlay, generatedMark);
+  }
   return cardElement;
 }
 
-function renderHand(container, hand, suitType, isInteractive, { focusCardId = null } = {}) {
+function renderHand(container, hand, suitType, isInteractive, {
+  focusCardId = null,
+  effectTargetAction = null
+} = {}) {
   container.replaceChildren();
   let focusTarget = null;
   (hand || []).forEach((card) => {
-    const cardElement = createCard(card, suitType, isInteractive);
+    const cardElement = createCard(card, suitType, isInteractive, { effectTargetAction });
     container.append(cardElement);
-    if (isInteractive && card.id === focusCardId) focusTarget = cardElement;
+    if ((isInteractive || effectTargetAction) && card.id === focusCardId) focusTarget = cardElement;
   });
   // Card choice redraws the hand to update the selection mark. Preserve the
   // keyboard user's position across that harmless redraw rather than losing
@@ -1668,7 +1822,10 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   }
 
   const isNewRound = lastRound.id !== lastRoundId;
+  const effectBurstId = getExpandedEffectBurstId(lastRound);
+  const hasNewExpandedEffect = Boolean(effectBurstId && effectBurstId !== lastExpandedEffectBurstId);
   lastRoundId = lastRound.id;
+  lastExpandedEffectBurstId = effectBurstId;
   const roundWinnerSeat = getRoundWinnerSeat(currentRoom, lastRound);
   const isDraw = !roundWinnerSeat;
   const me = currentRoom?.players.find((player) => player.id === socket?.id);
@@ -1740,6 +1897,7 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     playResultEffects(outcomeClass);
     window.setTimeout(() => elements.revealArea.classList.remove('reveal-new'), 600);
   }
+  if (hasNewExpandedEffect) playExpandedRoundEffects(lastRound.effects);
 }
 
 function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
@@ -1849,6 +2007,50 @@ function playResultEffects(outcomeClass) {
   window.setTimeout(() => elements.gameScreen.classList.remove(`impact-${outcomeClass}`), 720);
 }
 
+function getExpandedEffectBurstKind(effects) {
+  if (!Array.isArray(effects)) return '';
+  const types = new Set(effects.map((effect) => effect?.type));
+  // A single priority keeps multiple simultaneous effects readable. The full
+  // public explanation remains in the result and history immediately below.
+  if (types.has('destroy-card') || types.has('discard-won-cards') || types.has('transfer-won-card')) return 'destroy';
+  if (types.has('lock-card') || types.has('lock-cards')) return 'lock';
+  if (types.has('add-noise-card')) return 'noise';
+  if (types.has('add-card-copy') || types.has('add-cards') || types.has('copy-played-history')) return 'generate';
+  if (types.has('round-limit-adjustment')) return 'round';
+  if (types.has('skipped-target-action')) return 'skipped';
+  return '';
+}
+
+function getExpandedEffectBurstId(round) {
+  if (!round?.id || !Array.isArray(round.effects) || round.effects.length === 0) return '';
+  // Public, recipient-safe fields only.  This is intentionally not based on
+  // object identity, which changes whenever a fresh room view arrives.
+  const effectParts = round.effects.map((effect) => [
+    effect?.type || '',
+    effect?.sourceSeat || '',
+    effect?.targetSeat || '',
+    effect?.createdCopies ?? '',
+    effect?.destroyedCount ?? '',
+    effect?.lockedCount ?? '',
+    effect?.reason || '',
+  ].join(':'));
+  return `${round.id}|${effectParts.join('|')}`;
+}
+
+function playExpandedRoundEffects(effects) {
+  const burstKind = getExpandedEffectBurstKind(effects);
+  if (!burstKind || !elements.revealArea) return;
+  const className = `effect-burst-${burstKind}`;
+  const burstClasses = ['effect-burst-destroy', 'effect-burst-lock', 'effect-burst-noise', 'effect-burst-generate', 'effect-burst-round', 'effect-burst-skipped'];
+  if (expandedEffectBurstTimer) window.clearTimeout(expandedEffectBurstTimer);
+  elements.revealArea.classList.remove(...burstClasses);
+  window.requestAnimationFrame(() => elements.revealArea.classList.add(className));
+  expandedEffectBurstTimer = window.setTimeout(() => {
+    elements.revealArea.classList.remove(className);
+    expandedEffectBurstTimer = null;
+  }, 1_150);
+}
+
 function createRevealCard(card, owner, seat = '', strength = undefined) {
   const node = document.createElement('div');
   node.className = `reveal-card${seat === 'p1' ? ' reveal-spade' : seat === 'p2' ? ' reveal-heart' : ''}`;
@@ -1899,7 +2101,7 @@ function formatExpandedRoundEffects(round) {
       const recipient = getSeatOwnerLabel(currentRoom, effect.recipientSeat, effect.recipientSeat === 'p1' ? '♠側' : '♥側');
       const card = getEffectCardLabel(effect.definitionId);
       labels.push(effect.createdCopies > 0
-        ? `${source}：${recipient}の手札へ ${card} を追加`
+        ? `${source}：${recipient}の手札へ ${card} を複製`
         : `${source}：手札の上限により、札は増えませんでした`);
     } else if (effect?.type === 'add-noise-card'
       && (effect.recipientSeat === 'p1' || effect.recipientSeat === 'p2')
@@ -1932,10 +2134,12 @@ function formatExpandedRoundEffects(round) {
       && Number.isSafeInteger(effect.createdCopies)) {
       const target = getSeatOwnerLabel(currentRoom, effect.targetSeat, effect.targetSeat === 'p1' ? '♠側' : '♥側');
       labels.push(effect.createdCopies > 0
-        ? `${source}：${target}の獲得札を1枚奪い、手札へ追加`
+        ? `${source}：${target}の獲得札を1枚破棄し、その札を手札へ複製`
         : `${source}：手札の上限により、札は増えませんでした`);
     } else if (effect?.type === 'skipped-target-action') {
-      labels.push(`${source}：選べる対象がないため、能力は発動しませんでした`);
+      labels.push(effect.reason === 'game-ended-before-target-selection'
+        ? `${source}：ゲーム終了のため、対象を選ぶ能力は実行されませんでした`
+        : `${source}：選べる対象がないため、能力は発動しませんでした`);
     } else if (effect?.type === 'round-limit-adjustment'
       && Number.isSafeInteger(effect.previousRoundLimit)
       && Number.isSafeInteger(effect.nextRoundLimit)
@@ -2164,7 +2368,7 @@ function renderStatus(room, me, opponent) {
     const remaining = Math.max(0, Math.ceil((Number(pendingAction.expiresAt) - Date.now()) / 1_000));
     setText(
       elements.status,
-      Array.isArray(pendingAction.candidates)
+      getPrivateActionTarget(pendingAction)
         ? `能力の対象を選んでください。あと ${remaining} 秒です。`
         : `能力の対象を選択中です。あと ${remaining} 秒です。`
     );
@@ -2353,19 +2557,97 @@ function submitPrivateActionChoice(action, candidateId) {
   });
 }
 
+function getPrivateActionTarget(action) {
+  const target = action?.target;
+  if (!target || !['hand', 'addition', 'won-pile'].includes(target.surface)
+    || !['p1', 'p2'].includes(target.seat)
+    || !Array.isArray(target.candidateIds)) return null;
+  const candidateIds = target.candidateIds
+    .filter((candidateId) => typeof candidateId === 'string' && candidateId.length > 0 && candidateId.length <= 96)
+    .slice(0, 32);
+  if (candidateIds.length !== target.candidateIds.length || new Set(candidateIds).size !== candidateIds.length) return null;
+  const cards = Array.isArray(target.cards)
+    ? target.cards.filter((card) => card && typeof card.id === 'string' && candidateIds.includes(card.id)).slice(0, 32)
+    : [];
+  return { surface: target.surface, seat: target.seat, candidateIds, cards };
+}
+
+function clearPrivateActionTargetSelection() {
+  privateActionSelectedActionId = '';
+  privateActionSelectedTargetId = '';
+}
+
+function clearPrivateActionTargetTray(tray, label, cards) {
+  if (tray) tray.classList.add('hidden');
+  if (label) setText(label, '');
+  if (cards) cards.replaceChildren();
+}
+
+function renderPrivateActionTargetTrays(room, bottomPlayer, topPlayer) {
+  const action = getPrivatePendingAction(room);
+  const target = getPrivateActionTarget(action);
+  clearPrivateActionTargetTray(
+    elements.myActionTargetTray,
+    elements.myActionTargetLabel,
+    elements.myActionTargetCards
+  );
+  clearPrivateActionTargetTray(
+    elements.opponentActionTargetTray,
+    elements.opponentActionTargetLabel,
+    elements.opponentActionTargetCards
+  );
+  // Existing physical hand cards are directly highlighted in their normal
+  // zone. Only generated-card and won-pile choices need an extra board tray.
+  if (!target || target.surface === 'hand' || !action?.id || target.cards.length === 0) return;
+  const bottomSeat = getSeatForPlayer(room, bottomPlayer);
+  const topSeat = getSeatForPlayer(room, topPlayer);
+  const useBottomZone = target.seat === bottomSeat;
+  const useTopZone = target.seat === topSeat;
+  if (!useBottomZone && !useTopZone) return;
+  const tray = useBottomZone ? elements.myActionTargetTray : elements.opponentActionTargetTray;
+  const label = useBottomZone ? elements.myActionTargetLabel : elements.opponentActionTargetLabel;
+  const cards = useBottomZone ? elements.myActionTargetCards : elements.opponentActionTargetCards;
+  if (!tray || !label || !cards) return;
+  const owner = getSeatOwnerLabel(room, target.seat, target.seat === 'p1' ? '♠側' : '♥側');
+  setText(
+    label,
+    target.surface === 'addition'
+      ? `${owner}の手札へ追加する札を選ぶ`
+      : `${owner}の獲得札から対象を選ぶ`
+  );
+  tray.classList.remove('hidden');
+  renderHand(cards, target.cards, useBottomZone ? 'spade' : 'heart', false, {
+    effectTargetAction: action,
+    focusCardId: privateActionSelectedActionId === action.id ? privateActionSelectedTargetId : null
+  });
+}
+
 function renderPrivatePendingAction(room) {
   if (!elements.privateActionPanel) return;
   const action = getPrivatePendingAction(room);
   elements.privateActionPanel.classList.toggle('hidden', !action);
   if (!action) {
     clearPrivateActionSubmission();
-    elements.privateActionCandidates.replaceChildren();
+    clearPrivateActionTargetSelection();
     setText(elements.privateActionTimer, '—');
+    if (elements.privateActionSelection) setText(elements.privateActionSelection, '');
+    if (elements.privateActionConfirm) {
+      elements.privateActionConfirm.classList.add('hidden');
+      elements.privateActionConfirm.disabled = true;
+    }
     return;
   }
   if (privateActionSubmittingId && privateActionSubmittingId !== action.id) clearPrivateActionSubmission();
-  const canChoose = Array.isArray(action.candidates) && typeof action.id === 'string'
-    && typeof action.nonce === 'string' && Number.isSafeInteger(action.gameRevision);
+  if (privateActionSelectedActionId && privateActionSelectedActionId !== action.id) clearPrivateActionTargetSelection();
+  const target = getPrivateActionTarget(action);
+  const canChoose = Boolean(target
+    && typeof action.id === 'string'
+    && typeof action.nonce === 'string'
+    && Number.isSafeInteger(action.gameRevision));
+  if (!canChoose) clearPrivateActionTargetSelection();
+  if (canChoose && !target.candidateIds.includes(privateActionSelectedTargetId)) {
+    privateActionSelectedTargetId = '';
+  }
   setText(elements.privateActionTitle, canChoose ? '能力の対象を選ぶ' : '能力の対象を選択中');
   setText(
     elements.privateActionInstruction,
@@ -2374,25 +2656,23 @@ function renderPrivatePendingAction(room) {
       : '対戦者が能力の対象を選んでいます。')
   );
   renderPrivateActionCountdown(room);
-  elements.privateActionCandidates.replaceChildren();
-  if (!canChoose) return;
-  const fragment = document.createDocumentFragment();
-  action.candidates.slice(0, 32).forEach((candidate) => {
-    if (!candidate || typeof candidate.id !== 'string' || candidate.id.length > 96) return;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `private-action-candidate private-action-candidate-${candidate.category || 'card'}`;
-    button.disabled = !socket?.connected || privateActionSubmittingId === action.id;
-    const label = document.createElement('strong');
-    label.textContent = typeof candidate.label === 'string' ? candidate.label : '対象';
-    const description = document.createElement('span');
-    description.textContent = typeof candidate.description === 'string' ? candidate.description : '';
-    button.append(label);
-    if (description.textContent) button.append(description);
-    button.addEventListener('click', () => submitPrivateActionChoice(action, candidate.id));
-    fragment.append(button);
-  });
-  elements.privateActionCandidates.append(fragment);
+  const selectedCard = target?.cards.find((card) => card.id === privateActionSelectedTargetId) || null;
+  const hasSelection = canChoose && privateActionSelectedActionId === action.id && Boolean(selectedCard);
+  if (elements.privateActionSelection) {
+    elements.privateActionSelection.classList.toggle('hidden', !canChoose);
+    setText(
+      elements.privateActionSelection,
+      hasSelection
+        ? `選択中：${formatCardDisplayName(selectedCard)}。内容を確認してから確定してください。`
+        : '盤面上で発光している札を選んでください。選択後に確定できます。'
+    );
+  }
+  if (elements.privateActionConfirm) {
+    elements.privateActionConfirm.classList.toggle('hidden', !canChoose);
+    elements.privateActionConfirm.disabled = !hasSelection
+      || !socket?.connected
+      || privateActionSubmittingId === action.id;
+  }
 }
 
 function updateConfirmButton() {
@@ -2457,6 +2737,19 @@ function renderRoom(room) {
   const heartPlayer = roomView.players.find((player) => player.suit === '♥');
   const displayedBottomPlayer = isSpectator ? spadePlayer : me;
   const displayedTopPlayer = isSpectator ? heartPlayer : opponent;
+  const pendingAction = getPrivatePendingAction(roomView);
+  const pendingTarget = getPrivateActionTarget(pendingAction);
+  if (!pendingAction || (privateActionSelectedActionId && privateActionSelectedActionId !== pendingAction.id)) {
+    clearPrivateActionTargetSelection();
+  }
+  const displayedBottomSeat = getSeatForPlayer(roomView, displayedBottomPlayer);
+  const displayedTopSeat = getSeatForPlayer(roomView, displayedTopPlayer);
+  const bottomEffectTargetAction = pendingTarget?.surface === 'hand' && pendingTarget.seat === displayedBottomSeat
+    ? pendingAction
+    : null;
+  const topEffectTargetAction = pendingTarget?.surface === 'hand' && pendingTarget.seat === displayedTopSeat
+    ? pendingAction
+    : null;
   const isInteractive = Boolean(
     me
     && !roomView.viewer.isSpectator
@@ -2475,7 +2768,9 @@ function renderRoom(room) {
     if (!isSpectator && !displayedBottomHand.some((card) => card.id === committedCardId)) committedCardId = null;
     setText(elements.myName, displayedBottomPlayer.name);
     updateScore(elements.myScore, displayedBottomPlayer);
-    renderHand(elements.myHand, displayedBottomHand, 'spade', isInteractive);
+    renderHand(elements.myHand, displayedBottomHand, 'spade', isInteractive, {
+      effectTargetAction: bottomEffectTargetAction
+    });
     renderSelectedCardDetails(displayedBottomHand, { isInteractive, suitType: 'spade' });
   } else {
     mySelectedCardId = null;
@@ -2488,12 +2783,16 @@ function renderRoom(room) {
   if (displayedTopPlayer) {
     setText(elements.opponentName, displayedTopPlayer.connected === false ? `${displayedTopPlayer.name}（再接続中）` : displayedTopPlayer.name);
     updateScore(elements.opponentScore, displayedTopPlayer);
-    renderHand(elements.opponentHand, displayedTopPlayer.hand, 'heart', false);
+    renderHand(elements.opponentHand, displayedTopPlayer.hand, 'heart', false, {
+      effectTargetAction: topEffectTargetAction
+    });
   } else {
     setText(elements.opponentName, isSpectator ? '♥側を待機中' : '対戦相手を待機中');
     setText(elements.opponentScore, '0');
     elements.opponentHand.replaceChildren();
   }
+
+  renderPrivateActionTargetTrays(roomView, displayedBottomPlayer, displayedTopPlayer);
 
   renderFinalResult(roomView, displayedBottomPlayer, displayedTopPlayer, isSpectator);
 
@@ -2608,6 +2907,14 @@ elements.confirmButton.addEventListener('click', () => {
     const canChoose = Boolean(me && currentRoom?.gameState === 'playing' && !currentRoom.viewer.hasConfirmedSelection);
     if (me) renderHand(elements.myHand, getSelectableDisplayHand(me.hand, currentRoom, canChoose), 'spade', canChoose);
   }, 620);
+});
+
+elements.privateActionConfirm?.addEventListener('click', () => {
+  const action = getPrivatePendingAction(currentRoom);
+  const target = getPrivateActionTarget(action);
+  if (!action || !target || privateActionSelectedActionId !== action.id
+    || !target.candidateIds.includes(privateActionSelectedTargetId)) return;
+  submitPrivateActionChoice(action, privateActionSelectedTargetId);
 });
 
 elements.restartButton.addEventListener('click', () => {
@@ -2748,6 +3055,10 @@ elements.expandedDeckList.addEventListener('click', (event) => {
 });
 
 elements.expandedDeckList.addEventListener('scroll', updateExpandedDeckScrollCue, { passive: true });
+elements.expandedDeckHeightRange?.addEventListener('input', () => {
+  applyExpandedDeckListHeight(elements.expandedDeckHeightRange.value, { persist: true });
+});
+applyExpandedDeckListHeight(expandedDeckListHeight);
 elements.myHand.addEventListener('scroll', () => updateHorizontalScrollCue(elements.myHand, elements.myHandScroll), { passive: true });
 elements.opponentHand.addEventListener('scroll', () => updateHorizontalScrollCue(elements.opponentHand, elements.opponentHandScroll), { passive: true });
 elements.matchupTableWrap.addEventListener('scroll', () => updateHorizontalScrollCue(elements.matchupTableWrap, elements.matchupTableScroll), { passive: true });
@@ -2928,6 +3239,7 @@ elements.homeButton.addEventListener('click', () => {
   randomSearchSourceRoomId = '';
   clearNextRandomMatchPending();
   lastRoundId = null;
+  lastExpandedEffectBurstId = '';
   lastFinaleId = null;
   previousScores.clear();
   resetChat();
@@ -3030,6 +3342,7 @@ if (socket) {
     randomSearchSourceRoomId = '';
     clearNextRandomMatchPending();
     lastRoundId = null;
+    lastExpandedEffectBurstId = '';
     lastFinaleId = null;
     previousScores.clear();
     resetChat();

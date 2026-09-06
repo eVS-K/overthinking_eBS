@@ -11,9 +11,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
   <script src="page-redirect.js?v=security-v4"></script>
-  <link rel="stylesheet" href="style.css?v=pvp-v34">
+  <link rel="stylesheet" href="style.css?v=pvp-v35">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v34"></script>
+  <script src="socket-loader.js?v=pvp-v35"></script>
 </head>
 <body>
   <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
@@ -158,6 +158,10 @@
             <div id="opp-hand" class="card-row opponent-hand" aria-label="相手の手札" aria-describedby="opp-hand-scroll-description"></div>
             <span id="opp-hand-scroll-description" class="sr-only">相手の手札の続きは、横へスワイプまたは横スクロールして確認できます。</span>
           </div>
+          <section id="opp-action-target-tray" class="private-action-target-tray hidden" aria-live="polite" aria-atomic="true">
+            <p id="opp-action-target-label" class="private-action-target-label"></p>
+            <div id="opp-action-target-cards" class="card-row private-action-target-cards" aria-label="能力の対象候補"></div>
+          </section>
         </section>
 
         <section class="table-center" aria-label="ラウンド情報">
@@ -185,6 +189,10 @@
             <div id="my-hand" class="card-row my-hand" aria-label="あなたの手札" aria-describedby="my-hand-scroll-description"></div>
             <span id="my-hand-scroll-description" class="sr-only">あなたの手札の続きは、横へスワイプまたは横スクロールして確認できます。</span>
           </div>
+          <section id="my-action-target-tray" class="private-action-target-tray hidden" aria-live="polite" aria-atomic="true">
+            <p id="my-action-target-label" class="private-action-target-label"></p>
+            <div id="my-action-target-cards" class="card-row private-action-target-cards" aria-label="能力の対象候補"></div>
+          </section>
           <section id="selected-card-panel" class="selected-card-panel hidden" aria-live="polite" aria-atomic="true" aria-labelledby="selected-card-label">
             <span id="selected-card-suit" class="selected-card-suit" aria-hidden="true">♠</span>
             <div class="selected-card-copy">
@@ -203,7 +211,8 @@
               <span id="private-action-timer" class="private-action-timer">—</span>
             </div>
             <p id="private-action-instruction" class="private-action-instruction"></p>
-            <div id="private-action-candidates" class="private-action-candidates" role="group" aria-label="能力の対象"></div>
+            <p id="private-action-selection" class="private-action-selection">盤面上の発光している札を選んでください。</p>
+            <button id="private-action-confirm" class="private-action-confirm" type="button" disabled>この札に効果を適用する</button>
           </section>
           <section id="final-result-panel" class="final-result-panel hidden" role="status" aria-live="polite" aria-atomic="true"></section>
           <div id="player-controls" class="controls">
@@ -229,6 +238,10 @@
                 <li id="room-rules-end">9枚獲得、または最終ラウンド終了時に獲得枚数が多い側の勝ちです。</li>
                 <li id="room-rules-timeout">時間切れ時は、残った手札からサーバーが1枚を選びます。</li>
               </ul>
+              <section id="room-rules-concepts" class="room-rules-concepts hidden" aria-labelledby="room-rules-concepts-title">
+                <h3 id="room-rules-concepts-title">このデッキで使う能力</h3>
+                <div id="room-rules-concepts-list" class="room-rules-concepts-list" role="list"></div>
+              </section>
             </details>
             <div id="private-settings-controls" class="private-settings-controls hidden">
               <section class="private-settings-owner" aria-labelledby="private-settings-owner-title">
@@ -262,6 +275,11 @@
                   <div id="expanded-deck-list" class="expanded-deck-list" tabindex="0" aria-label="使用カードと枚数" aria-describedby="expanded-deck-scroll-description"></div>
                   <p id="expanded-deck-scroll-hint" class="expanded-deck-scroll-hint" aria-hidden="true">↓ 下へスクロールして、すべてのカードを見る</p>
                   <span id="expanded-deck-scroll-description" class="sr-only">カード一覧は下へスクロールして、すべてのカードを確認できます。</span>
+                </div>
+                <div class="expanded-deck-height-control">
+                  <label for="expanded-deck-height-range"><span>一覧の高さ</span><output id="expanded-deck-height-value" for="expanded-deck-height-range">270px</output></label>
+                  <input id="expanded-deck-height-range" type="range" min="180" max="440" step="10" value="270" aria-describedby="expanded-deck-height-description">
+                  <small id="expanded-deck-height-description">上下にだけ調整できます。最大440pxまでです。</small>
                 </div>
                 <div class="expanded-rule-inputs">
                   <label for="expanded-round-limit-input"><span>総ラウンド数</span><input id="expanded-round-limit-input" type="number" min="1" max="20" inputmode="numeric"></label>

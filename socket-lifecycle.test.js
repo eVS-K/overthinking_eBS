@@ -390,7 +390,16 @@ test('太陽の確定前対象選択は相手へ伏せたまま、相手の同�
   first.emit('confirm_card', { roomId, cardId: sunCardId });
   firstView = await firstTargeting;
   secondView = await secondHidden;
-  assert.ok(firstView.viewer.pendingAction.candidates.length > 0);
+  const pendingSunAction = firstView.viewer.pendingAction;
+  // Target IDs are now deliberately nested under the recipient-specific
+  // board target.  Do not bring the legacy flat candidates field back: that
+  // shape made it too easy for a caller to confuse an arbitrary definition
+  // with a selectable card instance.
+  assert.equal(pendingSunAction.candidates, undefined);
+  assert.equal(pendingSunAction.target?.surface, 'hand');
+  assert.equal(pendingSunAction.target?.seat, 'p1');
+  assert.ok(pendingSunAction.target?.candidateIds.length > 0);
+  assert.equal(pendingSunAction.target?.cards.length, pendingSunAction.target?.candidateIds.length);
   assert.equal(secondView.viewer.pendingAction, null);
   assert.equal(secondView.deadline, originalDeadline);
 
@@ -400,13 +409,13 @@ test('太陽の確定前対象選択は相手へ伏せたまま、相手の同�
   assert.equal(secondView.viewer.hasConfirmedSelection, true);
 
   const resolved = waitForRoom(first, roomId, (room) => room.history.length === 1 && room.round === 2);
-  const chosenTarget = firstView.viewer.pendingAction.candidates[0].id;
+  const chosenTarget = pendingSunAction.target.candidateIds[0];
   const actionResult = await emitWithAcknowledgement(first, 'resolve_private_action', {
     roomId,
-    actionId: firstView.viewer.pendingAction.id,
-    nonce: firstView.viewer.pendingAction.nonce,
+    actionId: pendingSunAction.id,
+    nonce: pendingSunAction.nonce,
     target: chosenTarget,
-    gameRevision: firstView.viewer.pendingAction.gameRevision
+    gameRevision: pendingSunAction.gameRevision
   });
   assert.equal(actionResult.ok, true);
   firstView = await resolved;

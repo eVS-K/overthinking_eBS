@@ -223,7 +223,8 @@ function createInitialIssuedCards({ instanceNamespace, definitionIds }) {
       entries.push({
         instanceId: `${instanceNamespace}:${seat}:${index + 1}`,
         seat,
-        definitionId
+        definitionId,
+        generated: false
       });
     });
   }
@@ -268,7 +269,7 @@ function makeDiscardEntry(card, reason, round) {
   };
 }
 
-function addIssuedCard(state, { seat, definitionId }) {
+function addIssuedCard(state, { seat, definitionId, generated = true }) {
   if (!PRIVATE_SEATS.includes(seat)) throw new RangeError('unknown recipient seat');
   const ordinal = state.nextInstanceOrdinalBySeat[seat];
   if (!Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > 999_999) {
@@ -276,8 +277,8 @@ function addIssuedCard(state, { seat, definitionId }) {
   }
   const instanceId = `${state.instanceNamespace}:${seat}:${ordinal}`;
   state.nextInstanceOrdinalBySeat[seat] = ordinal + 1;
-  const instance = createPrivateCardInstance({ instanceId, definitionId });
-  state.issuedCards.push({ instanceId, seat, definitionId });
+  const instance = createPrivateCardInstance({ instanceId, definitionId, state: { generated: generated === true } });
+  state.issuedCards.push({ instanceId, seat, definitionId, generated: generated === true });
   return instance;
 }
 
@@ -363,11 +364,17 @@ function assertAdvancedPrivateGameState(state) {
       || !PRIVATE_SEATS.includes(issued.seat)
       || typeof issued.instanceId !== 'string'
       || typeof issued.definitionId !== 'string'
+      || (issued.generated !== undefined && typeof issued.generated !== 'boolean')
       || issuedById.has(issued.instanceId)) {
       throw new RangeError('advanced private issued card is invalid');
     }
-    const card = createPrivateCardInstance({ instanceId: issued.instanceId, definitionId: issued.definitionId });
-    if (card.instanceId !== issued.instanceId || card.definitionId !== issued.definitionId) {
+    const card = createPrivateCardInstance({
+      instanceId: issued.instanceId,
+      definitionId: issued.definitionId,
+      state: { generated: issued.generated === true }
+    });
+    if (card.instanceId !== issued.instanceId || card.definitionId !== issued.definitionId
+      || (card.state.generated === true) !== (issued.generated === true)) {
       throw new RangeError('advanced private issued card is malformed');
     }
     issuedById.set(issued.instanceId, issued);
@@ -390,6 +397,7 @@ function assertAdvancedPrivateGameState(state) {
     }
     const issued = issuedById.get(normalized.instanceId);
     if (!issued || issued.definitionId !== normalized.definitionId
+      || (normalized.state.generated === true) !== (issued.generated === true)
       || (expectedSeat && issued.seat !== expectedSeat)
       || occupied.has(normalized.instanceId)) {
       throw new RangeError('advanced private card location is invalid');
@@ -459,6 +467,7 @@ function assertAdvancedPrivateGameState(state) {
       if (isVirtualBlankCard(normalized)) continue;
       const issued = issuedById.get(normalized.instanceId);
       if (!issued || issued.seat !== seat || issued.definitionId !== normalized.definitionId
+        || (normalized.state.generated === true) !== (issued.generated === true)
         || playedIds.has(normalized.instanceId)
         || occupied.get(normalized.instanceId) === `${seat}:hand`) {
         throw new RangeError('advanced private history card is invalid');
@@ -936,12 +945,14 @@ function materializeSafePostEffects(next, {
   for (const addition of postRound.additions) {
     next[addition.recipientSeat].hand.push(createPrivateCardInstance({
       instanceId: addition.instanceId,
-      definitionId: addition.definitionId
+      definitionId: addition.definitionId,
+      state: { generated: true }
     }));
     next.issuedCards.push({
       instanceId: addition.instanceId,
       seat: addition.recipientSeat,
-      definitionId: addition.definitionId
+      definitionId: addition.definitionId,
+      generated: true
     });
   }
   next.nextInstanceOrdinalBySeat = postRound.nextInstanceOrdinalBySeat;
@@ -980,7 +991,7 @@ function applyAutomaticAdvancedEffects(next, {
       syncScoreFromWonPile(next, seat);
       appendEffect(record, {
         type: 'discard-won-cards', advanced: true, sourceSeat: seat,
-        sourceDefinitionId: card.definitionId, discardedCount: discarded.length
+        sourceDefinitionId: card.definitionId, targetSeat: seat, discardedCount: discarded.length
       });
     }
     if (card.definitionId === 'the-empress' && winnerSeat === seat) {
@@ -1175,6 +1186,23 @@ function skipAdvancedTargetAction(state, action, reason = 'skipped-no-legal-targ
   return { state: next, record };
 }
 
+// A score/round/hand terminal state is authoritative before any optional
+// post-result target picker. Preserve the generated plan in the immutable
+// round record for auditability, but resolve every item as skipped so a
+// finished game never waits for a player to choose a target.
+function skipAllAdvancedTargetActions(state, actions, reason = 'game-ended-before-target-selection') {
+  if (!Array.isArray(actions)) throw new TypeError('private target action list is invalid');
+  let next = state;
+  for (const action of actions) {
+    next = skipAdvancedTargetAction(next, action, reason).state;
+  }
+  return {
+    state: next,
+    record: next.history.at(-1),
+    skippedCount: actions.length
+  };
+}
+
 function materializeSunPreCommitEffects(next, p1InstanceId, p2InstanceId, preCommitEffects) {
   if (!Array.isArray(preCommitEffects) || preCommitEffects.length > 2) {
     throw new RangeError('private Sun pre-commit effects are invalid');
@@ -1295,18 +1323,25 @@ function beginAdvancedPrivateRound(state, p1InstanceId, p2InstanceId, { preCommi
     record,
     previousHistory
   });
-  const targetActions = getTargetActionsForAdvancedRound(next, {
+  const plannedTargetActions = getTargetActionsForAdvancedRound(next, {
     p1Card: playedP1,
     p2Card: playedP2,
     resolution,
     winnerSeat,
     roundStartWonPileIds
   });
-  record.actionPlan = targetActions.map(cloneAdvancedAction);
+  record.actionPlan = plannedTargetActions.map(cloneAdvancedAction);
+  const terminalReasonBeforeTargetActions = getPrivateTerminalReasonUnchecked(next);
+  const skipped = terminalReasonBeforeTargetActions !== null
+    ? skipAllAdvancedTargetActions(next, plannedTargetActions, 'game-ended-before-target-selection')
+    : null;
+  const resultState = skipped ? skipped.state : next;
   return {
-    state: next,
-    record,
-    targetActions,
+    state: resultState,
+    record: resultState.history.at(-1),
+    targetActions: skipped ? [] : plannedTargetActions,
+    terminalReasonBeforeTargetActions,
+    skippedTargetActionCount: skipped ? skipped.skippedCount : 0,
     canonicalResult,
     winnerSeat,
     awardedCards: winnerSeat ? awardedCards : 0
@@ -1451,13 +1486,15 @@ function applyPrivateRound(state, p1InstanceId, p2InstanceId) {
     for (const addition of postRound.additions) {
       next[addition.recipientSeat].hand.push(createPrivateCardInstance({
         instanceId: addition.instanceId,
-        definitionId: addition.definitionId
+        definitionId: addition.definitionId,
+        state: { generated: true }
       }));
       if (Array.isArray(next.issuedCards)) {
         next.issuedCards.push({
           instanceId: addition.instanceId,
           seat: addition.recipientSeat,
-          definitionId: addition.definitionId
+          definitionId: addition.definitionId,
+          generated: true
         });
       }
     }
@@ -1535,5 +1572,6 @@ module.exports = {
   privateMatchScore,
   requiresAdvancedPrivateRound,
   resolvePrivateRound,
-  skipAdvancedTargetAction
+  skipAdvancedTargetAction,
+  skipAllAdvancedTargetActions
 };

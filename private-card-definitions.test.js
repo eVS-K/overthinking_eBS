@@ -33,7 +33,7 @@ test('Blankは仮想札としてengine-readyであり、実装済みのThe World
   assert.equal(blank.status, 'engine-ready');
   assert.equal(blank.requiresFeatures.includes('blank-semantics-v1'), true);
   assert.equal(world.status, 'available');
-  assert.equal(world.desc, '相手の獲得札を奪い、そのコピーを手札へ加える');
+  assert.equal(world.desc, '相手の獲得札を1枚破棄し、その札を自分の手札へ複製');
   assert.equal(world.effectProfileId, 'transfer-won-card-v1');
 });
 
@@ -89,4 +89,24 @@ test('Tarotの表示記号は実装順にαからχまで連続したギリシ�
   );
   assert.equal(getPrivateCardDefinition('death').displayMark, 'α');
   assert.equal(getPrivateCardDefinition('the-world').displayMark, 'χ');
+});
+
+test('Tarotの表示役割・短縮名・ルール概念は定義側で不変に管理される', () => {
+  const emperor = getPrivateCardDefinition('the-emperor');
+  const priestess = getPrivateCardDefinition('the-high-priestess');
+  const fool = getPrivateCardDefinition('the-fool');
+  const star = getPrivateCardDefinition('the-star');
+
+  assert.equal(emperor.visualRole, 'emperor');
+  assert.equal(emperor.faceLabel, 'Emperor');
+  assert.deepEqual(emperor.ruleConceptIds, ['tarot-negation']);
+  assert.equal(priestess.visualRole, 'generation');
+  assert.deepEqual(priestess.ruleConceptIds, ['card-duplication', 'target-selection']);
+  assert.deepEqual(fool.ruleConceptIds, ['ability-echo']);
+  assert.deepEqual(star.ruleConceptIds, ['card-addition', 'noise', 'target-selection']);
+  assert.equal(Object.isFrozen(star.ruleConceptIds), true);
+  assert.equal(getPrivateCardDefinition('ace').visualRole, 'standard');
+  assert.equal(getPrivateCardDefinition('ace').faceLabel, 'Ace');
+  assert.match(getPrivateCardDefinition('the-magician').desc, /複製/);
+  assert.doesNotMatch(getPrivateCardDefinition('the-magician').desc, /カードのコピー/);
 });
