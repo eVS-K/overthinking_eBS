@@ -30,7 +30,8 @@ const MAX_EXPANDED_CARD_COPIES = 3;
 const MAX_PRIVATE_PRESETS = 10;
 const EXPANDED_DECK_HEIGHT_MIN_PX = 180;
 const EXPANDED_DECK_HEIGHT_MAX_PX = 440;
-const EXPANDED_DECK_HEIGHT_STEP_PX = 10;
+const EXPANDED_DECK_HEIGHT_STEP_PX = 40;
+const EXPANDED_DECK_HEIGHT_STOPS = Object.freeze([180, 220, 260, 300, 340, 380, 420, 440]);
 const DEFAULT_EXPANDED_DECK = Object.freeze([
   { definitionId: 'ace', copies: 1 },
   { definitionId: 'king', copies: 1 },
@@ -1132,8 +1133,9 @@ function updateExpandedDeckScrollCue() {
 function normalizeExpandedDeckListHeight(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
-  const rounded = Math.round(parsed / EXPANDED_DECK_HEIGHT_STEP_PX) * EXPANDED_DECK_HEIGHT_STEP_PX;
-  return Math.max(EXPANDED_DECK_HEIGHT_MIN_PX, Math.min(EXPANDED_DECK_HEIGHT_MAX_PX, rounded));
+  return EXPANDED_DECK_HEIGHT_STOPS.reduce((closest, candidate) => (
+    Math.abs(candidate - parsed) < Math.abs(closest - parsed) ? candidate : closest
+  ), EXPANDED_DECK_HEIGHT_MIN_PX);
 }
 
 function readExpandedDeckListHeight() {
@@ -1170,8 +1172,11 @@ function applyExpandedDeckListHeight(height, { persist = false } = {}) {
   window.requestAnimationFrame(updateExpandedDeckScrollCue);
 }
 
-function adjustExpandedDeckListHeight(amount) {
-  applyExpandedDeckListHeight(expandedDeckListHeight + amount, { persist: true });
+function adjustExpandedDeckListHeight(direction) {
+  const current = normalizeExpandedDeckListHeight(expandedDeckListHeight) ?? EXPANDED_DECK_HEIGHT_MIN_PX;
+  const currentIndex = EXPANDED_DECK_HEIGHT_STOPS.indexOf(current);
+  const nextIndex = Math.max(0, Math.min(EXPANDED_DECK_HEIGHT_STOPS.length - 1, currentIndex + direction));
+  applyExpandedDeckListHeight(EXPANDED_DECK_HEIGHT_STOPS[nextIndex], { persist: true });
 }
 
 // On small screens, card rows and the rules matrix deliberately keep their
@@ -3076,10 +3081,10 @@ elements.expandedDeckList.addEventListener('click', (event) => {
 
 elements.expandedDeckList.addEventListener('scroll', updateExpandedDeckScrollCue, { passive: true });
 elements.expandedDeckHeightDecrease?.addEventListener('click', () => {
-  adjustExpandedDeckListHeight(-EXPANDED_DECK_HEIGHT_STEP_PX);
+  adjustExpandedDeckListHeight(-1);
 });
 elements.expandedDeckHeightIncrease?.addEventListener('click', () => {
-  adjustExpandedDeckListHeight(EXPANDED_DECK_HEIGHT_STEP_PX);
+  adjustExpandedDeckListHeight(1);
 });
 applyExpandedDeckListHeight(expandedDeckListHeight);
 elements.myHand.addEventListener('scroll', () => updateHorizontalScrollCue(elements.myHand, elements.myHandScroll), { passive: true });

@@ -420,10 +420,10 @@ test('拡張デッキ一覧は、続きがあるときにフェードとスク�
   assert.match(html, /id="expanded-deck-scroll"/);
   assert.match(html, /id="expanded-deck-scroll-hint"/);
   assert.match(html, /id="expanded-deck-scroll-description"/);
-  assert.match(html, /id="expanded-deck-height-decrease"[^>]*aria-label="一覧を10px低くする"/);
-  assert.match(html, /id="expanded-deck-height-increase"[^>]*aria-label="一覧を10px高くする"/);
+  assert.match(html, /id="expanded-deck-height-decrease"[^>]*aria-label="一覧を40px低くする"/);
+  assert.match(html, /id="expanded-deck-height-increase"[^>]*aria-label="一覧を40px高くする"/);
   assert.match(html, /id="expanded-deck-height-value"/);
-  assert.match(html, /一覧の高さは180pxから440pxまで、10pxずつ調整できます。/);
+  assert.match(html, /一覧の高さは180pxから440pxまで、40pxずつ調整できます。/);
   assert.match(html, /aria-describedby="expanded-deck-scroll-description"/);
   assert.match(html, /下へスクロールして、すべてのカードを見る/);
   assert.match(client, /function updateExpandedDeckScrollCue\(/);
@@ -431,7 +431,9 @@ test('拡張デッキ一覧は、続きがあるときにフェードとスク�
   assert.match(client, /function applyExpandedDeckListHeight\(/);
   assert.match(client, /EXPANDED_DECK_HEIGHT_MIN_PX = 180/);
   assert.match(client, /EXPANDED_DECK_HEIGHT_MAX_PX = 440/);
-  assert.match(client, /function adjustExpandedDeckListHeight\(amount\)/);
+  assert.match(client, /EXPANDED_DECK_HEIGHT_STEP_PX = 40/);
+  assert.match(client, /EXPANDED_DECK_HEIGHT_STOPS = Object\.freeze\(\[180, 220, 260, 300, 340, 380, 420, 440\]\)/);
+  assert.match(client, /function adjustExpandedDeckListHeight\(direction\)/);
   assert.match(client, /expandedDeckHeightDecrease\?\.addEventListener\('click'/);
   assert.match(client, /expandedDeckHeightIncrease\?\.addEventListener\('click'/);
   assert.match(client, /elements\.expandedDeckList\.addEventListener\('scroll', updateExpandedDeckScrollCue/);
