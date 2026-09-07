@@ -7,6 +7,7 @@ const { createExpandedPrivateGameState } = require('./private-game-engine');
 const { createPrivatePendingAction } = require('./private-action-queue');
 const {
   publicExpandedCardForViewer,
+  publicExpandedHandForViewer,
   publicPrivatePendingActionForViewer
 } = require('./private-room-view');
 
@@ -97,7 +98,7 @@ test('追加候補と獲得札候補は盤面に必要な安全な札情報だ�
   const addition = publicPrivatePendingActionForViewer(additionPending, state, 'p2');
   assert.equal(addition.target.surface, 'addition');
   assert.deepEqual(addition.target.cards[0], {
-    id: 'ace', definitionId: 'ace', name: 'Ace', desc: '能力なし', category: 'classic',
+    id: 'ace', definitionId: 'ace', name: 'Ace', desc: '能力なし', baseStrength: 14, category: 'classic',
     displayMark: '', faceLabel: 'Ace', visualRole: 'standard', state: { locked: false }
   });
   assert.equal(publicPrivatePendingActionForViewer(additionPending, state, 'p1').target, undefined);
@@ -118,4 +119,28 @@ test('追加候補と獲得札候補は盤面に必要な安全な札情報だ�
   assert.equal(world.target.cards[0].definitionId, wonCard.definitionId);
   assert.equal(typeof world.target.cards[0].name, 'string');
   assert.equal(typeof world.target.cards[0].desc, 'string');
+});
+
+test('生成札は視認しやすい定義順へ並べ、非所有者のNoiseだけは常に末尾に固定する', () => {
+  const { state, noise } = createState();
+  const ace = state.p2.hand.find((card) => card.definitionId === 'ace');
+  const queen = state.p2.hand.find((card) => card.definitionId === 'queen');
+  queen.state.generated = true;
+  // Deliberately scramble the canonical hand order. This must not change
+  // legality, but each recipient receives a safe display order.
+  state.p2.hand = [queen, noise, ace];
+
+  const owner = publicExpandedHandForViewer(state.p2.hand, {
+    state, ownerSeat: 'p2', viewerSeat: 'p2'
+  });
+  assert.deepEqual(owner.map((card) => card.definitionId), ['ace', 'king', 'queen']);
+  assert.equal(owner.find((card) => card.id === queen.instanceId).generated, true);
+
+  const opponent = publicExpandedHandForViewer(state.p2.hand, {
+    state, ownerSeat: 'p2', viewerSeat: 'p1'
+  });
+  assert.deepEqual(opponent.map((card) => card.id), [ace.instanceId, queen.instanceId, noise.instanceId]);
+  assert.equal(opponent.at(-1).category, 'noise');
+  assert.equal(opponent.at(-1).definitionId, undefined);
+  assert.doesNotMatch(JSON.stringify(opponent), /king/);
 });

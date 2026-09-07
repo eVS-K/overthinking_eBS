@@ -33,6 +33,7 @@ const {
 const { expandPrivateDeckEntries, normalizePrivateDeckEntries } = require('./private-deck');
 const {
   createEchoProfile,
+  getPrivateCardRoundPreview,
   resolvePrivateRoundWithContext
 } = require('./private-card-effects');
 const {
@@ -891,6 +892,30 @@ function getSeatCardForSelection(state, seat, instanceId) {
   return card && !isCardLocked(card) ? card : null;
 }
 
+function getBehaviorDefinitionIdForPreview(card, preview) {
+  return typeof preview?.behaviorDefinitionId === 'string' && preview.behaviorDefinitionId.length > 0
+    ? preview.behaviorDefinitionId
+    : card?.definitionId;
+}
+
+function getBehaviorCardForPreview(card, preview, seat, suppressedSeats = []) {
+  if (suppressedSeats.includes(seat)) return { definitionId: '__suppressed__' };
+  const behaviorDefinitionId = getBehaviorDefinitionIdForPreview(card, preview);
+  return behaviorDefinitionId ? { ...card, definitionId: behaviorDefinitionId } : card;
+}
+
+function copiedBehaviorEffectMetadata(card, preview) {
+  const behaviorDefinitionId = getBehaviorDefinitionIdForPreview(card, preview);
+  return behaviorDefinitionId && behaviorDefinitionId !== card?.definitionId
+    ? { copiedFromDefinitionId: behaviorDefinitionId }
+    : {};
+}
+
+function cardBehavesAs(state, seat, card, definitionId) {
+  if (!card || !PRIVATE_SEATS.includes(seat)) return false;
+  return getBehaviorDefinitionIdForPreview(card, getPrivateCardRoundPreview(state, seat, card)) === definitionId;
+}
+
 function addLockToCard(card, { id, releaseAfterRound }) {
   if (!card || !card.state || typeof id !== 'string' || !Number.isSafeInteger(releaseAfterRound)) {
     throw new RangeError('private lock data is invalid');
@@ -928,8 +953,7 @@ function materializeSafePostEffects(next, {
   record
 }) {
   const behaviorCard = (card, preview, seat) => {
-    if (resolution.suppressedSeats.includes(seat)) return { definitionId: '__suppressed__' };
-    return preview.safePostEffectId ? { ...card, definitionId: preview.safePostEffectId } : card;
+    return getBehaviorCardForPreview(card, preview, seat, resolution.suppressedSeats);
   };
   const postRound = materializePrivatePostRoundEffects({
     p1Card: behaviorCard(p1Card, resolution.p1, 'p1'),
@@ -961,9 +985,8 @@ function materializeSafePostEffects(next, {
     const sourceCard = effect.sourceSeat === 'p1' ? p1Card : p2Card;
     const preview = effect.sourceSeat === 'p1' ? resolution.p1 : resolution.p2;
     appendEffect(record, cloneEffectForRecord(effect, {
-      ...(preview.safePostEffectId && preview.safePostEffectId !== sourceCard.definitionId
-        ? { copiedFromDefinitionId: preview.safePostEffectId }
-        : {}),
+      sourceDefinitionId: sourceCard.definitionId,
+      ...copiedBehaviorEffectMetadata(sourceCard, preview),
       advanced: true
     }));
   });
@@ -982,19 +1005,22 @@ function applyAutomaticAdvancedEffects(next, {
     { seat: 'p1', card: p1Card, preview: resolution.p1 },
     { seat: 'p2', card: p2Card, preview: resolution.p2 }
   ];
-  for (const { seat, card } of played) {
+  for (const { seat, card, preview } of played) {
     if (resolution.suppressedSeats.includes(seat)) continue;
     const opponent = seatOpponent(seat);
-    if (card.definitionId === 'the-moon' && winnerSeat !== seat) {
+    const behaviorDefinitionId = getBehaviorDefinitionIdForPreview(card, preview);
+    const copiedBehavior = copiedBehaviorEffectMetadata(card, preview);
+    if (behaviorDefinitionId === 'the-moon' && winnerSeat !== seat) {
       const discarded = next[seat].wonPile.splice(0).map((wonCard) => makeDiscardEntry(wonCard, 'moon', next.round));
       next.discardPile.push(...discarded);
       syncScoreFromWonPile(next, seat);
       appendEffect(record, {
         type: 'discard-won-cards', advanced: true, sourceSeat: seat,
-        sourceDefinitionId: card.definitionId, targetSeat: seat, discardedCount: discarded.length
+        sourceDefinitionId: card.definitionId, targetSeat: seat, discardedCount: discarded.length,
+        ...copiedBehavior
       });
     }
-    if (card.definitionId === 'the-empress' && winnerSeat === seat) {
+    if (behaviorDefinitionId === 'the-empress' && winnerSeat === seat) {
       const targets = next[opponent].hand.filter((target) => getPrivateCardDefinition(target.definitionId).category !== 'tarot');
       targets.forEach((target) => addLockToCard(target, {
         id: `empress-${next.round}-${seat}-${target.instanceId}`,
@@ -1003,10 +1029,10 @@ function applyAutomaticAdvancedEffects(next, {
       appendEffect(record, {
         type: 'lock-cards', advanced: true, sourceSeat: seat,
         sourceDefinitionId: card.definitionId, targetSeat: opponent, lockedCount: targets.length,
-        releaseAfterRound: next.round + 1
+        releaseAfterRound: next.round + 1, ...copiedBehavior
       });
     }
-    if (card.definitionId === 'judgement') {
+    if (behaviorDefinitionId === 'judgement') {
       const copiedIds = [];
       for (const previous of previousHistory) {
         const previousCard = seat === 'p1' ? previous.p1Card : previous.p2Card;
@@ -1017,7 +1043,7 @@ function applyAutomaticAdvancedEffects(next, {
       }
       appendEffect(record, {
         type: 'copy-played-history', advanced: true, sourceSeat: seat,
-        sourceDefinitionId: card.definitionId, cardInstanceIds: copiedIds
+        sourceDefinitionId: card.definitionId, cardInstanceIds: copiedIds, ...copiedBehavior
       });
     }
   }
@@ -1032,43 +1058,44 @@ function getTargetActionsForAdvancedRound(next, {
 }) {
   const actions = [];
   const played = [
-    { seat: 'p1', card: p1Card },
-    { seat: 'p2', card: p2Card }
+    { seat: 'p1', card: p1Card, preview: resolution.p1 },
+    { seat: 'p2', card: p2Card, preview: resolution.p2 }
   ];
-  for (const { seat, card } of played) {
+  for (const { seat, card, preview } of played) {
     if (resolution.suppressedSeats.includes(seat)) continue;
     const opponent = seatOpponent(seat);
+    const behaviorDefinitionId = getBehaviorDefinitionIdForPreview(card, preview);
     const base = {
       round: next.round,
       sourceSeat: seat,
       sourceDefinitionId: card.definitionId
     };
-    if (card.definitionId === 'the-high-priestess' && winnerSeat === opponent) {
+    if (behaviorDefinitionId === 'the-high-priestess' && winnerSeat === opponent) {
       const candidates = next[opponent].hand
         .filter((target) => !isNoiseCard(target))
         .map((target) => target.instanceId);
       if (candidates.length) actions.push({ ...base, type: 'copy-opponent-hand', actorSeat: seat, targetSeat: opponent, candidates });
     }
-    if (card.definitionId === 'the-hierophant' && winnerSeat === opponent) {
+    if (behaviorDefinitionId === 'the-hierophant' && winnerSeat === opponent) {
       const candidates = next[seat].hand.map((target) => target.instanceId);
       if (candidates.length) actions.push({ ...base, type: 'copy-own-hand', actorSeat: seat, targetSeat: seat, candidates });
     }
-    if (card.definitionId === 'justice' && winnerSeat === seat) {
+    if (behaviorDefinitionId === 'justice' && winnerSeat === seat) {
       const candidates = next[opponent].hand.map((target) => target.instanceId);
       if (candidates.length) actions.push({ ...base, type: 'lock-one', actorSeat: seat, targetSeat: opponent, candidates });
     }
-    if ((card.definitionId === 'the-hanged-man' || card.definitionId === 'the-star') && winnerSeat === opponent) {
+    if ((behaviorDefinitionId === 'the-hanged-man' || behaviorDefinitionId === 'the-star') && winnerSeat === opponent) {
       const candidates = [...new Set(next.deck.map((entry) => entry.definitionId))]
         .filter((definitionId) => definitionId !== 'blank');
       if (candidates.length) actions.push({
         ...base,
-        type: card.definitionId === 'the-star' ? 'opponent-choose-noise' : 'opponent-choose-copy',
+        type: behaviorDefinitionId === 'the-star' ? 'opponent-choose-noise' : 'opponent-choose-copy',
         actorSeat: opponent,
         targetSeat: opponent,
         candidates
       });
     }
-    if (card.definitionId === 'the-world') {
+    if (behaviorDefinitionId === 'the-world') {
       const candidates = (roundStartWonPileIds[opponent] || []).filter((instanceId) =>
         next[opponent].wonPile.some((wonCard) => wonCard.instanceId === instanceId));
       if (candidates.length) actions.push({ ...base, type: 'transfer-won-card', actorSeat: seat, targetSeat: opponent, candidates });
@@ -1220,7 +1247,8 @@ function materializeSunPreCommitEffects(next, p1InstanceId, p2InstanceId, preCom
     }
     const sun = getHandCardById(next, effect.sourceSeat, effect.sunInstanceId);
     const targetIndex = next[effect.sourceSeat].hand.findIndex((card) => card.instanceId === effect.targetInstanceId);
-    if (!sun || sun.definitionId !== 'the-sun' || targetIndex < 0 || effect.targetInstanceId === effect.sunInstanceId) {
+    if (!sun || !cardBehavesAs(next, effect.sourceSeat, sun, 'the-sun')
+      || targetIndex < 0 || effect.targetInstanceId === effect.sunInstanceId) {
       throw new RangeError('private Sun target is invalid');
     }
     const [destroyed] = next[effect.sourceSeat].hand.splice(targetIndex, 1);
@@ -1235,7 +1263,7 @@ function materializeSunPreCommitEffects(next, p1InstanceId, p2InstanceId, preCom
   for (const seat of PRIVATE_SEATS) {
     const selectedId = selectionBySeat[seat];
     const selected = getHandCardById(next, seat, selectedId);
-    if (selected?.definitionId !== 'the-sun') continue;
+    if (!selected || !cardBehavesAs(next, seat, selected, 'the-sun')) continue;
     const hasOtherPhysicalCard = next[seat].hand.some((card) => card.instanceId !== selected.instanceId);
     if (hasOtherPhysicalCard && !usedSeats.has(seat)) {
       throw new RangeError('private Sun requires a pre-commit target');
@@ -1375,7 +1403,7 @@ function applySunPreCommitAction(state, seat, sunInstanceId, targetInstanceId) {
   if (!PRIVATE_SEATS.includes(seat)) throw new RangeError('unknown private seat');
   const sun = getHandCardById(state, seat, sunInstanceId);
   const target = getHandCardById(state, seat, targetInstanceId);
-  if (!sun || sun.definitionId !== 'the-sun' || !target || target.instanceId === sun.instanceId) {
+  if (!sun || !cardBehavesAs(state, seat, sun, 'the-sun') || !target || target.instanceId === sun.instanceId) {
     throw new RangeError('private Sun target is invalid');
   }
   // Do not mutate the durable game state while the player is still choosing
@@ -1398,7 +1426,7 @@ function applyAdvancedPrivateRound(state, p1InstanceId, p2InstanceId) {
   const preCommitEffects = [];
   for (const [seat, instanceId] of [['p1', p1InstanceId], ['p2', p2InstanceId]]) {
     const card = getHandCardById(working, seat, instanceId);
-    if (card?.definitionId === 'the-sun') {
+    if (card && cardBehavesAs(working, seat, card, 'the-sun')) {
       const target = working[seat].hand.find((candidate) => candidate.instanceId !== card.instanceId);
       if (target) {
         const sun = applySunPreCommitAction(working, seat, instanceId, target.instanceId);
@@ -1553,6 +1581,7 @@ module.exports = {
   ADVANCED_TAROT_IDS,
   CLASSIC_DEFINITION_IDS,
   applyAdvancedTargetAction,
+  cardBehavesAs,
   applyPrivateRound,
   applySunPreCommitAction,
   assertPrivateGameState,

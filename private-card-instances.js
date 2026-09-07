@@ -124,6 +124,10 @@ function publicClassicCard(instance) {
     definitionId: normalized.definitionId,
     name: definition.name,
     desc: definition.desc,
+    // Base strength is descriptive, server-authored metadata. Conditional
+    // cards still receive their authoritative current-round value separately
+    // in a recipient-safe round preview.
+    baseStrength: Number.isSafeInteger(definition.strength) ? definition.strength : null,
     category: definition.category || '',
     displayMark: definition.displayMark || '',
     faceLabel: definition.faceLabel || definition.name,

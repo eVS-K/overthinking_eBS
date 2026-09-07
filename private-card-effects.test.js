@@ -105,7 +105,7 @@ test('The Chariotは相手の確定強さが15以上なら数値比較より先�
   assert.equal(againstAce.canonicalResult, 'p2');
 });
 
-test('The Fool / The Hermit は対象選択・秘匿・状態変更Tarotを反響しない', () => {
+test('The Foolは直前の実カードをこの局面で引き継ぎ、The Hermitは対象選択Tarotを反響しない', () => {
   const afterInteractiveTarot = {
     ...state({ round: 2 }),
     history: [{
@@ -119,8 +119,34 @@ test('The Fool / The Hermit は対象選択・秘匿・状態変更Tarotを反�
   };
   const fool = getPrivateCardRoundPreview(afterInteractiveTarot, 'p1', card('the-fool'));
   const hermit = getPrivateCardRoundPreview(afterInteractiveTarot, 'p1', card('the-hermit'));
-  assert.equal(fool.displayStrength, 0);
+  assert.equal(fool.displayStrength, 2);
+  assert.equal(fool.behaviorDefinitionId, 'the-high-priestess');
+  assert.match(fool.conditionDetail, /The High Priestess として/);
   assert.equal(hermit.displayStrength, 0);
-  assert.match(fool.conditionDetail, /反響できる直前の実カードがない/);
   assert.match(hermit.conditionDetail, /反響できる直前の実カードがない/);
+});
+
+test('The FoolがJokerを引き継ぐと、直前の値ではなく今の相手の強さをコピーする', () => {
+  const afterJoker = {
+    ...state({ round: 2 }),
+    history: [{
+      p1Card: card('joker'),
+      p2Card: card('king'),
+      p1Strength: 13,
+      p2Strength: 13,
+      p1EchoProfile: { resolvedStrengthUnits: 26, comparisonOverride: '', safePostEffectId: '' }
+    }]
+  };
+  const fool = getPrivateCardRoundPreview(afterJoker, 'p1', card('the-fool'));
+  assert.equal(fool.behaviorDefinitionId, 'joker');
+  assert.equal(fool.displayStrength, null);
+
+  const round = resolvePrivateRoundWithContext(
+    afterJoker,
+    card('the-fool'),
+    card('ace')
+  );
+  assert.equal(round.p1.resolvedStrength, 14);
+  assert.equal(round.p2.resolvedStrength, 14);
+  assert.equal(round.canonicalResult, 'draw');
 });

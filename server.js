@@ -21,6 +21,7 @@ const {
   applyPrivateRound,
   applySunPreCommitAction,
   beginAdvancedPrivateRound,
+  cardBehavesAs,
   createExpandedPrivateGameState,
   finalizeAdvancedPrivateRound,
   legalPrivateCardInstanceIds,
@@ -37,6 +38,7 @@ const {
 } = require('./private-action-queue');
 const {
   publicExpandedCardForViewer,
+  publicExpandedHandForViewer,
   publicPrivatePendingActionForViewer
 } = require('./private-room-view');
 const { createFixedWindowLimiter, getClientIp, readPositiveInteger } = require('./security');
@@ -334,6 +336,19 @@ function isPrivateSettingsOwnerTransferPayload(payload) {
   );
 }
 
+// Entering and leaving setup editing intentionally use a tiny, closed
+// payload.  The server owns the edit lock, so an old browser bundle cannot
+// bypass it by sending an update or a start-agreement event directly.
+function isPrivateSettingsEditPayload(payload) {
+  return Boolean(
+    payload
+      && typeof payload === 'object'
+      && !Array.isArray(payload)
+      && Object.keys(payload).length === 1
+      && typeof payload.roomId === 'string'
+  );
+}
+
 // Keep the Socket.IO boundary deliberately explicit.  The browser is allowed
 // to request only these setup values, and every value is revalidated by
 // updatePrivateRoomSettings before it can affect a room.  Having this small
@@ -420,10 +435,11 @@ function getPublicRoomRules(room) {
   const expandedDeckCatalog = isExpandedPrivateRoomConfig(config)
     ? PRIVATE_CARD_CATALOG
       .filter((definition) => definition.status === 'available' && definition.availability.includes(config.ruleset))
-      .map(({ id, name, desc, category, displayMark, faceLabel, visualRole, maxCopiesPerDeck }) => ({
+      .map(({ id, name, desc, strength, category, displayMark, faceLabel, visualRole, maxCopiesPerDeck }) => ({
         id,
         name,
         desc,
+        baseStrength: Number.isSafeInteger(strength) ? strength : null,
         category,
         displayMark: displayMark || '',
         faceLabel: faceLabel || name,
@@ -476,6 +492,7 @@ function getExpandedLobbyDeckPreview(room) {
         definitionId: definition.id,
         name: definition.name,
         desc: definition.desc,
+        baseStrength: Number.isSafeInteger(definition.strength) ? definition.strength : null,
         category: definition.category,
         displayMark: definition.displayMark || '',
         faceLabel: definition.faceLabel || definition.name,
@@ -650,6 +667,9 @@ function updatePrivateRoomSettings(room, {
   if (!clientId || room.hostClientId !== clientId) {
     return { ok: false, message: 'ルール設定を変更できるのは、この部屋の現在の設定担当者だけです。' };
   }
+  if (room.privateSettingsEditingClientId !== clientId) {
+    return { ok: false, message: 'まず「設定を編集する」を押してから、ルール設定を変更してください。' };
+  }
   if (!Number.isSafeInteger(configRevision) || configRevision !== room.configRevision) {
     return {
       ok: false,
@@ -727,6 +747,41 @@ function updatePrivateRoomSettings(room, {
   };
 }
 
+function beginPrivateRoomSettingsEdit(room, clientId) {
+  if (!room || room.matchType !== 'private') {
+    return { ok: false, message: 'ルール設定を編集できるのはPrivate PvPだけです。' };
+  }
+  if (!['waiting', 'finished'].includes(room.gameState)) {
+    return { ok: false, message: '対局中はルール設定を編集できません。' };
+  }
+  if (!clientId || room.hostClientId !== clientId) {
+    return { ok: false, message: 'ルール設定を編集できるのは、この部屋の現在の設定担当者だけです。' };
+  }
+  if (room.privateSettingsEditingClientId && room.privateSettingsEditingClientId !== clientId) {
+    return { ok: false, message: '現在、別の対戦者が設定を編集しています。' };
+  }
+  room.privateSettingsEditingClientId = clientId;
+  // A consent is meaningful only for a stable rules snapshot. This also
+  // handles a browser which had already agreed immediately before editing
+  // was opened.
+  room.startAgreements = new Set();
+  return { ok: true, editing: true };
+}
+
+function finishPrivateRoomSettingsEdit(room, clientId) {
+  if (!room || room.matchType !== 'private') {
+    return { ok: false, message: 'ルール設定を編集できるのはPrivate PvPだけです。' };
+  }
+  if (!['waiting', 'finished'].includes(room.gameState)) {
+    return { ok: false, message: '対局中はルール設定を編集できません。' };
+  }
+  if (!clientId || room.privateSettingsEditingClientId !== clientId) {
+    return { ok: false, message: 'あなたが開始した設定編集だけを完了できます。' };
+  }
+  room.privateSettingsEditingClientId = '';
+  return { ok: true, editing: false };
+}
+
 // The transfer request deliberately carries no recipient identifier. A private
 // room has exactly one other player, and the server derives that player from
 // the authenticated Socket.IO room membership. This prevents a browser from
@@ -740,6 +795,9 @@ function transferPrivateRoomSettingsOwner(room, clientId) {
   }
   if (!clientId || room.hostClientId !== clientId) {
     return { ok: false, message: '設定担当を譲れるのは、現在の設定担当者だけです。' };
+  }
+  if (room.privateSettingsEditingClientId) {
+    return { ok: false, message: '設定の編集中は設定担当を譲れません。先に編集を完了してください。' };
   }
   const previousOwner = room.players.find((player) => player.clientId === clientId);
   const nextOwner = room.players.find((player) => player.clientId !== clientId && player.connected);
@@ -864,6 +922,9 @@ function createRoom(id, { matchType = 'private', allowedRandomClientIds = [], cr
     // A match starts only after both occupied player seats opt in. Client ids
     // survive reconnects, unlike Socket.IO ids.
     startAgreements: new Set(),
+    // Setup changes are an explicit short-lived mode. Keep the editor as an
+    // internal client id and expose only a safe boolean/name projection.
+    privateSettingsEditingClientId: '',
     needsFreshGame: false,
     chat: [],
     chatUsage: new Map(),
@@ -962,6 +1023,12 @@ function refreshReconnectDeadline(room) {
 
 function beginReconnectGrace(room, player, now = Date.now()) {
   if (!room || !player || player.connected !== false) return null;
+  // A disconnected settings editor must never leave the other player locked
+  // out of the lobby. Editing can be started again after the reconnect; no
+  // in-progress configuration is held only in the browser.
+  if (room.privateSettingsEditingClientId === player.clientId) {
+    room.privateSettingsEditingClientId = '';
+  }
   const generation = nextDisconnectGeneration(player);
   const deadline = now + RECONNECT_GRACE_MS;
   player.disconnectGeneration = generation;
@@ -1148,6 +1215,7 @@ function resetGame(room) {
   room.winnerSeat = null;
   room.finishReason = null;
   room.startAgreements = new Set();
+  room.privateSettingsEditingClientId = '';
   const activeConfig = room.matchType === 'private'
     ? (room.activePrivateConfig || getRoomPrivateConfig(room))
     : null;
@@ -1299,6 +1367,16 @@ function createRoomView(room, socketId) {
       && room.matchType === 'private'
       && player.clientId === room.hostClientId
   );
+  const settingsEditor = room.players.find((candidate) => (
+    candidate.clientId === room.privateSettingsEditingClientId
+  ));
+  const startAgreementPlayers = room.players
+    .map((candidate, index) => ({
+      seat: index === 0 ? 'p1' : 'p2',
+      name: candidate.name,
+      agreed: startAgreements.has(candidate.clientId)
+    }))
+    .filter((candidate) => candidate.agreed);
 
   return {
     id: room.id,
@@ -1311,11 +1389,11 @@ function createRoomView(room, socketId) {
       name,
       suit,
       hand: expandedState
-        ? expandedState[index === 0 ? 'p1' : 'p2'].hand.map((card) => publicExpandedCardForViewer(card, {
+        ? publicExpandedHandForViewer(expandedState[index === 0 ? 'p1' : 'p2'].hand, {
           state: expandedState,
           ownerSeat: index === 0 ? 'p1' : 'p2',
           viewerSeat
-        }))
+        })
         : expandedLobbyPreview || hand,
       score,
       connected
@@ -1336,12 +1414,16 @@ function createRoomView(room, socketId) {
     winnerSeat: room.winnerSeat,
     finishReason: room.finishReason,
     startReadyCount: room.players.filter((candidate) => startAgreements.has(candidate.clientId)).length,
+    startAgreementPlayers,
+    settingsEditing: Boolean(room.privateSettingsEditingClientId),
+    settingsEditorName: settingsEditor?.name || '',
     viewer: {
       isSpectator,
       isRoomHost,
       // Keep a small compatibility alias while browser bundles are cached on
       // GitHub Pages during rollout. Neither field exposes hostClientId.
       isHost: isRoomHost,
+      isEditingSettings: Boolean(player && room.privateSettingsEditingClientId === player.clientId),
       hasConfirmedSelection: Boolean(player && room.selections[player.id]),
       hasAgreedToStart: Boolean(player && startAgreements.has(player.clientId)),
       autoJoinWhenSeatAvailable: Boolean(spectator?.autoJoinWhenSeatAvailable),
@@ -1354,6 +1436,7 @@ function createRoomView(room, socketId) {
 
 function startWhenBothPlayersAgree(room) {
   if (!room || room.players.length !== 2 || !room.players.every((player) => player.connected)) return false;
+  if (room.privateSettingsEditingClientId) return false;
   const agreements = room.startAgreements || new Set();
   if (!room.players.every((player) => agreements.has(player.clientId))) return false;
   startNewGame(room);
@@ -1420,6 +1503,8 @@ const SOCKET_EVENTS_WITH_OBJECT_PAYLOAD = new Set([
   'confirm_card',
   'resolve_private_action',
   'update_private_settings',
+  'begin_private_settings_edit',
+  'finish_private_settings_edit',
   'transfer_private_settings_owner',
   'agree_to_start',
   'restart_game',
@@ -2657,7 +2742,7 @@ io.on('connection', (socket) => {
       const selected = seat
         ? room.privateGameState[seat].hand.find((card) => card.instanceId === cardId)
         : null;
-      if (selected && selected.definitionId === 'the-sun'
+      if (selected && cardBehavesAs(room.privateGameState, seat, selected, 'the-sun')
         && beginSunPreCommitAction(room, player, seat, cardId)) {
         return;
       }
@@ -2746,6 +2831,44 @@ io.on('connection', (socket) => {
     replyToChat(acknowledge, result);
   });
 
+  const changePrivateSettingsEditMode = (editing, payload = {}, acknowledge) => {
+    const reject = (message) => {
+      emitError(socket, message);
+      replyToChat(acknowledge, { ok: false, message });
+    };
+    if (!isPrivateSettingsEditPayload(payload)) {
+      reject('設定編集の内容を確認してから、もう一度お試しください。');
+      return;
+    }
+    const room = getBoundRoom(socket, payload.roomId);
+    if (!room) {
+      reject('現在の部屋を確認できませんでした。画面を更新して再試行してください。');
+      return;
+    }
+    const player = room.players.find((candidate) => candidate.id === socket.id);
+    if (!player || !player.connected) {
+      reject('観戦者はルール設定を編集できません。');
+      return;
+    }
+    const result = editing
+      ? beginPrivateRoomSettingsEdit(room, player.clientId)
+      : finishPrivateRoomSettingsEdit(room, player.clientId);
+    if (!result.ok) {
+      reject(result.message);
+      return;
+    }
+    refreshPrivateRoomIdleExpiry(room);
+    broadcastRoom(room);
+    replyToChat(acknowledge, result);
+  };
+
+  onSocketEvent('begin_private_settings_edit', (payload = {}, acknowledge) => {
+    changePrivateSettingsEditMode(true, payload, acknowledge);
+  });
+  onSocketEvent('finish_private_settings_edit', (payload = {}, acknowledge) => {
+    changePrivateSettingsEditMode(false, payload, acknowledge);
+  });
+
   onSocketEvent('transfer_private_settings_owner', (payload = {}, acknowledge) => {
     const reject = (message) => {
       emitError(socket, message);
@@ -2786,6 +2909,10 @@ io.on('connection', (socket) => {
   const agreeToStart = (payload = {}) => {
     const room = getBoundRoom(socket, payload.roomId);
     if (!room || !['waiting', 'finished'].includes(room.gameState)) return;
+    if (room.privateSettingsEditingClientId) {
+      emitError(socket, 'ルール設定を編集中です。編集を完了してから対戦開始へ同意してください。');
+      return;
+    }
     const player = room.players.find((candidate) => candidate.id === socket.id);
     if (!player || !player.connected) return;
     if (!room.players.every((player) => player.connected)) return;
@@ -2908,6 +3035,7 @@ module.exports = {
   RECONNECT_GRACE_MS,
   areRandomMatchEntriesCompatible,
   app,
+  beginPrivateRoomSettingsEdit,
   beginReconnectGrace,
   buildPrivateSettingsUpdate,
   buildDefaultAllowedOrigins,
@@ -2920,9 +3048,11 @@ module.exports = {
   ensurePrivateRoomHost,
   expireDisconnectedPlayer,
   finishGameByForfeit,
+  finishPrivateRoomSettingsEdit,
   getSelectableCardIds,
   getPublicRoomRules,
   getRoomTurnTimeLimitMs,
+  isPrivateSettingsEditPayload,
   isPrivateRoomIdleExpired,
   io,
   normalizeJoinPreferences,

@@ -21,7 +21,7 @@ const PRIVATE_RULE_CONCEPTS = Object.freeze({
     id: 'ability-echo',
     order: 10,
     title: '能力をコピー',
-    description: '直前ラウンドで確定した強さと、安全な勝敗判定能力だけを使います。札は増えません。'
+    description: 'The Foolは自分の直前の実カードとして、このラウンドの強さ・能力を引き継ぎます。The Hermitは直前ラウンドで確定した強さと、安全な勝敗判定能力だけを反響します。札は増えません。'
   }),
   'card-duplication': Object.freeze({
     id: 'card-duplication',

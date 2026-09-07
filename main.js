@@ -176,6 +176,7 @@ const elements = {
   confirmButton: document.getElementById('confirmBtn'),
   surrenderButton: document.getElementById('surrenderBtn'),
   restartButton: document.getElementById('restartBtn'),
+  startAgreementStatus: document.getElementById('start-agreement-status'),
   nextRandomButton: document.getElementById('nextRandomBtn'),
   switchSpectatorButton: document.getElementById('switchSpectatorBtn'),
   spectatorSeatPanel: document.getElementById('spectator-seat-panel'),
@@ -198,6 +199,8 @@ const elements = {
   roomRulesConceptsList: document.getElementById('room-rules-concepts-list'),
   privateSettingsControls: document.getElementById('private-settings-controls'),
   privateSettingsOwnerName: document.getElementById('private-settings-owner-name'),
+  beginPrivateSettingsEditButton: document.getElementById('begin-private-settings-edit-btn'),
+  finishPrivateSettingsEditButton: document.getElementById('finish-private-settings-edit-btn'),
   transferPrivateSettingsOwnerButton: document.getElementById('transfer-private-settings-owner-btn'),
   privateRulesetSelect: document.getElementById('private-ruleset-select'),
   privateTurnTimeSelect: document.getElementById('private-turn-time-select'),
@@ -636,6 +639,14 @@ function getRoomRules(room) {
         id: card.id,
         name: card.name,
         desc: typeof card.desc === 'string' ? card.desc : '',
+        // This is descriptive, server-authored metadata only. Preserve a
+        // fixed default strength so the deck editor and Tarot guide do not
+        // collapse every fixed-strength Tarot into "局面で決定".
+        baseStrength: Number.isSafeInteger(card.baseStrength) && card.baseStrength >= 0
+          ? card.baseStrength
+          : card.baseStrength === null
+            ? null
+            : undefined,
         category: typeof card.category === 'string' ? card.category : '',
         displayMark: typeof card.displayMark === 'string' ? card.displayMark : '',
         faceLabel: typeof card.faceLabel === 'string' && card.faceLabel.length > 0 ? card.faceLabel : card.name,
@@ -876,6 +887,7 @@ function renderPrivatePresetPanel(room) {
   const canApply = Boolean(
     selectedPreset
     && isRoomHost(room)
+    && room?.viewer?.isEditingSettings === true
     && ['waiting', 'finished'].includes(room?.gameState)
     && socket?.connected
     && !privateSettingsPending
@@ -892,7 +904,9 @@ function renderPrivatePresetPanel(room) {
     elements.privatePresetFeedback,
     privatePresetFeedback
       || (isRoomHost(room)
-        ? '保存はいつでもできます。読み込みは待機中または対局終了後に反映します。'
+        ? room?.viewer?.isEditingSettings === true
+          ? '保存はいつでもできます。読み込みは現在の設定編集に反映します。'
+          : '保存はいつでもできます。読み込みには「設定を編集する」を押してください。'
         : '保存はできます。読み込み・適用は現在の設定担当者だけが行えます。')
   );
 }
@@ -1209,6 +1223,19 @@ function getTarotVisualRoleLabel(card) {
   return labels[card?.visualRole] || '特殊';
 }
 
+function getCardBaseStrengthLabel(card) {
+  if (Number.isSafeInteger(card?.baseStrength) && card.baseStrength >= 0) {
+    return `基本の強さ ${card.baseStrength}`;
+  }
+  if (card?.definitionId === 'joker' || card?.id === 'joker') {
+    return '強さは相手の札に合わせる';
+  }
+  if (card?.baseStrength === null || isTarotCard(card)) {
+    return '強さは局面で決定';
+  }
+  return '';
+}
+
 function scheduleHorizontalScrollCueUpdate() {
   window.requestAnimationFrame(updateHorizontalScrollCues);
 }
@@ -1242,10 +1269,14 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
     const type = document.createElement('span');
     type.className = 'expanded-deck-card-type';
     type.textContent = isTarot ? `TAROT · ${getTarotVisualRoleLabel(card)}` : '';
+    const strength = document.createElement('span');
+    strength.className = 'expanded-deck-card-strength';
+    strength.textContent = getCardBaseStrengthLabel(card);
     const description = document.createElement('small');
     description.textContent = card.desc || '能力なし';
     copy.append(name);
     if (type.textContent) copy.append(type);
+    if (strength.textContent) copy.append(strength);
     copy.append(description);
     const controls = document.createElement('div');
     controls.className = 'expanded-deck-card-controls';
@@ -1308,11 +1339,17 @@ function renderRoomRules(room) {
   const rules = getRoomRules(room);
   const isPrivateRoom = room?.matchType !== 'random';
   const isExpanded = isPrivateRoom && rules.ruleset === EXPANDED_PRIVATE_RULESET_ID;
-  const canEdit = Boolean(
+  const canManageSettings = Boolean(
     isPrivateRoom
     && isRoomHost(room)
     && ['waiting', 'finished'].includes(room?.gameState)
   );
+  const settingsEditing = room?.settingsEditing === true;
+  const isEditingSettings = room?.viewer?.isEditingSettings === true;
+  // The server remains authoritative, but this local gate prevents stale UI
+  // controls or preset buttons from suggesting an operation that is not
+  // currently available.
+  const canEdit = canManageSettings && isEditingSettings;
   let isPending = privateSettingsPending?.roomId === room?.id;
   if (isPending && privateSettingsMatch(rules, privateSettingsPending)) {
     clearPrivateSettingsPending();
@@ -1334,8 +1371,12 @@ function renderRoomRules(room) {
       ? '設定は固定です'
       : rules.locked
         ? '対局中 — 設定は固定'
-        : canEdit
-          ? '現在の設定担当者 — 変更できます'
+        : settingsEditing
+          ? isEditingSettings
+            ? '設定を編集中 — 完了後に開始同意できます'
+            : `${room?.settingsEditorName || '設定担当者'} が設定を編集中`
+          : canManageSettings
+            ? '現在の設定担当者 — 編集を開始できます'
           : '現在の設定担当者が変更できます'
   );
   setText(elements.roomRulesSummary, `共通の${deckCount}枚で最大${displayedRoundLimit}ラウンド。1ラウンド ${formatTurnTime(rules.turnTimeLimitMs)}、${immediateText}です。`);
@@ -1369,10 +1410,19 @@ function renderRoomRules(room) {
   renderPrivatePresetPanel(room);
 
   elements.privateSettingsControls.classList.toggle('hidden', !canEdit);
-  elements.transferPrivateSettingsOwnerButton.classList.toggle('hidden', !canEdit);
-  if (!canEdit) return;
+  elements.privateSettingsControls.classList.toggle('settings-edit-open', canEdit);
+  elements.beginPrivateSettingsEditButton?.classList.toggle('hidden', !canManageSettings || settingsEditing);
+  elements.finishPrivateSettingsEditButton?.classList.toggle('hidden', !isEditingSettings);
+  elements.transferPrivateSettingsOwnerButton.classList.toggle('hidden', !canManageSettings || settingsEditing);
+  if (elements.beginPrivateSettingsEditButton) {
+    elements.beginPrivateSettingsEditButton.disabled = !socket?.connected || isPending;
+  }
+  if (elements.finishPrivateSettingsEditButton) {
+    elements.finishPrivateSettingsEditButton.disabled = !socket?.connected || isPending;
+  }
+  if (!canManageSettings) return;
   const transferTarget = room?.players?.find((player) => player.id !== socket?.id) || null;
-  const canTransferOwnership = Boolean(transferTarget?.connected && !isPending && socket?.connected);
+  const canTransferOwnership = Boolean(transferTarget?.connected && !isPending && socket?.connected && !settingsEditing);
   setText(elements.privateSettingsOwnerName, 'あなた');
   setText(elements.transferPrivateSettingsOwnerButton, '設定担当を譲る');
   elements.transferPrivateSettingsOwnerButton.setAttribute(
@@ -1380,6 +1430,15 @@ function renderRoomRules(room) {
     transferTarget ? `${transferTarget.name} さんへ設定担当を譲る` : '設定担当を譲る'
   );
   elements.transferPrivateSettingsOwnerButton.disabled = !canTransferOwnership;
+  if (!canEdit) {
+    setText(
+      elements.privateSettingsFeedback,
+      settingsEditing
+        ? '設定担当者が編集を完了すると、両者が対戦開始へ同意できます。'
+        : '「設定を編集する」を押すと、ルール・デッキを変更できます。'
+    );
+    return;
+  }
   const selectableTurnTime = PRIVATE_TURN_TIME_OPTIONS_MS.has(rules.turnTimeLimitMs)
     ? rules.turnTimeLimitMs
     : TURN_TIME_LIMIT_MS;
@@ -1398,7 +1457,9 @@ function renderRoomRules(room) {
 
 function requestPrivateSettingsChange(changes) {
   if (!socket?.connected || !currentRoom || !currentRoomId || currentRoom.matchType === 'random') return false;
-  if (!isRoomHost(currentRoom) || !['waiting', 'finished'].includes(currentRoom.gameState)) return false;
+  if (!isRoomHost(currentRoom)
+    || currentRoom.viewer?.isEditingSettings !== true
+    || !['waiting', 'finished'].includes(currentRoom.gameState)) return false;
   const rules = getRoomRules(currentRoom);
   const requestSettings = buildPrivateSettingsRequest(rules, changes);
   if (!PRIVATE_TURN_TIME_OPTIONS_MS.has(requestSettings.turnTimeLimitMs)) {
@@ -1475,6 +1536,29 @@ function requestPrivateSettingsOwnershipTransfer() {
       return;
     }
     privateSettingsFeedback = `${result.settingsOwnerName || transferTarget.name} さんへ設定担当を譲りました。`;
+    renderRoomRules(currentRoom);
+  });
+}
+
+function requestPrivateSettingsEditMode(editing) {
+  if (!socket?.connected || !currentRoom || !currentRoomId || currentRoom.matchType === 'random') return;
+  if (!isRoomHost(currentRoom) || !['waiting', 'finished'].includes(currentRoom.gameState)) return;
+  if (editing && currentRoom.settingsEditing) return;
+  if (!editing && currentRoom.viewer?.isEditingSettings !== true) return;
+  const button = editing ? elements.beginPrivateSettingsEditButton : elements.finishPrivateSettingsEditButton;
+  if (button) button.disabled = true;
+  const eventName = editing ? 'begin_private_settings_edit' : 'finish_private_settings_edit';
+  const requestedRoomId = currentRoomId;
+  socket.emit(eventName, { roomId: requestedRoomId }, (result) => {
+    if (currentRoomId !== requestedRoomId) return;
+    if (!result?.ok) {
+      privateSettingsFeedback = result?.message || '設定編集の状態を変更できませんでした。';
+      renderRoomRules(currentRoom);
+      return;
+    }
+    privateSettingsFeedback = editing
+      ? '設定編集を開始しました。編集中は両者とも開始に同意できません。'
+      : '設定編集を完了しました。ルールを確認して、両者で開始に同意できます。';
     renderRoomRules(currentRoom);
   });
 }
@@ -1646,9 +1730,12 @@ function createCard(card, suitType, isInteractive, { effectTargetAction = null }
     cardElement.setAttribute('role', 'button');
     cardElement.tabIndex = 0;
     const selectEffectTarget = () => {
-      if (!currentRoom || getPrivatePendingAction(currentRoom)?.id !== effectTargetAction.id) return;
+      const candidateId = card?.id;
+      if (!currentRoom
+        || getPrivatePendingAction(currentRoom)?.id !== effectTargetAction.id
+        || !effectCandidateIds.includes(candidateId)) return;
       privateActionSelectedActionId = effectTargetAction.id;
-      privateActionSelectedTargetId = privateActionSelectedTargetId === card.id ? '' : card.id;
+      privateActionSelectedTargetId = privateActionSelectedTargetId === candidateId ? '' : candidateId;
       renderRoom(currentRoom);
     };
     cardElement.addEventListener('click', selectEffectTarget);
@@ -1759,9 +1846,9 @@ function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'sp
   const displayStrength = formatDisplayedStrength(selectedCard.roundInfo?.strength);
   const strengthText = displayStrength
     ? `このラウンドの強さ：${displayStrength}`
-    : selectedCard.definitionId === 'joker'
+    : selectedCard.roundInfo?.behaviorDefinitionId === 'joker' || selectedCard.definitionId === 'joker'
       ? 'このラウンドの強さ：相手のカードに合わせます'
-      : '';
+      : getCardBaseStrengthLabel(selectedCard);
   setText(elements.selectedCardStrength, strengthText);
   elements.selectedCardStrength.classList.toggle('hidden', !strengthText);
   const conditionDetail = selectedCard.roundInfo?.detail ? `　${selectedCard.roundInfo.detail}` : '';
@@ -2409,6 +2496,8 @@ function renderStatus(room, me, opponent) {
           ? '対戦相手を待っています。別の相手を探すこともできます。'
           : '対戦相手の入室を待っています…'
       );
+    } else if (room.matchType === 'private' && room.settingsEditing === true) {
+      setText(elements.status, `${room.settingsEditorName || '設定担当者'} がルール設定を編集しています。完了後に開始へ同意できます。`);
     } else if (room.viewer.hasAgreedToStart) {
       setText(elements.status, '対戦開始に同意しました。相手の同意を待っています…');
     } else {
@@ -2531,7 +2620,8 @@ function renderSpectatorTarotGuide(room) {
   elements.spectatorTarotGuide.classList.add(`tarot-role-${selectedVisualRole}`);
   setText(elements.spectatorTarotMark, getCardMark(selectedCard));
   setText(elements.spectatorTarotName, formatCardDisplayName(selectedCard));
-  setText(elements.spectatorTarotDescription, `能力：${selectedCard.desc || '能力なし'}`);
+  const strength = getCardBaseStrengthLabel(selectedCard);
+  setText(elements.spectatorTarotDescription, `${strength ? `${strength}。` : ''}能力：${selectedCard.desc || '能力なし'}`);
 }
 
 function getPrivatePendingAction(room = currentRoom) {
@@ -2681,7 +2771,15 @@ function renderPrivatePendingAction(room) {
       : '対戦者が能力の対象を選んでいます。')
   );
   renderPrivateActionCountdown(room);
-  const selectedCard = target?.cards.find((card) => card.id === privateActionSelectedTargetId) || null;
+  // A candidate normally has a rich projected card in `target.cards`.  Keep
+  // the selection usable if a rolling deployment or a reconnect supplies the
+  // authoritative candidate ID before its presentational projection: the
+  // server still validates the same opaque ID and no card details are
+  // invented or exposed by this fallback.
+  const selectedCard = target?.cards.find((card) => card.id === privateActionSelectedTargetId)
+    || (target?.candidateIds?.includes(privateActionSelectedTargetId)
+      ? { id: privateActionSelectedTargetId, name: '選択した札', category: 'unavailable' }
+      : null);
   const hasSelection = canChoose && privateActionSelectedActionId === action.id && Boolean(selectedCard);
   if (elements.privateActionSelection) {
     elements.privateActionSelection.classList.toggle('hidden', !canChoose);
@@ -2832,9 +2930,11 @@ function renderRoom(room) {
   const playerCanAct = !isSpectator && Boolean(me);
   const canSurrender = playerCanAct && ['playing', 'reconnecting'].includes(roomView.gameState);
   const bothPlayersReady = roomView.players.length === 2 && roomView.players.every((player) => player.connected);
-  const canAgreeToStart = playerCanAct
+  const canShowStartAgreement = playerCanAct
     && ['waiting', 'finished'].includes(roomView.gameState)
     && bothPlayersReady;
+  const settingsEditing = roomView.matchType === 'private' && roomView.settingsEditing === true;
+  const canAgreeToStart = canShowStartAgreement && !settingsEditing;
   const canFindNextRandom = playerCanAct
     && isRandomMatch
     && ['waiting', 'finished'].includes(roomView.gameState);
@@ -2844,6 +2944,8 @@ function renderRoom(room) {
   );
   elements.surrenderButton.classList.toggle('hidden', !canSurrender);
   elements.restartButton.classList.toggle('hidden', !canAgreeToStart);
+  elements.restartButton.classList.toggle('agreement-ready', canAgreeToStart);
+  elements.startAgreementStatus?.classList.toggle('hidden', !canShowStartAgreement);
   elements.nextRandomButton.classList.toggle('hidden', !canFindNextRandom);
   elements.switchSpectatorButton.classList.toggle('hidden', !playerCanAct || isRandomMatch);
   elements.playerControls.classList.toggle('hidden', !playerCanAct);
@@ -2854,6 +2956,24 @@ function renderRoom(room) {
       : '対戦開始に同意する'
   );
   elements.restartButton.disabled = !socket?.connected || roomView.viewer.hasAgreedToStart;
+  if (elements.startAgreementStatus && canShowStartAgreement) {
+    const agreedNames = Array.isArray(roomView.startAgreementPlayers)
+      ? roomView.startAgreementPlayers
+        .filter((entry) => entry && typeof entry.name === 'string' && entry.name.length > 0)
+        .map((entry) => entry.name)
+      : [];
+    const readyCount = Number.isSafeInteger(roomView.startReadyCount)
+      ? roomView.startReadyCount
+      : agreedNames.length;
+    setText(
+      elements.startAgreementStatus,
+      settingsEditing
+        ? `${roomView.settingsEditorName || '設定担当者'} が設定を編集中です。完了後に開始同意できます。`
+        : agreedNames.length > 0
+          ? `開始に同意済み：${agreedNames.join('・')}（${readyCount} / 2）`
+          : '開始への同意：まだ誰も同意していません（0 / 2）'
+    );
+  }
   elements.nextRandomButton.disabled = !socket?.connected || nextRandomMatchPending;
   elements.surrenderButton.disabled = !socket?.connected;
   elements.switchSpectatorButton.disabled = !socket?.connected;
@@ -3043,6 +3163,14 @@ elements.privateTurnTimeSelect.addEventListener('change', () => {
 
 elements.transferPrivateSettingsOwnerButton.addEventListener('click', () => {
   requestPrivateSettingsOwnershipTransfer();
+});
+
+elements.beginPrivateSettingsEditButton?.addEventListener('click', () => {
+  requestPrivateSettingsEditMode(true);
+});
+
+elements.finishPrivateSettingsEditButton?.addEventListener('click', () => {
+  requestPrivateSettingsEditMode(false);
 });
 
 elements.expandedDeckList.addEventListener('click', (event) => {

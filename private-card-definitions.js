@@ -192,7 +192,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
     requiresFeatures: ['blank-semantics-v1'], excludesTags: [], visualRole: 'blank', ruleConceptIds: ['blank']
   },
   {
-    id: 'the-fool', name: 'The Fool', strength: null, desc: '自分の前ラウンドの強さ・能力をコピー', category: 'tarot',
+    id: 'the-fool', name: 'The Fool', strength: null, desc: '自分の直前の実カードとして、このラウンドの強さ・能力を引き継ぐ', category: 'tarot',
     requiresFeatures: ['round-snapshot-v1', 'echo-profile-v1'], excludesTags: [], effectProfileId: 'echo-own-v1'
   },
   {

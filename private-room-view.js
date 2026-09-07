@@ -9,10 +9,14 @@
  */
 const { getPrivateCardRoundPreview } = require('./private-card-effects');
 const { publicPrivateCard } = require('./private-card-instances');
-const { getPrivateCardDefinition } = require('./private-card-definitions');
+const { PRIVATE_CARD_CATALOG, getPrivateCardDefinition } = require('./private-card-definitions');
 const { publicVirtualBlankCard } = require('./private-blank');
 const { isCardLocked, isNoiseCard } = require('./private-game-engine');
 const { publicPrivatePendingAction } = require('./private-action-queue');
+
+const PRIVATE_CARD_DISPLAY_ORDER = new Map(
+  PRIVATE_CARD_CATALOG.map((definition, index) => [definition.id, index])
+);
 
 function isSeat(value) {
   return value === 'p1' || value === 'p2';
@@ -65,6 +69,7 @@ function publicExpandedCardForViewer(card, {
     definitionId: publicCard.definitionId,
     name: publicCard.name,
     desc: publicCard.desc,
+    baseStrength: publicCard.baseStrength,
     category: preview?.category || publicCard.category || '',
     displayMark: publicCard.displayMark || '',
     faceLabel: publicCard.faceLabel || publicCard.name,
@@ -75,7 +80,9 @@ function publicExpandedCardForViewer(card, {
       roundInfo: {
         strength: preview.displayStrength,
         detail: preview.conditionDetail,
-        conditional: preview.isConditional
+        conditional: preview.isConditional,
+        behaviorDefinitionId: preview.behaviorDefinitionId,
+        ...(preview.inheritedDefinitionId ? { inheritedDefinitionId: preview.inheritedDefinitionId } : {})
       }
     } : {})
   };
@@ -92,6 +99,30 @@ function publicCandidate(card, context) {
   return publicExpandedCardForViewer(card, { ...context, includeRoundPreview: false });
 }
 
+// Generated cards should return to the same readable deck order rather than
+// accumulating at the far end of a hand. This is deliberately a view-only
+// sort: game state, target IDs, and server-side legality keep their original
+// order. A non-owner's Noise card has no definition in the transport and is
+// always placed last, so its position cannot leak its hidden identity.
+function publicExpandedHandForViewer(cards, context) {
+  if (!Array.isArray(cards)) return [];
+  return cards
+    .map((card, originalIndex) => ({
+      card: publicExpandedCardForViewer(card, context),
+      originalIndex
+    }))
+    .sort((left, right) => {
+      const leftNoise = left.card.category === 'noise';
+      const rightNoise = right.card.category === 'noise';
+      if (leftNoise !== rightNoise) return leftNoise ? 1 : -1;
+      if (leftNoise) return left.originalIndex - right.originalIndex;
+      const leftOrder = PRIVATE_CARD_DISPLAY_ORDER.get(left.card.definitionId) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = PRIVATE_CARD_DISPLAY_ORDER.get(right.card.definitionId) ?? Number.MAX_SAFE_INTEGER;
+      return leftOrder - rightOrder || left.originalIndex - right.originalIndex;
+    })
+    .map(({ card }) => card);
+}
+
 function publicDefinitionCandidate(definitionId) {
   const definition = getPrivateCardDefinition(definitionId);
   return {
@@ -99,6 +130,7 @@ function publicDefinitionCandidate(definitionId) {
     definitionId: definition.id,
     name: definition.name,
     desc: definition.desc,
+    baseStrength: Number.isSafeInteger(definition.strength) ? definition.strength : null,
     category: definition.category,
     displayMark: definition.displayMark || '',
     faceLabel: definition.faceLabel || definition.name,
@@ -170,5 +202,6 @@ function publicPrivatePendingActionForViewer(pending, state, viewerSeat) {
 module.exports = {
   getPendingActionTargetSurface,
   publicExpandedCardForViewer,
+  publicExpandedHandForViewer,
   publicPrivatePendingActionForViewer
 };

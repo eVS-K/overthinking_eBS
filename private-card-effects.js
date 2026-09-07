@@ -155,9 +155,32 @@ function isVirtualBlankLike(card) {
   return card?.virtual === true || card?.definitionId === 'blank';
 }
 
-function getPrivateCardRoundPreview(state, seat, card) {
-  if (!card || typeof card.definitionId !== 'string') throw new TypeError('private card requires a definition id');
-  const definition = getPrivateCardDefinition(card.definitionId);
+// An echo must never recurse through a previous Fool/Hermit. Besides making
+// the answer ambiguous, recursion would make state validation depend on an
+// unbounded history walk. Every other real card is copied as its *current*
+// behaviour, not as the strength it happened to resolve to last round.
+const ECHO_RECURSION_DEFINITION_IDS = new Set(['the-fool', 'the-hermit']);
+
+function getPreviousPlayedCard(state, seat) {
+  const previous = Array.isArray(state?.history) ? state.history.at(-1) : null;
+  if (!previous || typeof previous !== 'object') return null;
+  if (seat === 'p1') return previous.p1Card || null;
+  if (seat === 'p2') return previous.p2Card || null;
+  throw new RangeError('unknown private seat');
+}
+
+function getLiveEchoDefinitionId(state, seat) {
+  const previousCard = getPreviousPlayedCard(state, seat);
+  if (!previousCard || isVirtualBlankLike(previousCard)
+    || ECHO_RECURSION_DEFINITION_IDS.has(previousCard.definitionId)) return '';
+  try {
+    return getPrivateCardDefinition(previousCard.definitionId).id;
+  } catch {
+    return '';
+  }
+}
+
+function getDefinitionRoundPreview(state, seat, definition) {
   const context = getRoundContext(state, seat);
   let comparisonStrengthUnits = toStrengthUnits(definition.strength ?? 0);
   let displayStrength = definition.id === 'joker' ? null : formatStrengthUnits(comparisonStrengthUnits);
@@ -205,21 +228,11 @@ function getPrivateCardRoundPreview(state, seat, card) {
     // The card keeps its base strength 0. Its comparison override is applied
     // only after both cards (including Joker copies) have a settled strength.
     conditionDetail = '相手の確定した強さが15以上なら、数値比較より先に勝利します。';
-  } else if (definition.id === 'the-fool' || definition.id === 'the-hermit') {
-    isConditional = true;
-    const sourceSeat = definition.id === 'the-fool' ? seat : opponentSeat(seat);
-    const echo = getEchoProfileFromHistory(state, sourceSeat);
-    comparisonStrengthUnits = echo?.resolvedStrengthUnits || 0;
-    displayStrength = formatStrengthUnits(comparisonStrengthUnits);
-    comparisonOverride = echo?.comparisonOverride || '';
-    safePostEffectId = echo?.safePostEffectId || '';
-    conditionDetail = echo
-      ? `直前ラウンドの解決済み強さ${displayStrength}と、コピー可能な勝敗判定能力を反響します。`
-      : '反響できる直前の実カードがないため、強さ0・能力なしです。';
   }
 
   return {
     definitionId: definition.id,
+    behaviorDefinitionId: definition.id,
     category: definition.category,
     // Keep the old display-oriented property for callers that only need a
     // preview; all game resolution uses comparisonStrengthUnits instead.
@@ -235,9 +248,64 @@ function getPrivateCardRoundPreview(state, seat, card) {
   };
 }
 
+function getPrivateCardRoundPreview(state, seat, card) {
+  if (!card || typeof card.definitionId !== 'string') throw new TypeError('private card requires a definition id');
+  const definition = getPrivateCardDefinition(card.definitionId);
+  if (definition.id === 'the-fool') {
+    const inheritedDefinitionId = getLiveEchoDefinitionId(state, seat);
+    if (inheritedDefinitionId) {
+      const inheritedDefinition = getPrivateCardDefinition(inheritedDefinitionId);
+      const inherited = getDefinitionRoundPreview(state, seat, inheritedDefinition);
+      const inheritedDetail = inherited.conditionDetail ? ` ${inherited.conditionDetail}` : '';
+      return {
+        ...inherited,
+        // The physical card remains Fool for the hand/history, while all
+        // comparison and effect dispatch uses the inherited identity below.
+        definitionId: definition.id,
+        behaviorDefinitionId: inherited.behaviorDefinitionId,
+        inheritedDefinitionId,
+        category: definition.category,
+        isConditional: true,
+        conditionDetail: `直前に出した ${inheritedDefinition.name} として、このラウンドの性質・能力を引き継ぎます。${inheritedDetail}`
+      };
+    }
+    const empty = getDefinitionRoundPreview(state, seat, definition);
+    return {
+      ...empty,
+      isConditional: true,
+      conditionDetail: '引き継げる直前の実カードがないため、強さ0・能力なしです。'
+    };
+  }
+
+  if (definition.id === 'the-hermit') {
+    const echo = getEchoProfileFromHistory(state, opponentSeat(seat));
+    const comparisonStrengthUnits = echo?.resolvedStrengthUnits || 0;
+    return {
+      ...getDefinitionRoundPreview(state, seat, definition),
+      comparisonStrength: formatStrengthUnits(comparisonStrengthUnits),
+      comparisonStrengthUnits,
+      displayStrength: formatStrengthUnits(comparisonStrengthUnits),
+      comparisonOverride: echo?.comparisonOverride || '',
+      safePostEffectId: echo?.safePostEffectId || '',
+      isConditional: true,
+      conditionDetail: echo
+        ? `相手の直前ラウンドの解決済み強さ${formatStrengthUnits(comparisonStrengthUnits)}と、コピー可能な勝敗判定能力を反響します。`
+        : '反響できる直前の実カードがないため、強さ0・能力なしです。'
+    };
+  }
+
+  return getDefinitionRoundPreview(state, seat, definition);
+}
+
+function getBehaviorDefinitionId(preview) {
+  return typeof preview?.behaviorDefinitionId === 'string' && preview.behaviorDefinitionId.length > 0
+    ? preview.behaviorDefinitionId
+    : preview?.definitionId;
+}
+
 function actualComparedStrengthUnits(preview, opponentPreview) {
-  if (preview.definitionId !== 'joker') return preview.comparisonStrengthUnits;
-  return opponentPreview.definitionId === 'joker' ? 0 : opponentPreview.comparisonStrengthUnits;
+  if (getBehaviorDefinitionId(preview) !== 'joker') return preview.comparisonStrengthUnits;
+  return getBehaviorDefinitionId(opponentPreview) === 'joker' ? 0 : opponentPreview.comparisonStrengthUnits;
 }
 
 function resolveComparisonResult(p1Preview, p2Preview) {
@@ -254,18 +322,18 @@ function resolveComparisonResult(p1Preview, p2Preview) {
   if (p2ChariotWins && !p1ChariotWins) return 'p2';
   if (p1ChariotWins && p2ChariotWins) return 'draw';
   return resolveRound(
-    { id: p1Preview.definitionId, strength: p1StrengthUnits },
-    { id: p2Preview.definitionId, strength: p2StrengthUnits }
+    { id: getBehaviorDefinitionId(p1Preview), strength: p1StrengthUnits },
+    { id: getBehaviorDefinitionId(p2Preview), strength: p2StrengthUnits }
   );
 }
 
 function resolvePrivateRoundWithContext(state, p1Card, p2Card) {
   const p1Preview = getPrivateCardRoundPreview(state, 'p1', p1Card);
   const p2Preview = getPrivateCardRoundPreview(state, 'p2', p2Card);
-  const p1Emperor = p1Preview.definitionId === 'the-emperor';
-  const p2Emperor = p2Preview.definitionId === 'the-emperor';
-  const p1OpponentIsTarot = isTarotDefinitionId(p2Preview.definitionId);
-  const p2OpponentIsTarot = isTarotDefinitionId(p1Preview.definitionId);
+  const p1Emperor = getBehaviorDefinitionId(p1Preview) === 'the-emperor';
+  const p2Emperor = getBehaviorDefinitionId(p2Preview) === 'the-emperor';
+  const p1OpponentIsTarot = isTarotDefinitionId(getBehaviorDefinitionId(p2Preview));
+  const p2OpponentIsTarot = isTarotDefinitionId(getBehaviorDefinitionId(p1Preview));
   let canonicalResult;
   let suppressedSeats = [];
   if (p1Emperor && p2Emperor) {
@@ -305,6 +373,7 @@ module.exports = {
   STRENGTH_SCALE,
   actualComparedStrengthUnits,
   formatStrengthUnits,
+  getBehaviorDefinitionId,
   getPrivateCardRoundPreview,
   getEchoProfileFromHistory,
   createEchoProfile,

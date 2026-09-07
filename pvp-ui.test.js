@@ -40,6 +40,8 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
     '選択中カードの詳細は、手札の直下かつ最終結果パネルの前に表示する'
   );
   assert.match(client, /function renderSelectedCardDetails\(/);
+  assert.match(client, /function getCardBaseStrengthLabel\(/);
+  assert.match(client, /baseStrength: Number\.isSafeInteger\(card\.baseStrength\)/);
   assert.match(client, /setText\(elements\.selectedCardStrength, strengthText\);/);
   assert.match(client, /selectedCard\.roundInfo\?\.detail/);
   assert.match(client, /renderSelectedCardDetails\(displayedBottomHand, \{ isInteractive, suitType: 'spade' \}\);/);
@@ -177,12 +179,12 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v35/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v35/);
+  assert.match(html, /style\.css\?v=pvp-v36/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v36/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v35/);
+  assert.match(loader, /main\.js\?v=pvp-v36/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -228,6 +230,9 @@ test('Private対戦のルール概要と制限時間設定は、現在の設定�
   assert.match(html, /id="room-rules-panel"/);
   assert.match(html, /id="round-limit"/);
   assert.match(html, /id="private-turn-time-select"/);
+  assert.match(html, /id="begin-private-settings-edit-btn"/);
+  assert.match(html, /id="finish-private-settings-edit-btn"/);
+  assert.match(html, /id="start-agreement-status"[^>]*role="status"/);
   assert.match(html, /value="60000">60秒/);
   assert.match(html, /value="90000">90秒/);
   assert.match(html, /value="120000">120秒/);
@@ -237,6 +242,11 @@ test('Private対戦のルール概要と制限時間設定は、現在の設定�
   assert.match(client, /let isPending = privateSettingsPending\?\.roomId === room\?\.id;/);
   assert.match(client, /clearPrivateSettingsPending\(\);\s*privateSettingsFeedback = '設定を反映しました。両者の開始同意はリセットされています。';\s*isPending = false;/);
   assert.match(client, /function renderRoomRules\(/);
+  assert.match(client, /function requestPrivateSettingsEditMode\(editing\)/);
+  assert.match(client, /begin_private_settings_edit/);
+  assert.match(client, /finish_private_settings_edit/);
+  assert.match(client, /const canAgreeToStart = canShowStartAgreement && !settingsEditing;/);
+  assert.match(client, /開始に同意済み：\$\{agreedNames\.join\('・'\)\}/);
   assert.match(client, /function isRoomHost\(room\) \{\s*return \(room\?\.viewer\?\.isRoomHost \?\? room\?\.viewer\?\.isHost\)/);
   assert.match(client, /socket\.emit\('update_private_settings'/);
   assert.match(client, /room\.matchType === 'random'/);

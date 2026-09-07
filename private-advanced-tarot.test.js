@@ -46,9 +46,9 @@ function finalizeStarted(started, choices = []) {
   return finalizeAdvancedPrivateRound(state);
 }
 
-test('The Fool と The Hermit は直前の解決済み強さだけを反響し、再帰しない', () => {
-  let foolState = makeState('advanced-fool', ['ace', 'king', 'queen', 'the-fool', 'the-hermit']);
-  foolState = applyPrivateRound(foolState, idFor(foolState, 'p1', 'ace'), idFor(foolState, 'p2', 'king')).state;
+test('The Foolは直前の実カードとして振る舞い、The Hermitは解決済み強さだけを安全に反響する', () => {
+  let foolState = makeState('advanced-fool', ['joker', 'ace', 'king', 'the-fool', 'the-hermit']);
+  foolState = applyPrivateRound(foolState, idFor(foolState, 'p1', 'joker'), idFor(foolState, 'p2', 'king')).state;
   const fool = applyPrivateRound(foolState, idFor(foolState, 'p1', 'the-fool'), idFor(foolState, 'p2', 'ace'));
   assert.equal(fool.p1Strength, 14);
   assert.equal(fool.canonicalResult, 'draw');

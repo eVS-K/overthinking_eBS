@@ -357,6 +357,12 @@ test('太陽の確定前対象選択は相手へ伏せたまま、相手の同�
   let firstView = await joinRoom(first, roomId, firstClientId, '太陽の先手');
   let secondView = await joinRoom(second, roomId, secondClientId, '通常の後手');
 
+  // Private settings are deliberately changed only inside an explicit edit
+  // session.  This also verifies that finishing the session restores the
+  // ordinary two-player start-agreement flow used below.
+  assert.equal((await emitWithAcknowledgement(first, 'begin_private_settings_edit', {
+    roomId
+  })).ok, true);
   const settingsUpdated = waitForRoom(first, roomId, (room) => room.rules.ruleset === 'private-expanded-v1');
   const update = await emitWithAcknowledgement(first, 'update_private_settings', {
     roomId,
@@ -374,6 +380,11 @@ test('太陽の確定前対象選択は相手へ伏せたまま、相手の同�
   });
   assert.equal(update.ok, true);
   firstView = await settingsUpdated;
+  secondView = await requestCurrentRoom(second, roomId, secondClientId, '通常の後手');
+  assert.equal((await emitWithAcknowledgement(first, 'finish_private_settings_edit', {
+    roomId
+  })).ok, true);
+  firstView = await requestCurrentRoom(first, roomId, firstClientId, '太陽の先手');
   secondView = await requestCurrentRoom(second, roomId, secondClientId, '通常の後手');
 
   const firstPlaying = waitForRoom(first, roomId, (room) => room.gameState === 'playing');

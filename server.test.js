@@ -16,6 +16,7 @@ const {
   RECONNECT_GRACE_MS,
   areRandomMatchEntriesCompatible,
   app,
+  beginPrivateRoomSettingsEdit,
   beginSunPreCommitAction,
   beginReconnectGrace,
   buildPrivateSettingsUpdate,
@@ -28,6 +29,7 @@ const {
   ensurePrivateRoomHost,
   expireDisconnectedPlayer,
   finishGameByForfeit,
+  finishPrivateRoomSettingsEdit,
   getPublicRoomRules,
   getSelectableCardIds,
   getRoomTurnTimeLimitMs,
@@ -48,6 +50,18 @@ const {
   normalizeSocketEventPayload,
   getRoomSpectatorLimit
 } = require('./server');
+
+function beginSettingsEdit(room, clientId = 'host-client') {
+  const result = beginPrivateRoomSettingsEdit(room, clientId);
+  assert.equal(result.ok, true, 'the settings owner must explicitly enter edit mode');
+  return result;
+}
+
+function finishSettingsEdit(room, clientId = 'host-client') {
+  const result = finishPrivateRoomSettingsEdit(room, clientId);
+  assert.equal(result.ok, true, 'the settings owner must explicitly complete edit mode');
+  return result;
+}
 
 test('直前の対戦相手を避けるランダム待機同士は、即時に再マッチしない', () => {
   assert.equal(areRandomMatchEntriesCompatible(
@@ -178,6 +192,7 @@ test('公開する部屋ルールは凍結済み拡張デッキから能力用�
     id: 'the-emperor',
     name: 'The Emperor',
     desc: 'Tarot効果を無効化して勝利',
+    baseStrength: 0,
     category: 'tarot',
     displayMark: 'ν',
     faceLabel: 'Emperor',
@@ -329,6 +344,7 @@ test('Private PvPだけが60/90/120秒の設定を持ち、開始同意は設定
 
   assert.deepEqual(PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS, [60_000, 90_000, 120_000]);
   assert.equal(getRoomTurnTimeLimitMs(room), 90_000);
+  beginSettingsEdit(room);
   const changed = updatePrivateRoomSettings(room, {
     clientId: 'host-client',
     configRevision: 1,
@@ -353,6 +369,40 @@ test('Private PvPだけが60/90/120秒の設定を持ち、開始同意は設定
   assert.equal(getRoomTurnTimeLimitMs(room), 120_000);
 });
 
+test('Private設定は明示的な編集モードでだけ変更でき、編集中は開始同意を受け付けない', () => {
+  const room = createRoom('private-settings-edit-mode');
+  room.players = [
+    { id: 'p1', clientId: 'host-client', name: '設定担当', suit: '♠', hand: [], score: 0, connected: true },
+    { id: 'p2', clientId: 'guest-client', name: '参加者', suit: '♥', hand: [], score: 0, connected: true }
+  ];
+  room.hostClientId = 'host-client';
+  room.startAgreements.add('host-client');
+  room.startAgreements.add('guest-client');
+
+  assert.equal(updatePrivateRoomSettings(room, {
+    clientId: 'host-client', configRevision: room.configRevision, turnTimeLimitMs: 60_000
+  }).ok, false, 'a direct/stale settings update must not bypass edit mode');
+
+  beginSettingsEdit(room);
+  assert.equal(room.startAgreements.size, 0);
+  const hostView = createRoomView(room, 'p1');
+  const guestView = createRoomView(room, 'p2');
+  assert.equal(hostView.settingsEditing, true);
+  assert.equal(hostView.viewer.isEditingSettings, true);
+  assert.equal(guestView.viewer.isEditingSettings, false);
+  assert.equal(hostView.settingsEditorName, '設定担当');
+
+  room.startAgreements.add('host-client');
+  room.startAgreements.add('guest-client');
+  assert.equal(startWhenBothPlayersAgree(room), false, 'editing must block a stale agree_to_start event');
+  assert.equal(finishPrivateRoomSettingsEdit(room, 'guest-client').ok, false);
+  finishSettingsEdit(room);
+  assert.equal(room.privateSettingsEditingClientId, '');
+  assert.equal(startWhenBothPlayersAgree(room), true);
+  assert.equal(room.gameState, 'playing');
+  assert.equal(finishGameByForfeit(room, room.players[0]), true);
+});
+
 test('Private設定はホスト・待機/終了状態だけに限定され、開始済みの設定スナップショットは凍結される', () => {
   const room = createRoom('private-settings-guard');
   room.players = [
@@ -369,6 +419,7 @@ test('Private設定はホスト・待機/終了状態だけに限定され、開
   assert.equal(nonHost.ok, false);
   assert.equal(getRoomTurnTimeLimitMs(room), 90_000);
 
+  beginSettingsEdit(room);
   const invalidValue = updatePrivateRoomSettings(room, {
     clientId: 'host-client',
     configRevision: room.configRevision,
@@ -406,6 +457,7 @@ test('Private拡張の観戦者上限は通常Privateより低く、超過した
   room.hostClientId = 'host-client';
   const classicLimit = getRoomSpectatorLimit(room);
 
+  beginSettingsEdit(room);
   assert.equal(updatePrivateRoomSettings(room, {
     clientId: 'host-client',
     configRevision: room.configRevision,
@@ -454,6 +506,7 @@ test('Privateの設定担当は接続中の対戦相手へだけ譲れ、旧担�
     configRevision: revision,
     turnTimeLimitMs: 60_000
   }).ok, false);
+  beginSettingsEdit(room, 'guest-client');
   assert.equal(updatePrivateRoomSettings(room, {
     clientId: 'guest-client',
     configRevision: revision,
@@ -474,11 +527,13 @@ test('選択したPrivateの制限時間は開始時に凍結され、対局タ�
     { id: 'p2', clientId: 'guest-client', name: '参加者', suit: '♥', hand: [], score: 0, connected: true }
   ];
   room.hostClientId = 'host-client';
+  beginSettingsEdit(room);
   assert.equal(updatePrivateRoomSettings(room, {
     clientId: 'host-client',
     configRevision: room.configRevision,
     turnTimeLimitMs: 120_000
   }).ok, true);
+  finishSettingsEdit(room);
   room.startAgreements.add('host-client');
   room.startAgreements.add('guest-client');
 
@@ -497,6 +552,7 @@ test('Private拡張ではBlankを手札外の選択肢として公開し、処�
     { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
   ];
   room.hostClientId = 'host-client';
+  beginSettingsEdit(room);
   const configured = updatePrivateRoomSettings(room, {
     clientId: 'host-client',
     configRevision: room.configRevision,
@@ -514,6 +570,7 @@ test('Private拡張ではBlankを手札外の選択肢として公開し、処�
     ]
   });
   assert.equal(configured.ok, true);
+  finishSettingsEdit(room);
   room.startAgreements.add('host-client');
   room.startAgreements.add('guest-client');
   assert.equal(startWhenBothPlayersAgree(room), true);
@@ -564,6 +621,7 @@ test('BlankなしのPrivate拡張は、Blankを選択肢やタイムアウト候
     { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
   ];
   room.hostClientId = 'host-client';
+  beginSettingsEdit(room);
   assert.equal(updatePrivateRoomSettings(room, {
     clientId: 'host-client',
     configRevision: room.configRevision,
@@ -579,6 +637,7 @@ test('BlankなしのPrivate拡張は、Blankを選択肢やタイムアウト候
       { definitionId: 'ten', copies: 1 }
     ]
   }).ok, true);
+  finishSettingsEdit(room);
   room.startAgreements.add('host-client');
   room.startAgreements.add('guest-client');
   assert.equal(startWhenBothPlayersAgree(room), true);
@@ -593,6 +652,7 @@ test('条件型TarotはPrivate拡張の手札へ現在の強さを公開し、�
     { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
   ];
   room.hostClientId = 'host-client';
+  beginSettingsEdit(room);
   assert.equal(updatePrivateRoomSettings(room, {
     clientId: 'host-client',
     configRevision: room.configRevision,
@@ -608,6 +668,7 @@ test('条件型TarotはPrivate拡張の手札へ現在の強さを公開し、�
       { definitionId: 'death', copies: 1 }
     ]
   }).ok, true);
+  finishSettingsEdit(room);
   room.startAgreements.add('host-client');
   room.startAgreements.add('guest-client');
   assert.equal(startWhenBothPlayersAgree(room), true);
@@ -617,7 +678,8 @@ test('条件型TarotはPrivate拡張の手札へ現在の強さを公開し、�
   assert.deepEqual(death.roundInfo, {
     strength: 13,
     detail: '現在の獲得札は 0枚 ≤ 相手 0枚のため、強さ13です。',
-    conditional: true
+    conditional: true,
+    behaviorDefinitionId: 'death'
   });
   room.selections = { p1: death.id, p2: ace.id };
   processTurn(room);
@@ -637,6 +699,7 @@ test('Strengthの半分単位の強さは対局画面と履歴へ安全に公開
     { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
   ];
   room.hostClientId = 'host-client';
+  beginSettingsEdit(room);
   assert.equal(updatePrivateRoomSettings(room, {
     clientId: 'host-client',
     configRevision: room.configRevision,
@@ -652,6 +715,7 @@ test('Strengthの半分単位の強さは対局画面と履歴へ安全に公開
       { definitionId: 'strength', copies: 1 }
     ]
   }).ok, true);
+  finishSettingsEdit(room);
   room.startAgreements.add('host-client');
   room.startAgreements.add('guest-client');
   assert.equal(startWhenBothPlayersAgree(room), true);
@@ -678,6 +742,7 @@ test('生成・総ラウンドTarotはPrivate拡張だけで解決し、公開�
     { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
   ];
   magicianRoom.hostClientId = 'host-client';
+  beginSettingsEdit(magicianRoom);
   assert.equal(updatePrivateRoomSettings(magicianRoom, {
     clientId: 'host-client',
     configRevision: magicianRoom.configRevision,
@@ -693,6 +758,7 @@ test('生成・総ラウンドTarotはPrivate拡張だけで解決し、公開�
       { definitionId: 'four', copies: 1 }
     ]
   }).ok, true);
+  finishSettingsEdit(magicianRoom);
   magicianRoom.startAgreements.add('host-client');
   magicianRoom.startAgreements.add('guest-client');
   assert.equal(startWhenBothPlayersAgree(magicianRoom), true);
@@ -721,6 +787,7 @@ test('生成・総ラウンドTarotはPrivate拡張だけで解決し、公開�
     { id: 'p2', clientId: 'guest-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
   ];
   wheelRoom.hostClientId = 'host-client';
+  beginSettingsEdit(wheelRoom);
   assert.equal(updatePrivateRoomSettings(wheelRoom, {
     clientId: 'host-client',
     configRevision: wheelRoom.configRevision,
@@ -736,6 +803,7 @@ test('生成・総ラウンドTarotはPrivate拡張だけで解決し、公開�
       { definitionId: 'four', copies: 1 }
     ]
   }).ok, true);
+  finishSettingsEdit(wheelRoom);
   wheelRoom.startAgreements.add('host-client');
   wheelRoom.startAgreements.add('guest-client');
   assert.equal(startWhenBothPlayersAgree(wheelRoom), true);
@@ -756,6 +824,7 @@ test('生成・総ラウンドTarotはPrivate拡張だけで解決し、公開�
     nextRoundLimit: 1,
     appliedDelta: -1
   }]);
+  beginSettingsEdit(wheelRoom);
   const nextMatchConfig = updatePrivateRoomSettings(wheelRoom, {
     clientId: 'host-client',
     configRevision: wheelRoom.configRevision,
@@ -938,6 +1007,7 @@ function createAdvancedPrivateRoomForActionTest(id, deck, { roundLimit = 2 } = {
     { id: 'p2', clientId: 'p2-client', name: '後手', suit: '♥', hand: [], score: 0, connected: true }
   ];
   room.hostClientId = 'p1-client';
+  assert.equal(beginSettingsEdit(room, 'p1-client').ok, true);
   const updated = updatePrivateRoomSettings(room, {
     clientId: 'p1-client',
     configRevision: room.configRevision,
@@ -949,6 +1019,7 @@ function createAdvancedPrivateRoomForActionTest(id, deck, { roundLimit = 2 } = {
     deck: deck.map((definitionId) => ({ definitionId, copies: 1 }))
   });
   assert.equal(updated.ok, true);
+  assert.equal(finishSettingsEdit(room, 'p1-client').ok, true);
   room.startAgreements.add('p1-client');
   room.startAgreements.add('p2-client');
   assert.equal(startWhenBothPlayersAgree(room), true);
