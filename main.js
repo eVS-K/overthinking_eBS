@@ -204,7 +204,8 @@ const elements = {
   expandedDeckTotal: document.getElementById('expanded-deck-total'),
   expandedDeckScroll: document.getElementById('expanded-deck-scroll'),
   expandedDeckList: document.getElementById('expanded-deck-list'),
-  expandedDeckHeightRange: document.getElementById('expanded-deck-height-range'),
+  expandedDeckHeightDecrease: document.getElementById('expanded-deck-height-decrease'),
+  expandedDeckHeightIncrease: document.getElementById('expanded-deck-height-increase'),
   expandedDeckHeightValue: document.getElementById('expanded-deck-height-value'),
   expandedRoundLimitInput: document.getElementById('expanded-round-limit-input'),
   expandedScoreTargetEnabled: document.getElementById('expanded-score-target-enabled'),
@@ -1152,7 +1153,12 @@ function applyExpandedDeckListHeight(height, { persist = false } = {}) {
   if (elements.expandedDeckList) {
     elements.expandedDeckList.style.setProperty('--expanded-deck-list-height', `${normalized}px`);
   }
-  if (elements.expandedDeckHeightRange) elements.expandedDeckHeightRange.value = String(normalized);
+  if (elements.expandedDeckHeightDecrease) {
+    elements.expandedDeckHeightDecrease.disabled = normalized <= EXPANDED_DECK_HEIGHT_MIN_PX;
+  }
+  if (elements.expandedDeckHeightIncrease) {
+    elements.expandedDeckHeightIncrease.disabled = normalized >= EXPANDED_DECK_HEIGHT_MAX_PX;
+  }
   if (elements.expandedDeckHeightValue) setText(elements.expandedDeckHeightValue, `${normalized}px`);
   if (persist) {
     try {
@@ -1162,6 +1168,10 @@ function applyExpandedDeckListHeight(height, { persist = false } = {}) {
     }
   }
   window.requestAnimationFrame(updateExpandedDeckScrollCue);
+}
+
+function adjustExpandedDeckListHeight(amount) {
+  applyExpandedDeckListHeight(expandedDeckListHeight + amount, { persist: true });
 }
 
 // On small screens, card rows and the rules matrix deliberately keep their
@@ -2478,11 +2488,13 @@ function getActiveSpectatorTarotCards(room) {
 
 function renderSpectatorTarotGuide(room) {
   if (!elements.spectatorTarotGuide) return;
+  const visualRoleClasses = ['tarot-role-conditional', 'tarot-role-lock', 'tarot-role-generation', 'tarot-role-other', 'tarot-role-emperor'];
   const cards = getActiveSpectatorTarotCards(room);
   const shouldShow = cards.length > 0;
   elements.spectatorTarotGuide.classList.toggle('hidden', !shouldShow);
   if (!shouldShow) {
     spectatorTarotSelectionId = '';
+    elements.spectatorTarotGuide.classList.remove(...visualRoleClasses);
     elements.spectatorTarotList.replaceChildren();
     return;
   }
@@ -2494,7 +2506,10 @@ function renderSpectatorTarotGuide(room) {
     const button = document.createElement('button');
     const isSelected = card.id === spectatorTarotSelectionId;
     button.type = 'button';
-    button.className = `spectator-tarot-card${isSelected ? ' is-selected' : ''}`;
+    const visualRole = typeof card.visualRole === 'string' && /^[a-z-]{1,24}$/.test(card.visualRole)
+      ? card.visualRole
+      : 'other';
+    button.className = `spectator-tarot-card tarot-role-${visualRole}${isSelected ? ' is-selected' : ''}`;
     button.setAttribute('aria-pressed', String(isSelected));
     button.textContent = `${formatCardDisplayName(card)} ×${card.copies}`;
     button.addEventListener('click', () => {
@@ -2504,6 +2519,11 @@ function renderSpectatorTarotGuide(room) {
     elements.spectatorTarotList.append(button);
   });
   const selectedCard = cards.find((card) => card.id === spectatorTarotSelectionId) || cards[0];
+  const selectedVisualRole = typeof selectedCard.visualRole === 'string' && /^[a-z-]{1,24}$/.test(selectedCard.visualRole)
+    ? selectedCard.visualRole
+    : 'other';
+  elements.spectatorTarotGuide.classList.remove(...visualRoleClasses);
+  elements.spectatorTarotGuide.classList.add(`tarot-role-${selectedVisualRole}`);
   setText(elements.spectatorTarotMark, getCardMark(selectedCard));
   setText(elements.spectatorTarotName, formatCardDisplayName(selectedCard));
   setText(elements.spectatorTarotDescription, `能力：${selectedCard.desc || '能力なし'}`);
@@ -3055,8 +3075,11 @@ elements.expandedDeckList.addEventListener('click', (event) => {
 });
 
 elements.expandedDeckList.addEventListener('scroll', updateExpandedDeckScrollCue, { passive: true });
-elements.expandedDeckHeightRange?.addEventListener('input', () => {
-  applyExpandedDeckListHeight(elements.expandedDeckHeightRange.value, { persist: true });
+elements.expandedDeckHeightDecrease?.addEventListener('click', () => {
+  adjustExpandedDeckListHeight(-EXPANDED_DECK_HEIGHT_STEP_PX);
+});
+elements.expandedDeckHeightIncrease?.addEventListener('click', () => {
+  adjustExpandedDeckListHeight(EXPANDED_DECK_HEIGHT_STEP_PX);
 });
 applyExpandedDeckListHeight(expandedDeckListHeight);
 elements.myHand.addEventListener('scroll', () => updateHorizontalScrollCue(elements.myHand, elements.myHandScroll), { passive: true });

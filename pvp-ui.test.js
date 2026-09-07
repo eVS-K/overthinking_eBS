@@ -352,7 +352,7 @@ test('生成・総ラウンドTarotの効果は結果と履歴へ表示し、対
   assert.match(css, /\.reveal-area\.effect-burst-noise::before/);
 });
 
-test('Tarotはギリシャ文字で表示し、観戦者も対局の下で使用中の能力を確認できる', () => {
+test('Tarotはギリシャ文字で表示し、対局者・観戦者とも役割色で使用中の能力を確認できる', () => {
   const html = read('index.html');
   const client = read('main.js');
   const css = read('style.css');
@@ -369,10 +369,15 @@ test('Tarotはギリシャ文字で表示し、観戦者も対局の下で使用
   assert.ok(html.indexOf('id="spectator-tarot-guide"') > html.indexOf('id="my-zone"'));
   assert.match(client, /function renderSpectatorTarotGuide\(/);
   assert.match(client, /getActiveSpectatorTarotCards/);
+  assert.match(client, /spectator-tarot-card tarot-role-\$\{visualRole\}/);
+  assert.match(client, /spectatorTarotGuide\.classList\.add\(`tarot-role-\$\{selectedVisualRole\}`\)/);
   assert.doesNotMatch(client, /room\?\.viewer\?\.isSpectator \? getActiveSpectatorTarotCards/);
   assert.match(client, /selected-card-no-ability/);
   assert.match(client, /hasNonTarotAbilityCard/);
   assert.match(css, /\.spectator-tarot-guide\s*\{/);
+  assert.match(css, /\.spectator-tarot-guide\.tarot-role-conditional\s*\{/);
+  assert.match(css, /\.spectator-tarot-guide\.tarot-role-other\s*\{[^}]*#b9f6ef/);
+  assert.match(css, /\.spectator-tarot-card\.tarot-role-other\s*\{/);
   assert.match(css, /\.spectator-utilities\s*\{/);
   assert.match(css, /\.card-no-ability\s*\{/);
   assert.match(css, /\.card-has-ability\s*\{/);
@@ -407,7 +412,7 @@ test('Joker・2・3の能力カードは青い通常札に半透明の緑を重�
   assert.match(css, /\.expanded-deck-card-has-ability\s*\{[^}]*border-color:\s*#8ccbb7;[^}]*rgba\(94, 174, 149, \.1\)/);
 });
 
-test('拡張デッキ一覧は、続きがあるときにフェードとスクロール案内を出し、高さを安全な範囲で調整できる', () => {
+test('拡張デッキ一覧は、続きがあるときにフェードとスクロール案内を出し、コンパクトな上下ボタンで高さを調整できる', () => {
   const html = read('index.html');
   const client = read('main.js');
   const css = read('style.css');
@@ -415,9 +420,10 @@ test('拡張デッキ一覧は、続きがあるときにフェードとスク�
   assert.match(html, /id="expanded-deck-scroll"/);
   assert.match(html, /id="expanded-deck-scroll-hint"/);
   assert.match(html, /id="expanded-deck-scroll-description"/);
-  assert.match(html, /id="expanded-deck-height-range"[^>]*type="range"[^>]*min="180"[^>]*max="440"/);
+  assert.match(html, /id="expanded-deck-height-decrease"[^>]*aria-label="一覧を10px低くする"/);
+  assert.match(html, /id="expanded-deck-height-increase"[^>]*aria-label="一覧を10px高くする"/);
   assert.match(html, /id="expanded-deck-height-value"/);
-  assert.match(html, /上下にだけ調整できます。最大440pxまでです。/);
+  assert.match(html, /一覧の高さは180pxから440pxまで、10pxずつ調整できます。/);
   assert.match(html, /aria-describedby="expanded-deck-scroll-description"/);
   assert.match(html, /下へスクロールして、すべてのカードを見る/);
   assert.match(client, /function updateExpandedDeckScrollCue\(/);
@@ -425,13 +431,16 @@ test('拡張デッキ一覧は、続きがあるときにフェードとスク�
   assert.match(client, /function applyExpandedDeckListHeight\(/);
   assert.match(client, /EXPANDED_DECK_HEIGHT_MIN_PX = 180/);
   assert.match(client, /EXPANDED_DECK_HEIGHT_MAX_PX = 440/);
-  assert.match(client, /expandedDeckHeightRange\?\.addEventListener\('input'/);
+  assert.match(client, /function adjustExpandedDeckListHeight\(amount\)/);
+  assert.match(client, /expandedDeckHeightDecrease\?\.addEventListener\('click'/);
+  assert.match(client, /expandedDeckHeightIncrease\?\.addEventListener\('click'/);
   assert.match(client, /elements\.expandedDeckList\.addEventListener\('scroll', updateExpandedDeckScrollCue/);
   assert.match(client, /window\.addEventListener\('resize', \(\) => \{[\s\S]*?updateExpandedDeckScrollCue\(\);/);
   assert.match(css, /\.expanded-deck-scroll\.has-more-below::after\s*\{\s*opacity:\s*1;/);
   assert.match(css, /\.expanded-deck-scroll\.has-more-below \.expanded-deck-scroll-hint\s*\{\s*opacity:\s*1;/);
   assert.match(css, /\.expanded-deck-list\s*\{[^}]*max-height:\s*var\(--expanded-deck-list-height, 270px\)/);
   assert.match(css, /\.expanded-deck-height-control\s*\{/);
+  assert.match(css, /\.deck-height-stepper\s*\{/);
 });
 
 test('モバイルの手札と組み合わせ早見表は、横に続きがある側だけをフェードで示す', () => {
