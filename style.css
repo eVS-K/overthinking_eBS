@@ -218,9 +218,9 @@ input::placeholder { color: #65708b; }
 
 #game-screen {
   display: grid;
-  grid-template-columns: minmax(0, 920px) 260px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
-  width: min(calc(100% - 32px), 1210px);
+  width: min(calc(100% - 24px), 920px);
   margin: 24px auto;
   animation: settle .45s ease both;
   min-width: 0;
@@ -782,16 +782,26 @@ input::placeholder { color: #65708b; }
 @keyframes finale-panel-enter { from { opacity: 0; transform: translateY(18px) scale(.9); } 64% { opacity: 1; } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes finale-ring-expand { from { opacity: .66; transform: scale(.18); } to { opacity: 0; transform: scale(1.2); } }
 
-@media (min-width: 1320px) {
-  #game-screen { grid-template-columns: minmax(0, 920px) minmax(420px, 1fr); width: min(calc(100% - 40px), 1480px); }
-  .sidebar { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: 20px; align-content: start; }
+/* Keep the board and the information rail side by side on ordinary desktop
+   widths. The old 1230/1320px gaps made a zoomed desktop look like a mobile
+   one-column page, leaving the right half of the window unused. */
+@media (min-width: 1000px) {
+  #game-screen { grid-template-columns: minmax(0, 1.55fr) minmax(360px, .9fr); width: min(calc(100% - 32px), 1480px); }
+}
+
+@media (min-width: 1120px) {
+  .sidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto 1fr; column-gap: 20px; align-content: start; }
   .sidebar-heading { grid-column: 1 / -1; }
   .history-list { grid-column: 1; min-width: 0; margin-top: 13px; }
   .chat-panel { grid-column: 2; min-width: 0; margin-top: 13px; padding-top: 0; padding-inline-start: 20px; border-top: 0; border-inline-start: 1px solid var(--line); }
   .chat-list { max-height: 260px; }
 }
 
-@media (max-width: 1230px) {
+@media (min-width: 1320px) {
+  #game-screen { grid-template-columns: minmax(0, 920px) minmax(420px, 1fr); width: min(calc(100% - 40px), 1480px); }
+}
+
+@media (max-width: 999px) {
   #game-screen { grid-template-columns: 1fr; width: min(calc(100% - 24px), 920px); }
   .sidebar { min-height: auto; }
   .history-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px; }

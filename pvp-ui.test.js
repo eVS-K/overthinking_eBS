@@ -220,14 +220,14 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v46/);
+  assert.match(html, /style\.css\?v=pvp-v47/);
   assert.match(html, /effect-language\.js\?v=effect-language-v1/);
   assert.match(html, /presentation-events\.js\?v=presentation-v1/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v46/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v47/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v46/);
+  assert.match(loader, /main\.js\?v=pvp-v47/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
