@@ -357,18 +357,18 @@ input::placeholder { color: #65708b; }
 .opponent-hand .card-tarot.card-role-other { background: linear-gradient(145deg, rgba(33, 109, 111, .92), rgba(20, 52, 68, .98)); }
 .opponent-hand .card-tarot.card-role-emperor { background: linear-gradient(145deg, rgba(131, 91, 35, .94), rgba(58, 39, 20, .98)); }
 
-.selected-card-panel { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; margin: -1px 2px 5px; padding: 9px 11px; overflow: hidden; border: 1px solid rgba(242, 189, 105, .44); border-inline-start: 3px solid var(--gold-bright); color: #edf2ff; background: linear-gradient(100deg, rgba(106, 83, 48, .34), rgba(32, 39, 67, .56) 42%, rgba(13, 21, 43, .72)); box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 8px 18px rgba(0, 0, 0, .12); animation: selected-card-enter .26s cubic-bezier(.19,.82,.3,1.1) both; }
-.selected-card-suit { display: grid; place-items: center; width: 38px; aspect-ratio: 1; border: 1px solid rgba(242, 189, 105, .55); border-radius: 50%; color: var(--gold-bright); background: rgba(242, 189, 105, .09); box-shadow: 0 0 16px rgba(242, 189, 105, .18); font-family: var(--serif); font-size: 22px; line-height: 1; }
-.selected-card-copy { display: grid; gap: 2px; min-width: 0; }
+.selected-card-panel { display: grid; grid-template-areas: "suit copy" "suit description"; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 5px 10px; min-width: 0; margin: -1px 2px 5px; padding: 9px 11px; overflow: visible; border: 1px solid rgba(242, 189, 105, .44); border-inline-start: 3px solid var(--gold-bright); color: #edf2ff; background: linear-gradient(100deg, rgba(106, 83, 48, .34), rgba(32, 39, 67, .56) 42%, rgba(13, 21, 43, .72)); box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 8px 18px rgba(0, 0, 0, .12); animation: selected-card-enter .26s cubic-bezier(.19,.82,.3,1.1) both; }
+.selected-card-suit { grid-area: suit; display: grid; place-items: center; width: 38px; aspect-ratio: 1; border: 1px solid rgba(242, 189, 105, .55); border-radius: 50%; color: var(--gold-bright); background: rgba(242, 189, 105, .09); box-shadow: 0 0 16px rgba(242, 189, 105, .18); font-family: var(--serif); font-size: 22px; line-height: 1; }
+.selected-card-copy { grid-area: copy; display: grid; gap: 2px; min-width: 0; }
 .selected-card-copy strong { overflow: hidden; color: #fff3ce; font-family: var(--serif); font-size: 18px; font-weight: 400; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; }
 .selected-card-strength { min-height: 14px; overflow-wrap: anywhere; color: #fff0bf; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .04em; line-height: 1.35; }
-.selected-card-copy p { margin: 0; overflow-wrap: anywhere; color: #c8d4eb; font-size: 11px; line-height: 1.45; }
+.selected-card-description { grid-area: description; min-width: 0; margin: 0; overflow-wrap: anywhere; color: #c8d4eb; font-size: 11px; line-height: 1.5; }
 .selected-card-panel.selected-card-no-ability { border-color: rgba(180, 202, 253, .46); border-inline-start-color: #b9cbed; background: linear-gradient(100deg, rgba(72, 91, 128, .31), rgba(29, 39, 66, .63) 42%, rgba(13, 21, 43, .72)); }
 .selected-card-no-ability .selected-card-suit { border-color: rgba(185, 203, 237, .58); color: #c9d8f0; background: rgba(185, 203, 237, .1); box-shadow: 0 0 16px rgba(185, 203, 237, .16); }
-.selected-card-no-ability .selected-card-copy p { color: #c7d5eb; }
+.selected-card-no-ability .selected-card-description { color: #c7d5eb; }
 .selected-card-panel.selected-card-has-ability { border-color: #8ccbb7; border-inline-start-color: #a4dfca; background: linear-gradient(100deg, rgba(84, 189, 151, .18), rgba(48, 109, 102, .2) 42%, rgba(13, 21, 43, .72)), linear-gradient(100deg, rgba(72, 91, 128, .31), rgba(29, 39, 66, .63) 42%, rgba(13, 21, 43, .72)); }
 .selected-card-has-ability .selected-card-suit { border-color: #a4dfca; color: #b7f0dc; background: rgba(164, 223, 202, .1); box-shadow: 0 0 16px rgba(164, 223, 202, .16); }
-.selected-card-has-ability .selected-card-copy p { color: #cfe6e1; }
+.selected-card-has-ability .selected-card-description { color: #cfe6e1; }
 
 .private-action-panel { display: grid; gap: 9px; min-width: 0; margin: 8px 2px 5px; padding: 12px; border: 1px solid rgba(169, 145, 255, .58); border-inline-start: 3px solid #c7b5ff; color: #f1edff; background: linear-gradient(112deg, rgba(103, 79, 164, .26), rgba(35, 31, 65, .72) 45%, rgba(13, 21, 43, .86)); box-shadow: inset 0 1px rgba(255, 255, 255, .08), 0 10px 22px rgba(0, 0, 0, .15); animation: selected-card-enter .26s cubic-bezier(.19,.82,.3,1.1) both; }
 .private-action-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; }
@@ -843,11 +843,11 @@ input::placeholder { color: #65708b; }
   .card.selected { transform: none; box-shadow: 0 0 0 2px rgba(242, 189, 105, .42), 0 0 24px rgba(242, 189, 105, .28), inset 0 1px rgba(255, 255, 255, .16); }
   .card.committing { animation: card-commit-mobile .48s ease both; }
   .card-top { font-size: 13px; }
-  .selected-card-panel { grid-template-columns: 36px minmax(0, 1fr); gap: 8px; margin-inline: 0; padding: 8px 9px; }
-  .selected-card-suit { width: 33px; font-size: 19px; }
+  .selected-card-panel { grid-template-areas: "suit copy" "description description"; grid-template-columns: 36px minmax(0, 1fr); align-items: start; gap: 6px 8px; margin-inline: 0; padding: 8px 9px; }
+  .selected-card-suit { align-self: start; width: 33px; font-size: 19px; }
   .selected-card-copy strong { font-size: 16px; }
   .selected-card-strength { font-size: 9px; }
-  .selected-card-copy p { font-size: 10px; }
+  .selected-card-description { padding-top: 1px; font-size: 10px; line-height: 1.6; }
   .private-action-panel { gap: 8px; margin-inline: 0; padding: 10px; }
   .private-action-heading strong { font-size: 16px; }
   .private-action-instruction { font-size: 10px; }
@@ -870,8 +870,12 @@ input::placeholder { color: #65708b; }
   .spectator-seat-option strong { font-size: 11px; }
   .spectator-seat-option small, .spectator-seat-panel p { font-size: 9px; }
   .spectator-tarot-guide { gap: 8px; margin-top: 9px; padding: 10px; }
-  .spectator-tarot-guide p { font-size: 9px; }
+  .spectator-tarot-guide p { overflow-wrap: anywhere; font-size: 9px; }
   .spectator-tarot-card { min-height: 44px; font-size: 10px; }
+  .spectator-tarot-detail { grid-template-columns: 30px minmax(0, 1fr); align-items: start; gap: 8px; }
+  .spectator-tarot-detail > span { width: 29px; font-size: 18px; }
+  .spectator-tarot-detail strong { overflow: visible; text-overflow: clip; white-space: normal; }
+  .spectator-tarot-detail p { overflow-wrap: anywhere; font-size: 10px; line-height: 1.6; }
   .room-rules-panel { gap: 8px; margin-top: 9px; padding: 10px; }
   .my-zone > .room-rules-panel { margin-top: 16px; }
   .room-rules-heading strong { font-size: 14px; }

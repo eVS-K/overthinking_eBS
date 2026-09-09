@@ -3167,7 +3167,9 @@ function renderPrivateActionTargetTrays(room, bottomPlayer, topPlayer) {
   setText(
     label,
     target.surface === 'addition'
-      ? `${owner}の手札へ追加する札を選ぶ`
+      ? action.type === 'opponent-choose-noise'
+        ? `${owner}の手札へ、ノイズとして追加する札を選ぶ`
+        : `${owner}の手札へ追加する札を選ぶ`
       : `${owner}の獲得札から対象を選ぶ`
   );
   tray.classList.remove('hidden');
@@ -3210,7 +3212,12 @@ function renderPrivatePendingAction(room) {
   const isNewAction = actionRenderKey !== lastPrivateActionRenderKey;
   lastPrivateActionRenderKey = actionRenderKey;
   setPrivateActionAnnouncementMode(isNewAction && !presentationHydrating);
-  setText(elements.privateActionTitle, canChoose ? '能力の対象を選ぶ' : '能力の対象を選択中');
+  const actionTitle = action?.type === 'opponent-choose-noise'
+    ? 'ノイズ札を追加する'
+    : action?.type === 'opponent-choose-copy'
+      ? '札を1枚追加する'
+      : '能力の対象を選ぶ';
+  setText(elements.privateActionTitle, canChoose ? actionTitle : '能力の対象を選択中');
   setText(
     elements.privateActionInstruction,
     action.instruction || action.message || (canChoose

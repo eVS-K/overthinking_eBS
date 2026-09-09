@@ -70,6 +70,11 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
   assert.doesNotMatch(client, /description\.className = 'card-desc'/);
   assert.match(css, /\.selected-card-panel\s*\{/);
   assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.selected-card-panel\s*\{/);
+  assert.match(html, /id="selected-card-description" class="selected-card-description"/);
+  assert.match(css, /\.selected-card-panel\s*\{[^}]*grid-template-areas:\s*"suit copy" "suit description";[^}]*overflow:\s*visible;/);
+  assert.match(css, /\.selected-card-description\s*\{[^}]*grid-area:\s*description;[^}]*overflow-wrap:\s*anywhere;/);
+  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.selected-card-panel\s*\{[^}]*grid-template-areas:\s*"suit copy" "description description";/);
+  assert.match(css, /@media \(max-width: 660px\) \{[\s\S]*?\.spectator-tarot-detail strong\s*\{[^}]*white-space:\s*normal;/);
   assert.match(css, /\.card-center-suit\s*\{[^}]*position:\s*absolute;[^}]*top:\s*50%;[^}]*left:\s*50%;[^}]*translate\(-50%, -50%\)/);
 });
 
@@ -211,14 +216,14 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v44/);
+  assert.match(html, /style\.css\?v=pvp-v45/);
   assert.match(html, /effect-language\.js\?v=effect-language-v1/);
   assert.match(html, /presentation-events\.js\?v=presentation-v1/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v44/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v45/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v44/);
+  assert.match(loader, /main\.js\?v=pvp-v45/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);

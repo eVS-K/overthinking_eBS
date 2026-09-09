@@ -105,7 +105,7 @@ test('The Chariotは相手の確定強さが15以上なら数値比較より先�
   assert.equal(againstAce.canonicalResult, 'p2');
 });
 
-test('The Foolは直前の実カードをこの局面で引き継ぎ、The Hermitは対象選択Tarotを反響しない', () => {
+test('The FoolとThe Hermitは参照先の直前の実カードとして、この局面で振る舞う', () => {
   const afterInteractiveTarot = {
     ...state({ round: 2 }),
     history: [{
@@ -122,8 +122,23 @@ test('The Foolは直前の実カードをこの局面で引き継ぎ、The Hermi
   assert.equal(fool.displayStrength, 2);
   assert.equal(fool.behaviorDefinitionId, 'the-high-priestess');
   assert.match(fool.conditionDetail, /The High Priestess として/);
-  assert.equal(hermit.displayStrength, 0);
-  assert.match(hermit.conditionDetail, /反響できる直前の実カードがない/);
+  assert.equal(hermit.displayStrength, 17);
+  assert.equal(hermit.behaviorDefinitionId, 'the-star');
+  assert.match(hermit.conditionDetail, /The Star として/);
+
+  const afterDeathWon = {
+    ...state({ round: 2, p1Score: 2, p2Score: 0 }),
+    history: [{
+      p1Card: card('ace'),
+      p2Card: card('death'),
+      p1Strength: 14,
+      p2Strength: 13
+    }]
+  };
+  const currentDeath = getPrivateCardRoundPreview(afterDeathWon, 'p1', card('the-hermit'));
+  assert.equal(currentDeath.behaviorDefinitionId, 'death');
+  assert.equal(currentDeath.displayStrength, 0, 'Hermit must not replay Death\'s old strength 13');
+  assert.match(currentDeath.conditionDetail, /獲得札は 2枚 ＞ 相手 0枚/);
 });
 
 test('The FoolがJokerを引き継ぐと、直前の値ではなく今の相手の強さをコピーする', () => {

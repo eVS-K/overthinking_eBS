@@ -1063,6 +1063,46 @@ test('高度なPrivate対象操作は行為者だけに候補を公開し、一�
   assert.deepEqual(completePrivatePendingAction(room, target), { ok: false, code: 'missing' });
 });
 
+test('The Starは敗北時に相手へ候補を提示し、選ばれた札をノイズとして一度だけ追加する', (t) => {
+  const room = createAdvancedPrivateRoomForActionTest('advanced-star-action', [
+    'the-star', 'the-moon', 'ace', 'king', 'queen'
+  ], { roundLimit: 5 });
+  t.after(() => {
+    if (room.gameState !== 'finished') finishGameByForfeit(room, room.players[0]);
+  });
+  room.selections = {
+    p1: handInstanceId(room, 'p1', 'the-star'),
+    p2: handInstanceId(room, 'p2', 'the-moon')
+  };
+  processTurn(room);
+
+  const pending = room.privatePendingAction;
+  assert.equal(pending?.phase, 'post-result');
+  assert.equal(pending?.action.type, 'opponent-choose-noise');
+  assert.equal(pending?.action.actorSeat, 'p2');
+  assert.equal(pending?.action.targetSeat, 'p2');
+  assert.ok(pending?.action.candidates.includes('king'));
+
+  const actorView = createRoomView(room, 'p2');
+  const otherView = createRoomView(room, 'p1');
+  assert.equal(actorView.viewer.pendingAction.target.surface, 'addition');
+  assert.match(actorView.viewer.pendingAction.instruction, /敗北時のノイズ札追加/);
+  assert.ok(actorView.viewer.pendingAction.target.cards.some((card) => card.definitionId === 'king'));
+  assert.equal(otherView.viewer.pendingAction.target, undefined);
+
+  assert.deepEqual(completePrivatePendingAction(room, 'king'), { ok: true, timedOut: false });
+  const noise = room.privateGameState.p2.hand.find((card) => (
+    card.definitionId === 'king' && card.state.generated === true && card.state.visibility === 'noise-owner-only'
+  ));
+  assert.ok(noise);
+  const concealed = createRoomView(room, 'p1').players.find((player) => player.id === 'p2').hand
+    .find((card) => card.category === 'noise');
+  assert.ok(concealed);
+  assert.equal(concealed.definitionId, undefined);
+  assert.equal(concealed.desc, '正体は、この札が出されたときに公開されます。');
+  assert.doesNotMatch(JSON.stringify(concealed), /king|King/);
+});
+
 test('The Sunの破棄対象は確定前には状態を変えず、選択後だけ同時ラウンドへ反映する', (t) => {
   const room = createAdvancedPrivateRoomForActionTest('advanced-sun-action', [
     'the-sun', 'ace', 'king', 'queen', 'jack'

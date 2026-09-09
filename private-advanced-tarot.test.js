@@ -46,7 +46,7 @@ function finalizeStarted(started, choices = []) {
   return finalizeAdvancedPrivateRound(state);
 }
 
-test('The Foolは直前の実カードとして振る舞い、The Hermitは解決済み強さだけを安全に反響する', () => {
+test('The FoolとThe Hermitは直前の実カードとして振る舞い、現在の局面で強さを解決する', () => {
   let foolState = makeState('advanced-fool', ['joker', 'ace', 'king', 'the-fool', 'the-hermit']);
   foolState = applyPrivateRound(foolState, idFor(foolState, 'p1', 'joker'), idFor(foolState, 'p2', 'king')).state;
   const fool = applyPrivateRound(foolState, idFor(foolState, 'p1', 'the-fool'), idFor(foolState, 'p2', 'ace'));
@@ -55,11 +55,12 @@ test('The Foolは直前の実カードとして振る舞い、The Hermitは解�
   assert.equal(fool.state.history[1].p1EchoProfile, null);
   assert.doesNotThrow(() => assertPrivateGameState(fool.state));
 
-  let hermitState = makeState('advanced-hermit', ['ace', 'king', 'queen', 'the-fool', 'the-hermit']);
-  hermitState = applyPrivateRound(hermitState, idFor(hermitState, 'p1', 'queen'), idFor(hermitState, 'p2', 'ace')).state;
+  let hermitState = makeState('advanced-hermit', ['ace', 'king', 'queen', 'death', 'the-hermit']);
+  hermitState = applyPrivateRound(hermitState, idFor(hermitState, 'p1', 'ace'), idFor(hermitState, 'p2', 'death')).state;
+  assert.equal(hermitState.p1.score, 2);
   const hermit = applyPrivateRound(hermitState, idFor(hermitState, 'p1', 'the-hermit'), idFor(hermitState, 'p2', 'king'));
-  assert.equal(hermit.p1Strength, 14);
-  assert.equal(hermit.winnerSeat, 'p1');
+  assert.equal(hermit.p1Strength, 0, 'Hermit must re-evaluate the copied Death in the current score state');
+  assert.equal(hermit.winnerSeat, 'p2');
   assert.doesNotThrow(() => assertPrivateGameState(hermit.state));
 });
 

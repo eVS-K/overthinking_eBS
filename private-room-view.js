@@ -151,7 +151,7 @@ function actionInstruction(type) {
     'copy-own-hand': '自分の手札を1枚選び、そのコピーを加えます。',
     'lock-one': '相手の札を1枚選び、次の相手ラウンドの終了までロックします。',
     'opponent-choose-copy': '自分の手札へ追加したい札を1枚選びます。',
-    'opponent-choose-noise': '自分の手札へ追加したい札を1枚選びます。相手にはノイズとして見えます。',
+    'opponent-choose-noise': '敗北時のノイズ札追加です。自分の手札へ加えたい札を1枚選びます。相手にはノイズとして見えます。',
     'transfer-won-card': '相手の過去の獲得札を1枚選び、その札を自分の手札へ複製します。',
     'sun-destroy': '自分の手札から、破壊する札を1枚選びます。'
   };

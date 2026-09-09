@@ -232,7 +232,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
     requiresFeatures: ['scaled-strength-v1'], excludesTags: []
   },
   {
-    id: 'the-hermit', name: 'The Hermit', strength: null, desc: '相手の前ラウンドの強さ・能力をコピー', category: 'tarot',
+    id: 'the-hermit', name: 'The Hermit', strength: null, desc: '相手の直前の実カードとして、このラウンドの強さ・能力を引き継ぐ', category: 'tarot',
     requiresFeatures: ['round-snapshot-v1', 'echo-profile-v1'], excludesTags: [], effectProfileId: 'echo-opponent-v1'
   },
   {
@@ -266,7 +266,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
     requiresFeatures: ['conditional-strength-v1'], excludesTags: []
   },
   {
-    id: 'the-star', name: 'The Star', strength: 17, desc: '相手が望む札をノイズ状態で相手手札へ加える', category: 'tarot',
+    id: 'the-star', name: 'The Star', strength: 17, desc: '敗北時、相手が望む札をノイズ状態で相手手札へ加える', category: 'tarot',
     requiresFeatures: ['target-actions-v1', 'card-generation-v1', 'recipient-view-v1', 'noise-state-v1'], excludesTags: [], effectProfileId: 'opponent-choose-noise-v1'
   },
   {

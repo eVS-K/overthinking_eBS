@@ -248,50 +248,46 @@ function getDefinitionRoundPreview(state, seat, definition) {
   };
 }
 
-function getPrivateCardRoundPreview(state, seat, card) {
-  if (!card || typeof card.definitionId !== 'string') throw new TypeError('private card requires a definition id');
-  const definition = getPrivateCardDefinition(card.definitionId);
-  if (definition.id === 'the-fool') {
-    const inheritedDefinitionId = getLiveEchoDefinitionId(state, seat);
-    if (inheritedDefinitionId) {
-      const inheritedDefinition = getPrivateCardDefinition(inheritedDefinitionId);
-      const inherited = getDefinitionRoundPreview(state, seat, inheritedDefinition);
-      const inheritedDetail = inherited.conditionDetail ? ` ${inherited.conditionDetail}` : '';
-      return {
-        ...inherited,
-        // The physical card remains Fool for the hand/history, while all
-        // comparison and effect dispatch uses the inherited identity below.
-        definitionId: definition.id,
-        behaviorDefinitionId: inherited.behaviorDefinitionId,
-        inheritedDefinitionId,
-        category: definition.category,
-        isConditional: true,
-        conditionDetail: `直前に出した ${inheritedDefinition.name} として、このラウンドの性質・能力を引き継ぎます。${inheritedDetail}`
-      };
-    }
+// Fool and Hermit retain their own physical identity in the hand and history,
+// but resolve the round as the referenced *actual card*. This deliberately
+// re-evaluates conditional strength and dispatches that card's normal
+// behaviour in the current round instead of replaying an old numeric result.
+// The recursion guard in getLiveEchoDefinitionId keeps the lookup bounded.
+function getLiveInheritedCardPreview(state, seat, definition, referencedSeat, referenceLabel) {
+  const inheritedDefinitionId = getLiveEchoDefinitionId(state, referencedSeat);
+  if (!inheritedDefinitionId) {
     const empty = getDefinitionRoundPreview(state, seat, definition);
     return {
       ...empty,
       isConditional: true,
-      conditionDetail: '引き継げる直前の実カードがないため、強さ0・能力なしです。'
+      conditionDetail: `引き継げる${referenceLabel}直前の実カードがないため、強さ0・能力なしです。`
     };
+  }
+  const inheritedDefinition = getPrivateCardDefinition(inheritedDefinitionId);
+  const inherited = getDefinitionRoundPreview(state, seat, inheritedDefinition);
+  const inheritedDetail = inherited.conditionDetail ? ` ${inherited.conditionDetail}` : '';
+  return {
+    ...inherited,
+    // The physical card remains Fool/Hermit for the hand/history, while all
+    // comparison and effect dispatch uses the inherited identity below.
+    definitionId: definition.id,
+    behaviorDefinitionId: inherited.behaviorDefinitionId,
+    inheritedDefinitionId,
+    category: definition.category,
+    isConditional: true,
+    conditionDetail: `${referenceLabel}直前に出した ${inheritedDefinition.name} として、このラウンドの強さ・能力を引き継ぎます。${inheritedDetail}`
+  };
+}
+
+function getPrivateCardRoundPreview(state, seat, card) {
+  if (!card || typeof card.definitionId !== 'string') throw new TypeError('private card requires a definition id');
+  const definition = getPrivateCardDefinition(card.definitionId);
+  if (definition.id === 'the-fool') {
+    return getLiveInheritedCardPreview(state, seat, definition, seat, '自分が');
   }
 
   if (definition.id === 'the-hermit') {
-    const echo = getEchoProfileFromHistory(state, opponentSeat(seat));
-    const comparisonStrengthUnits = echo?.resolvedStrengthUnits || 0;
-    return {
-      ...getDefinitionRoundPreview(state, seat, definition),
-      comparisonStrength: formatStrengthUnits(comparisonStrengthUnits),
-      comparisonStrengthUnits,
-      displayStrength: formatStrengthUnits(comparisonStrengthUnits),
-      comparisonOverride: echo?.comparisonOverride || '',
-      safePostEffectId: echo?.safePostEffectId || '',
-      isConditional: true,
-      conditionDetail: echo
-        ? `相手の直前ラウンドの解決済み強さ${formatStrengthUnits(comparisonStrengthUnits)}と、コピー可能な勝敗判定能力を反響します。`
-        : '反響できる直前の実カードがないため、強さ0・能力なしです。'
-    };
+    return getLiveInheritedCardPreview(state, seat, definition, opponentSeat(seat), '相手が');
   }
 
   return getDefinitionRoundPreview(state, seat, definition);
