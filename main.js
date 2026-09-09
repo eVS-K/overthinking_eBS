@@ -21,6 +21,12 @@ const TAROT_CARD_MARKS = Object.freeze({
   'the-star': 'σ', 'the-moon': 'τ', 'the-sun': 'υ', judgement: 'φ',
   'the-world': 'χ'
 });
+const ROUND_COMPARISON_LABELS = Object.freeze({
+  'two-beats-ace': '2 は Ace に勝利',
+  'three-beats-joker': '3 は Joker に勝利',
+  'joker-copies': 'Joker は相手と同じ強さになる',
+  'equal-strength': '同じ強さのため引き分け'
+});
 const CLASSIC_PRIVATE_RULESET_ID = 'classic-v1';
 const EXPANDED_PRIVATE_RULESET_ID = 'private-expanded-v1';
 const VIRTUAL_BLANK_CARD_ID = 'virtual-blank';
@@ -32,6 +38,7 @@ const EXPANDED_DECK_HEIGHT_MIN_PX = 180;
 const EXPANDED_DECK_HEIGHT_MAX_PX = 440;
 const EXPANDED_DECK_HEIGHT_STEP_PX = 40;
 const EXPANDED_DECK_HEIGHT_STOPS = Object.freeze([180, 220, 260, 300, 340, 380, 420, 440]);
+const EXPANDED_DECK_FILTERS = Object.freeze(['all', 'included', 'tarot', 'normal']);
 const DEFAULT_EXPANDED_DECK = Object.freeze([
   { definitionId: 'ace', copies: 1 },
   { definitionId: 'king', copies: 1 },
@@ -41,6 +48,100 @@ const DEFAULT_EXPANDED_DECK = Object.freeze([
   { definitionId: 'three', copies: 1 },
   { definitionId: 'two', copies: 1 }
 ]);
+
+const presentationEventsApi = window.OverthinkingPresentationEvents || {};
+const effectLanguageApi = window.OverthinkingEffectLanguage || {};
+const EFFECT_PRESENTATION_CATEGORIES = Object.freeze({
+  destroy: Object.freeze({ id: 'destroy', symbol: '×', label: '破壊・移動' }),
+  lock: Object.freeze({ id: 'lock', symbol: '⌁', label: 'ロック' }),
+  noise: Object.freeze({ id: 'noise', symbol: '?', label: 'ノイズ' }),
+  generate: Object.freeze({ id: 'generate', symbol: '✦', label: '追加・複製' }),
+  round: Object.freeze({ id: 'round', symbol: '↺', label: 'ラウンド変化' }),
+  skipped: Object.freeze({ id: 'skipped', symbol: '—', label: '発動なし' })
+});
+const EFFECT_PRESENTATION_PRIORITY = Object.freeze(['destroy', 'lock', 'noise', 'generate', 'round', 'skipped']);
+const EFFECT_TYPE_TO_PRESENTATION_CATEGORY = Object.freeze({
+  'destroy-card': 'destroy',
+  'discard-won-cards': 'destroy',
+  'transfer-won-card': 'destroy',
+  'lock-card': 'lock',
+  'lock-cards': 'lock',
+  'add-noise-card': 'noise',
+  'add-card-copy': 'generate',
+  'add-cards': 'generate',
+  'copy-played-history': 'generate',
+  'round-limit-adjustment': 'round',
+  'skipped-target-action': 'skipped'
+});
+
+function createFallbackPresentationQueue() {
+  let scopeId = '';
+  let exclusivePriority = -1;
+  const seen = new Set();
+  return {
+    beginScope(nextScopeId) {
+      if (typeof nextScopeId !== 'string' || !nextScopeId || nextScopeId === scopeId) {
+        return { changed: false, valid: Boolean(scopeId), scopeId };
+      }
+      scopeId = nextScopeId;
+      exclusivePriority = -1;
+      seen.clear();
+      return { changed: true, valid: true, scopeId };
+    },
+    claim(event, { animate = true } = {}) {
+      if (!event?.id || !event?.kind || !scopeId || seen.has(event.id)) {
+        return { accepted: false, observed: Boolean(event?.id), reason: 'duplicate' };
+      }
+      const priority = Number.isSafeInteger(event.priority) ? event.priority : 0;
+      const blocked = exclusivePriority >= 0 && priority < exclusivePriority;
+      seen.add(event.id);
+      if (event.exclusive === true && !blocked) exclusivePriority = Math.max(exclusivePriority, priority);
+      return { accepted: Boolean(animate) && !blocked, observed: true, reason: blocked ? 'suppressed' : (animate ? 'accepted' : 'hydrated') };
+    },
+    isBlocked(priority) {
+      return exclusivePriority >= 0 && priority < exclusivePriority;
+    }
+  };
+}
+
+const presentationQueue = typeof presentationEventsApi.createPresentationEventQueue === 'function'
+  ? presentationEventsApi.createPresentationEventQueue()
+  : createFallbackPresentationQueue();
+
+function prefersReducedMotion() {
+  return typeof presentationEventsApi.prefersReducedMotion === 'function'
+    ? presentationEventsApi.prefersReducedMotion(window)
+    : Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+}
+
+function getFallbackEffectPresentation(effects) {
+  const categoryIds = new Set();
+  for (const effect of Array.isArray(effects) ? effects : []) {
+    const categoryId = EFFECT_TYPE_TO_PRESENTATION_CATEGORY[effect?.type];
+    if (categoryId) categoryIds.add(categoryId);
+  }
+  const categories = EFFECT_PRESENTATION_PRIORITY
+    .filter((categoryId) => categoryIds.has(categoryId))
+    .map((categoryId) => EFFECT_PRESENTATION_CATEGORIES[categoryId]);
+  return { primary: categories[0] || null, categories };
+}
+
+function getExpandedEffectPresentation(effects) {
+  const fallback = getFallbackEffectPresentation(effects);
+  if (typeof effectLanguageApi.getPublicEffectPresentation !== 'function') return fallback;
+  try {
+    const external = effectLanguageApi.getPublicEffectPresentation(effects);
+    const observedIds = Array.isArray(external?.categories)
+      ? external.categories.map((category) => category?.id).filter((id) => Object.hasOwn(EFFECT_PRESENTATION_CATEGORIES, id))
+      : [];
+    const categoryIds = EFFECT_PRESENTATION_PRIORITY.filter((id) => observedIds.includes(id));
+    const categories = categoryIds.map((id) => EFFECT_PRESENTATION_CATEGORIES[id]);
+    return { primary: categories[0] || null, categories };
+  } catch {
+    // A display-only helper must never block a server-authoritative room.
+    return fallback;
+  }
+}
 
 const socket = window.io
   ? window.io(GAME_SERVER_URL, {
@@ -84,7 +185,18 @@ let privatePresetWriting = false;
 let privatePresetFeedback = '';
 let spectatorTarotSelectionId = '';
 let expandedDeckListHeight = readExpandedDeckListHeight();
+let expandedDeckFilter = 'all';
 let lastRoundId = null;
+// A room update can also be caused by chat, presence, or a reconnect.  Keep
+// the already-rendered public result stable in those cases so assistive
+// technology does not repeatedly announce a historic round.
+let lastRevealRenderKey = '';
+let lastSelectedCardRenderKey = '';
+// 対象操作はラウンド公開の後に独立して届く。チャットや再接続による
+// 同じpending actionの再描画では、操作説明を読み上げ直さない。
+let lastPrivateActionRenderKey = '';
+let lastPrivateActionSelectionRenderKey = '';
+let lastGameStatusKey = '';
 // A target action resolves after its cards were already revealed.  Its effects
 // therefore need a separate identity from the round itself; otherwise the
 // one-time reveal animation would have consumed the only animation chance.
@@ -92,6 +204,9 @@ let lastExpandedEffectBurstId = '';
 let lastFinaleId = null;
 let finalResultAnimationTimer = null;
 let expandedEffectBurstTimer = null;
+let expandedEffectBurstDelayTimer = null;
+let presentationHydrating = false;
+let presentationGameEpoch = 0;
 const previousScores = new Map();
 let chatMessages = [];
 let chatSentCount = 0;
@@ -114,6 +229,8 @@ const elements = {
   privateJoinFields: document.getElementById('private-join-fields'),
   randomMatchPanel: document.getElementById('random-match-panel'),
   joinOptions: document.getElementById('join-options'),
+  entryModeDescription: document.getElementById('entry-mode-description'),
+  spectatorEntryNote: document.getElementById('spectator-entry-note'),
   roomIdInput: document.getElementById('roomIdInput'),
   playerNameInput: document.getElementById('playerNameInput'),
   spectateModeInput: document.getElementById('spectate-mode-input'),
@@ -174,6 +291,8 @@ const elements = {
   myZone: document.getElementById('my-zone'),
   playerControls: document.getElementById('player-controls'),
   confirmButton: document.getElementById('confirmBtn'),
+  confirmButtonLabel: document.getElementById('confirm-button-label'),
+  confirmButtonIcon: document.getElementById('confirm-button-icon'),
   surrenderButton: document.getElementById('surrenderBtn'),
   restartButton: document.getElementById('restartBtn'),
   startAgreementStatus: document.getElementById('start-agreement-status'),
@@ -206,6 +325,8 @@ const elements = {
   privateTurnTimeSelect: document.getElementById('private-turn-time-select'),
   expandedPrivateSettings: document.getElementById('expanded-private-settings'),
   expandedDeckTotal: document.getElementById('expanded-deck-total'),
+  expandedDeckFilters: document.getElementById('expanded-deck-filters'),
+  expandedDeckFilterSummary: document.getElementById('expanded-deck-filter-summary'),
   expandedDeckScroll: document.getElementById('expanded-deck-scroll'),
   expandedDeckList: document.getElementById('expanded-deck-list'),
   expandedDeckHeightDecrease: document.getElementById('expanded-deck-height-decrease'),
@@ -312,6 +433,64 @@ function setText(element, value) {
   element.textContent = String(value);
 }
 
+function setGameStatus(value, state = 'neutral') {
+  const text = String(value);
+  const normalizedState = typeof state === 'string' && state ? state : 'neutral';
+  const statusKey = `${normalizedState}|${text}`;
+  // Presence, chat, and reconnect updates all render the board. Preserve a
+  // status region whose meaning has not changed so a screen reader does not
+  // repeatedly interrupt the player with the same instruction.
+  if (statusKey === lastGameStatusKey) return;
+  lastGameStatusKey = statusKey;
+  setText(elements.status, text);
+  elements.status.dataset.state = normalizedState;
+}
+
+function clearTransientPresentationEffects() {
+  if (expandedEffectBurstDelayTimer) window.clearTimeout(expandedEffectBurstDelayTimer);
+  if (expandedEffectBurstTimer) window.clearTimeout(expandedEffectBurstTimer);
+  expandedEffectBurstDelayTimer = null;
+  expandedEffectBurstTimer = null;
+  elements.gameScreen?.classList.remove('impact-win', 'impact-loss', 'impact-draw', 'impact-spade', 'impact-heart');
+  elements.revealArea?.classList.remove(
+    'effect-burst-destroy',
+    'effect-burst-lock',
+    'effect-burst-noise',
+    'effect-burst-generate',
+    'effect-burst-round',
+    'effect-burst-skipped'
+  );
+  elements.revealArea?.querySelectorAll('.result-particle').forEach((particle) => particle.remove());
+}
+
+function beginRoomPresentationScope(room, { newGame = false } = {}) {
+  if (newGame) presentationGameEpoch += 1;
+  const result = presentationQueue.beginScope(
+    typeof room?.id === 'string' ? `pvp:${room.id}:${presentationGameEpoch}` : ''
+  );
+  presentationHydrating = result.changed === true;
+  if (!presentationHydrating) return;
+  lastRoundId = null;
+  lastRevealRenderKey = '';
+  lastSelectedCardRenderKey = '';
+  lastPrivateActionRenderKey = '';
+  lastPrivateActionSelectionRenderKey = '';
+  lastGameStatusKey = '';
+  lastExpandedEffectBurstId = '';
+  lastFinaleId = null;
+  if (finalResultAnimationTimer) window.clearTimeout(finalResultAnimationTimer);
+  finalResultAnimationTimer = null;
+  clearTransientPresentationEffects();
+}
+
+function claimPresentationEvent(event) {
+  return presentationQueue.claim(event, {
+    // A reconnect or the first view of an existing room should explain the
+    // public state without pretending that the local player just saw it.
+    animate: !presentationHydrating && !prefersReducedMotion()
+  });
+}
+
 function createRandomSearchRequestId() {
   return window.crypto?.randomUUID?.()
     || `search-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -354,9 +533,9 @@ function scheduleNextRandomMatchRetry(sourceRoomId, requestId) {
     if (!nextRandomMatchPending
       || randomSearchRequestId !== requestId
       || randomSearchSourceRoomId !== sourceRoomId) return;
-    setText(elements.status, socket?.connected
+    setGameStatus(socket?.connected
       ? '検索開始を再確認しています…'
-      : '接続を回復後、検索開始を再確認します…');
+      : '接続を回復後、検索開始を再確認します…', 'searching');
     requestNextRandomMatch(sourceRoomId, requestId);
   }, 5_500);
 }
@@ -377,7 +556,7 @@ function requestNextRandomMatch(sourceRoomId, requestId) {
       randomSearchSourceRoomId = '';
       if (currentRoom?.id === sourceRoomId) {
         renderRoom(currentRoom);
-        setText(elements.status, result?.message || '別の相手を検索できませんでした。もう一度お試しください。');
+        setGameStatus(result?.message || '別の相手を検索できませんでした。もう一度お試しください。', 'error');
       }
       return;
     }
@@ -401,6 +580,8 @@ function resetLocalRoomForRandomSearch(message) {
   mySelectedCardId = null;
   committedCardId = null;
   lastRoundId = null;
+  lastRevealRenderKey = '';
+  lastSelectedCardRenderKey = '';
   lastExpandedEffectBurstId = '';
   lastFinaleId = null;
   previousScores.clear();
@@ -521,7 +702,7 @@ async function toggleFullscreen() {
       await elements.gameScreen.requestFullscreen();
     }
   } catch {
-    setText(elements.status, '全画面表示を開始できませんでした。');
+    setGameStatus('全画面表示を開始できませんでした。', 'error');
   }
 }
 
@@ -540,6 +721,7 @@ function syncSpectatorJoinOptions() {
   const isSpectatorOption = elements.spectateModeInput.checked;
   elements.autoJoinSeatInput.disabled = !isSpectatorOption;
   if (!isSpectatorOption) elements.autoJoinSeatInput.checked = false;
+  renderEntryMode();
 }
 
 function updatePresenceView(payload = {}) {
@@ -560,6 +742,7 @@ function updatePresenceView(payload = {}) {
 
 function renderEntryMode() {
   const isRandomMode = entryMode === 'random';
+  const isSpectatorEntry = !isRandomMode && elements.spectateModeInput.checked;
   elements.privateModeButton.classList.toggle('mode-option-active', !isRandomMode);
   elements.randomModeButton.classList.toggle('mode-option-active', isRandomMode);
   elements.privateModeButton.setAttribute('aria-pressed', String(!isRandomMode));
@@ -567,8 +750,26 @@ function renderEntryMode() {
   elements.privateJoinFields.classList.toggle('hidden', isRandomMode);
   elements.joinOptions.classList.toggle('hidden', isRandomMode);
   elements.randomMatchPanel.classList.toggle('hidden', !isRandomMode);
+  elements.spectatorEntryNote.classList.toggle('hidden', !isSpectatorEntry);
   elements.roomIdInput.required = !isRandomMode;
-  setText(elements.joinButtonLabel, isRandomMode ? '対戦相手を探す' : '入室する');
+  setText(elements.joinButtonLabel, isRandomMode ? '対戦相手を探す' : isSpectatorEntry ? '観戦する' : '入室する');
+  elements.joinButton.setAttribute(
+    'aria-label',
+    isRandomMode
+      ? 'ランダムマッチの対戦相手を探す'
+      : isSpectatorEntry
+        ? '観戦者として入室する'
+        : '対戦者として入室する'
+  );
+  setText(
+    elements.entryModeDescription,
+    isRandomMode
+      ? '接続中の相手を自動で探します。観戦・部屋設定は使わず、対局後に同じ相手との再戦も選べます。'
+      : isSpectatorEntry
+        ? '観戦モードです。カード操作はできず、空席への参加は希望した場合だけ行われます。'
+        : 'ルームキーを共有して、友人と対戦・観戦できます。設定の編集は部屋に入ってから行います。'
+  );
+  elements.joinForm.classList.toggle('join-form-spectator', isSpectatorEntry);
   elements.cancelRandomSearchButton.classList.toggle('hidden', !isRandomMode || !randomSearchActive);
   elements.joinButton.disabled = randomSearchActive;
 }
@@ -1236,6 +1437,47 @@ function getCardBaseStrengthLabel(card) {
   return '';
 }
 
+function getExpandedDeckFilterLabel(filter) {
+  const labels = {
+    all: 'すべて',
+    included: '採用中',
+    tarot: 'Tarot',
+    normal: '通常札'
+  };
+  return labels[filter] || labels.all;
+}
+
+function cardMatchesExpandedDeckFilter(card, copies) {
+  switch (expandedDeckFilter) {
+    case 'included':
+      return copies > 0;
+    case 'tarot':
+      return isTarotCard(card);
+    case 'normal':
+      return !isTarotCard(card);
+    default:
+      return true;
+  }
+}
+
+function renderExpandedDeckFilterControls(catalog, copiesById) {
+  if (!EXPANDED_DECK_FILTERS.includes(expandedDeckFilter)) expandedDeckFilter = 'all';
+  if (elements.expandedDeckFilters) {
+    elements.expandedDeckFilters.querySelectorAll('button[data-deck-filter]').forEach((button) => {
+      const selected = button.dataset.deckFilter === expandedDeckFilter;
+      button.classList.toggle('is-active', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+  }
+  const visibleCount = catalog.filter((card) => cardMatchesExpandedDeckFilter(card, copiesById.get(card.id) || 0)).length;
+  if (elements.expandedDeckFilterSummary) {
+    setText(
+      elements.expandedDeckFilterSummary,
+      `${getExpandedDeckFilterLabel(expandedDeckFilter)}: ${visibleCount} / ${catalog.length} 種`
+    );
+  }
+}
+
 function scheduleHorizontalScrollCueUpdate() {
   window.requestAnimationFrame(updateHorizontalScrollCues);
 }
@@ -1252,8 +1494,9 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
   const catalog = rules.deckCatalog || [];
   const disabled = !canEdit || !socket?.connected || isPending;
   setText(elements.expandedDeckTotal, `${totalCards} / ${MAX_EXPANDED_DECK_SIZE}枚`);
+  renderExpandedDeckFilterControls(catalog, copiesById);
   elements.expandedDeckList.replaceChildren();
-  catalog.forEach((card) => {
+  catalog.filter((card) => cardMatchesExpandedDeckFilter(card, copiesById.get(card.id) || 0)).forEach((card) => {
     const cardDisplayName = formatCardDisplayName(card);
     const row = document.createElement('article');
     const isTarot = isTarotCard(card);
@@ -1571,11 +1814,11 @@ function renderTimer(room) {
       const remainingSeconds = Math.ceil(remainingMs / 1_000);
       setText(elements.timer, remainingSeconds);
       elements.timerProgress.style.width = `${Math.min(100, (remainingMs / RECONNECT_GRACE_MS) * 100)}%`;
-      setText(
-        elements.status,
+      setGameStatus(
         remainingMs > 0
           ? `対戦相手の再接続を待っています。あと ${remainingSeconds} 秒で対局を終了します。制限時間は停止中です。`
-          : '対戦相手の再接続期限を確認しています…'
+          : '対戦相手の再接続期限を確認しています…',
+        'reconnecting'
       );
     };
     updateReconnectTimer();
@@ -1702,6 +1945,7 @@ function createCard(card, suitType, isInteractive, { effectTargetAction = null }
   if (canChooseCard) {
     cardElement.setAttribute('role', 'button');
     cardElement.tabIndex = 0;
+    cardElement.setAttribute('aria-pressed', String(isSelected));
     const selectCard = () => {
       mySelectedCardId = mySelectedCardId === card.id ? null : card.id;
       committedCardId = null;
@@ -1729,6 +1973,7 @@ function createCard(card, suitType, isInteractive, { effectTargetAction = null }
   if (canChooseEffectTarget) {
     cardElement.setAttribute('role', 'button');
     cardElement.tabIndex = 0;
+    cardElement.setAttribute('aria-pressed', String(isEffectTargetSelected));
     const selectEffectTarget = () => {
       const candidateId = card?.id;
       if (!currentRoom
@@ -1825,6 +2070,22 @@ function renderHand(container, hand, suitType, isInteractive, {
   scheduleHorizontalScrollCueUpdate();
 }
 
+function setSelectedCardAnnouncementMode(announce = false) {
+  elements.selectedCardPanel?.setAttribute('aria-live', announce ? 'polite' : 'off');
+}
+
+function getSelectedCardRenderKey(card, suitType) {
+  return [
+    card?.id || '',
+    card?.name || '',
+    formatDisplayedStrength(card?.roundInfo?.strength) || '',
+    card?.roundInfo?.behaviorDefinitionId || '',
+    card?.roundInfo?.detail || '',
+    card?.desc || '',
+    suitType
+  ].join('|');
+}
+
 function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'spade' } = {}) {
   const selectedCard = isInteractive && mySelectedCardId
     ? (hand || []).find((card) => card.id === mySelectedCardId)
@@ -1832,6 +2093,8 @@ function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'sp
   const shouldShow = Boolean(selectedCard);
   elements.selectedCardPanel.classList.toggle('hidden', !shouldShow);
   if (!shouldShow) {
+    lastSelectedCardRenderKey = '';
+    setSelectedCardAnnouncementMode(false);
     setText(elements.selectedCardName, '—');
     setText(elements.selectedCardStrength, '');
     elements.selectedCardStrength.classList.add('hidden');
@@ -1839,6 +2102,17 @@ function renderSelectedCardDetails(hand, { isInteractive = false, suitType = 'sp
     elements.selectedCardPanel.classList.remove('selected-card-no-ability', 'selected-card-has-ability');
     return;
   }
+  const renderKey = getSelectedCardRenderKey(selectedCard, suitType);
+  const selectionChanged = renderKey !== lastSelectedCardRenderKey;
+  if (!selectionChanged) {
+    // A room update must never re-announce a card that the player is still
+    // considering. The selection remains visible and keyboard-focusable.
+    return;
+  }
+  lastSelectedCardRenderKey = renderKey;
+  // A card is selected locally by the player. A stale initial view never has
+  // that local selection, but keep this guard for reconnect/rollout safety.
+  setSelectedCardAnnouncementMode(!presentationHydrating);
   elements.selectedCardPanel.classList.toggle('selected-card-no-ability', isNoAbilityCard(selectedCard));
   elements.selectedCardPanel.classList.toggle('selected-card-has-ability', hasNonTarotAbilityCard(selectedCard));
   setText(elements.selectedCardSuit, suitType === 'heart' ? '♥' : '♠');
@@ -1878,11 +2152,49 @@ function showScoreAward(scoreElement, gainedCards) {
   window.setTimeout(() => award.remove(), 1_150);
 }
 
+function setRevealAnnouncementMode(announce = false) {
+  // The board itself is a live region only for a newly received, public
+  // result. Initial hydration and ordinary room updates retain the visual
+  // result without re-reading it after chat/presence/reconnect traffic.
+  elements.revealArea?.setAttribute('aria-live', announce ? 'polite' : 'off');
+}
+
+function getRevealRenderKey(lastRound, finishReason = null, winnerName = null) {
+  const viewerSeat = getViewerSeat(currentRoom) || '';
+  const stackCount = Array.isArray(currentRoom?.stack) ? currentRoom.stack.length : 0;
+  return [
+    finishReason?.type || 'round',
+    finishReason?.id || '',
+    finishReason?.forfeitedBySeat || '',
+    winnerName || '',
+    lastRound?.id || 'empty',
+    getExpandedEffectBurstId(lastRound),
+    currentRoom?.viewer?.isSpectator === true ? 'spectator' : 'player',
+    viewerSeat,
+    getWinnerSeat(currentRoom) || '',
+    stackCount
+  ].join('|');
+}
+
+function setFinalResultAnnouncement(panel, announce = false) {
+  if (!panel) return;
+  // `role=status` is intentionally enabled only for a fresh terminal event.
+  // A rehydrated/reconnected view remains navigable as a labelled region but
+  // does not unexpectedly interrupt the player with an old match result.
+  panel.setAttribute('role', announce ? 'status' : 'region');
+  panel.setAttribute('aria-live', announce ? 'polite' : 'off');
+  panel.setAttribute('aria-label', '対局の最終結果');
+}
+
 function renderReveal(lastRound, finishReason = null, winnerName = null) {
   if (finishReason?.type === 'forfeit') {
     const resultId = `forfeit:${finishReason.id || `${finishReason.forfeitedBy}:${winnerName}`}`;
-    const isNewResult = resultId !== lastRoundId;
+    const resultChanged = resultId !== lastRoundId;
     lastRoundId = resultId;
+    const revealPresentation = resultChanged
+      ? claimPresentationEvent({ id: `reveal:${resultId}`, kind: 'forfeit-reveal', priority: 70 })
+      : null;
+    const isNewResult = Boolean(revealPresentation?.accepted);
     const isSpectator = Boolean(currentRoom?.viewer?.isSpectator);
     const viewerSeat = getViewerSeat(currentRoom);
     const forfeitedSeat = finishReason.forfeitedBySeat === 'p1' || finishReason.forfeitedBySeat === 'p2'
@@ -1893,6 +2205,12 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
       ? winnerSeat === 'p1' ? 'spade' : winnerSeat === 'p2' ? 'heart' : 'draw'
       : forfeitedSeat && forfeitedSeat === viewerSeat ? 'loss'
         : winnerSeat && winnerSeat === viewerSeat ? 'win' : 'draw';
+    const revealRenderKey = getRevealRenderKey(null, finishReason, winnerName);
+    if (!resultChanged && lastRevealRenderKey === revealRenderKey) return;
+    lastRevealRenderKey = revealRenderKey;
+    // The terminal panel is the one canonical announcement for a forfeit.
+    // Keeping this stage visual-only avoids duplicate speech for one result.
+    setRevealAnnouncementMode(false);
     elements.revealArea.className = `reveal-area outcome-${outcomeClass} reveal-forfeit${isNewResult ? ' reveal-new' : ''}`;
 
     const result = document.createElement('div');
@@ -1915,6 +2233,11 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   }
 
   if (!lastRound) {
+    if (lastRevealRenderKey === 'empty') return;
+    lastRevealRenderKey = 'empty';
+    lastRoundId = null;
+    lastExpandedEffectBurstId = '';
+    setRevealAnnouncementMode(false);
     elements.revealArea.className = 'reveal-area empty';
     const placeholder = document.createElement('span');
     placeholder.className = 'reveal-placeholder';
@@ -1923,11 +2246,19 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     return;
   }
 
-  const isNewRound = lastRound.id !== lastRoundId;
+  const roundChanged = lastRound.id !== lastRoundId;
   const effectBurstId = getExpandedEffectBurstId(lastRound);
   const hasNewExpandedEffect = Boolean(effectBurstId && effectBurstId !== lastExpandedEffectBurstId);
   lastRoundId = lastRound.id;
   lastExpandedEffectBurstId = effectBurstId;
+  const roundPresentation = roundChanged
+    ? claimPresentationEvent({ id: `reveal:${lastRound.id}`, kind: 'round-reveal', priority: 60 })
+    : null;
+  const expandedEffectPresentation = hasNewExpandedEffect
+    ? claimPresentationEvent({ id: `effect:${effectBurstId}`, kind: 'round-effect', priority: 40 })
+    : null;
+  const isNewRound = Boolean(roundPresentation?.accepted);
+  const shouldPlayExpandedEffect = Boolean(expandedEffectPresentation?.accepted);
   const roundWinnerSeat = getRoundWinnerSeat(currentRoom, lastRound);
   const isDraw = !roundWinnerSeat;
   const me = currentRoom?.players.find((player) => player.id === socket?.id);
@@ -1940,6 +2271,12 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     : currentRoom?.viewer?.isSpectator
       ? roundWinnerSeat === 'p1' ? 'spade' : 'heart'
       : isMyWin ? 'win' : me ? 'loss' : 'win';
+  const revealRenderKey = getRevealRenderKey(lastRound, finishReason, winnerName);
+  if (!roundChanged && !hasNewExpandedEffect && lastRevealRenderKey === revealRenderKey) return;
+  lastRevealRenderKey = revealRenderKey;
+  // A later public target-effect update has meaningful new information, just
+  // like a fresh card reveal. Static hydration deliberately remains quiet.
+  setRevealAnnouncementMode(isNewRound || shouldPlayExpandedEffect);
   elements.revealArea.className = `reveal-area outcome-${outcomeClass}${isNewRound ? ' reveal-new' : ''}`;
 
   const result = document.createElement('div');
@@ -1964,11 +2301,25 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
   }
   outcome.append(outcomeLabel, outcomeTitle, outcomeDetail);
 
+  const comparisonDetail = formatPublicRoundComparison(lastRound);
+  if (comparisonDetail) {
+    const comparison = document.createElement('p');
+    comparison.className = 'round-comparison';
+    comparison.textContent = comparisonDetail;
+    outcome.append(comparison);
+  }
+
   const effectDetail = formatExpandedRoundEffects(lastRound);
   if (effectDetail) {
     const effects = document.createElement('p');
-    effects.className = 'round-effect-detail';
-    effects.textContent = effectDetail;
+    const effectPresentation = getExpandedEffectPresentation(lastRound.effects);
+    effects.className = `round-effect-detail${effectPresentation.primary ? ` effect-kind-${effectPresentation.primary.id}` : ''}`;
+    const effectCue = createPublicEffectCue(effectPresentation);
+    const effectText = document.createElement('span');
+    effectText.className = 'round-effect-copy';
+    effectText.textContent = effectDetail;
+    if (effectCue) effects.append(effectCue);
+    effects.append(effectText);
     outcome.append(effects);
   }
 
@@ -1999,7 +2350,7 @@ function renderReveal(lastRound, finishReason = null, winnerName = null) {
     playResultEffects(outcomeClass);
     window.setTimeout(() => elements.revealArea.classList.remove('reveal-new'), 600);
   }
-  if (hasNewExpandedEffect) playExpandedRoundEffects(lastRound.effects);
+  if (shouldPlayExpandedEffect) scheduleExpandedRoundEffects(lastRound.effects);
 }
 
 function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
@@ -2013,6 +2364,7 @@ function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
   if (!finished) {
     if (finalResultAnimationTimer) window.clearTimeout(finalResultAnimationTimer);
     finalResultAnimationTimer = null;
+    setFinalResultAnnouncement(panel, false);
     panel.replaceChildren();
     lastFinaleId = null;
     return;
@@ -2028,15 +2380,24 @@ function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
       : won ? 'win' : 'loss';
   const finaleId = room.finishReason?.id
     || `completed:${room.round}:${room.winner}:${bottomPlayer?.score ?? ''}:${topPlayer?.score ?? ''}:${room.lastRound?.id ?? ''}`;
-  const isNewFinale = finaleId !== lastFinaleId;
+  const finaleChanged = finaleId !== lastFinaleId;
   lastFinaleId = finaleId;
+  const finalePresentation = finaleChanged
+    ? claimPresentationEvent({ id: `final:${finaleId}`, kind: 'match-final', priority: 100, exclusive: true })
+    : null;
+  const isNewFinale = Boolean(finalePresentation?.accepted);
+
+  // A definitive ending owns the stage.  Any low-priority round particle or
+  // delayed Tarot burst from the same payload is cancelled before it can
+  // compete with the result and the next action.
+  if (finaleChanged) clearTransientPresentationEffects();
+  if (!finaleChanged) return;
+  setFinalResultAnnouncement(panel, isNewFinale);
   panel.className = `final-result-panel final-${outcome}${isNewFinale ? ' final-result-new' : ''}`;
 
   // Room updates continue after a game (reconnects, start consent, chat
   // state). Do not recreate an aria-live result for every one of those
   // updates: announce it once, then retain the stable final result panel.
-  if (!isNewFinale) return;
-
   const kicker = document.createElement('span');
   kicker.className = 'final-result-kicker';
   kicker.textContent = '対局の最終結果';
@@ -2088,14 +2449,15 @@ function renderFinalResult(room, bottomPlayer, topPlayer, isSpectator) {
 }
 
 function playResultEffects(outcomeClass) {
-  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const particleCount = reducedMotion ? 0 : window.innerWidth <= 660 ? 6 : 18;
+  if (prefersReducedMotion()) return;
+  const particleCount = window.innerWidth <= 660 ? 6 : 18;
 
   for (let index = 0; index < particleCount; index += 1) {
     const particle = document.createElement('i');
     const angle = (Math.PI * 2 * index) / particleCount + (Math.random() - .5) * .28;
     const distance = 42 + Math.random() * (window.innerWidth <= 660 ? 64 : 142);
     particle.className = `result-particle particle-${outcomeClass}`;
+    particle.dataset.presentationParticle = 'true';
     particle.style.setProperty('--x', `${Math.cos(angle) * distance}px`);
     particle.style.setProperty('--y', `${Math.sin(angle) * distance}px`);
     particle.style.setProperty('--size', `${3 + Math.random() * 5}px`);
@@ -2110,17 +2472,9 @@ function playResultEffects(outcomeClass) {
 }
 
 function getExpandedEffectBurstKind(effects) {
-  if (!Array.isArray(effects)) return '';
-  const types = new Set(effects.map((effect) => effect?.type));
-  // A single priority keeps multiple simultaneous effects readable. The full
-  // public explanation remains in the result and history immediately below.
-  if (types.has('destroy-card') || types.has('discard-won-cards') || types.has('transfer-won-card')) return 'destroy';
-  if (types.has('lock-card') || types.has('lock-cards')) return 'lock';
-  if (types.has('add-noise-card')) return 'noise';
-  if (types.has('add-card-copy') || types.has('add-cards') || types.has('copy-played-history')) return 'generate';
-  if (types.has('round-limit-adjustment')) return 'round';
-  if (types.has('skipped-target-action')) return 'skipped';
-  return '';
+  // A single primary cue keeps simultaneous effects readable.  The purple
+  // detail band retains every public effect below it.
+  return getExpandedEffectPresentation(effects).primary?.id || '';
 }
 
 function getExpandedEffectBurstId(round) {
@@ -2139,7 +2493,19 @@ function getExpandedEffectBurstId(round) {
   return `${round.id}|${effectParts.join('|')}`;
 }
 
+function scheduleExpandedRoundEffects(effects) {
+  if (prefersReducedMotion() || presentationQueue.isBlocked(40)) return;
+  if (expandedEffectBurstDelayTimer) window.clearTimeout(expandedEffectBurstDelayTimer);
+  const publicEffects = Array.isArray(effects) ? effects : [];
+  expandedEffectBurstDelayTimer = window.setTimeout(() => {
+    expandedEffectBurstDelayTimer = null;
+    if (presentationQueue.isBlocked(40)) return;
+    playExpandedRoundEffects(publicEffects);
+  }, 360);
+}
+
 function playExpandedRoundEffects(effects) {
+  if (prefersReducedMotion()) return;
   const burstKind = getExpandedEffectBurstKind(effects);
   if (!burstKind || !elements.revealArea) return;
   const className = `effect-burst-${burstKind}`;
@@ -2170,10 +2536,40 @@ function createRevealCard(card, owner, seat = '', strength = undefined) {
   return node;
 }
 
+function createPublicEffectCue(presentation, { compact = false } = {}) {
+  if (!presentation?.primary || !Array.isArray(presentation.categories) || presentation.categories.length === 0) return null;
+  const cue = document.createElement('span');
+  cue.className = `effect-presentation-cue${compact ? ' effect-presentation-cue-compact' : ''}`;
+  cue.setAttribute('aria-label', `効果種別：${presentation.categories.map((category) => category.label).join('、')}`);
+  presentation.categories.forEach((category) => {
+    const token = document.createElement('span');
+    token.className = `effect-presentation-token effect-token-${category.id}`;
+    const symbol = document.createElement('b');
+    symbol.setAttribute('aria-hidden', 'true');
+    symbol.textContent = category.symbol;
+    const label = document.createElement('span');
+    label.textContent = category.label;
+    token.append(symbol, label);
+    cue.append(token);
+  });
+  return cue;
+}
+
 function formatRoundCardLabel(card, strength) {
   const name = card?.name || '不明なカード';
   const displayStrength = formatDisplayedStrength(strength);
   return displayStrength ? `${name}（強さ${displayStrength}）` : name;
+}
+
+function formatPublicRoundComparison(round) {
+  const comparison = typeof round?.comparison === 'string' ? round.comparison : '';
+  if (ROUND_COMPARISON_LABELS[comparison]) return ROUND_COMPARISON_LABELS[comparison];
+  if (comparison !== 'strength-compare') return '';
+  const p1Strength = formatDisplayedStrength(round?.p1Strength);
+  const p2Strength = formatDisplayedStrength(round?.p2Strength);
+  return p1Strength && p2Strength
+    ? `サーバー確定の強さ ${p1Strength} 対 ${p2Strength} を比較`
+    : 'サーバーがカードの強さを比較';
 }
 
 function getEffectCardLabel(definitionId) {
@@ -2289,11 +2685,24 @@ function renderHistory(history) {
     const cards = document.createElement('span');
     cards.textContent = `${formatRoundCardLabel(round.p1Card, round.p1Strength)}  対  ${formatRoundCardLabel(round.p2Card, round.p2Strength)}`;
     const effects = formatExpandedRoundEffects(round);
+    const comparison = formatPublicRoundComparison(round);
     detail.append(winner, cards);
+    if (comparison) {
+      const comparisonDetail = document.createElement('span');
+      comparisonDetail.className = 'history-comparison';
+      comparisonDetail.textContent = comparison;
+      detail.append(comparisonDetail);
+    }
     if (effects) {
       const effect = document.createElement('span');
-      effect.className = 'history-effect';
-      effect.textContent = effects;
+      const effectPresentation = getExpandedEffectPresentation(round.effects);
+      effect.className = `history-effect${effectPresentation.primary ? ` effect-kind-${effectPresentation.primary.id}` : ''}`;
+      const effectCue = createPublicEffectCue(effectPresentation, { compact: true });
+      const effectText = document.createElement('span');
+      effectText.className = 'history-effect-copy';
+      effectText.textContent = effects;
+      if (effectCue) effect.append(effectCue);
+      effect.append(effectText);
       detail.append(effect);
     }
     item.append(number, detail);
@@ -2462,64 +2871,64 @@ function resetChat() {
 
 function renderStatus(room, me, opponent) {
   if (!socket?.connected) {
-    setText(elements.status, '接続が切れました。自動的に再接続しています…');
+    setGameStatus('接続が切れました。自動的に再接続しています…', 'reconnecting');
     return;
   }
   const pendingAction = getPrivatePendingAction(room);
   if (pendingAction) {
     const remaining = Math.max(0, Math.ceil((Number(pendingAction.expiresAt) - Date.now()) / 1_000));
-    setText(
-      elements.status,
+    setGameStatus(
       getPrivateActionTarget(pendingAction)
         ? `能力の対象を選んでください。あと ${remaining} 秒です。`
-        : `能力の対象を選択中です。あと ${remaining} 秒です。`
+        : `能力の対象を選択中です。あと ${remaining} 秒です。`,
+      'action'
     );
     return;
   }
   if (room.viewer.isSpectator) {
     const position = Number.isSafeInteger(room.viewer.seatQueuePosition) ? room.viewer.seatQueuePosition : 0;
     const length = Number.isSafeInteger(room.viewer.seatQueueLength) ? room.viewer.seatQueueLength : 0;
-    setText(
-      elements.status,
+    setGameStatus(
       room.viewer.autoJoinWhenSeatAvailable
         ? `観戦中です。空席ができた場合は対戦者として参加します（参加予約 ${position || 1}番目 / ${Math.max(length, 1)}人）。`
-        : '観戦中です。両者の手札と勝負の行方を見守れます。'
+        : '観戦中です。両者の手札と勝負の行方を見守れます。',
+      'spectating'
     );
     return;
   }
   if (room.gameState === 'waiting') {
     const bothPlayersReady = room.players.length === 2 && room.players.every((player) => player.connected);
     if (!bothPlayersReady) {
-      setText(
-        elements.status,
+      setGameStatus(
         room.matchType === 'random'
           ? '対戦相手を待っています。別の相手を探すこともできます。'
-          : '対戦相手の入室を待っています…'
+          : '対戦相手の入室を待っています…',
+        'waiting'
       );
     } else if (room.matchType === 'private' && room.settingsEditing === true) {
-      setText(elements.status, `${room.settingsEditorName || '設定担当者'} がルール設定を編集しています。完了後に開始へ同意できます。`);
+      setGameStatus(`${room.settingsEditorName || '設定担当者'} がルール設定を編集しています。完了後に開始へ同意できます。`, 'waiting');
     } else if (room.viewer.hasAgreedToStart) {
-      setText(elements.status, '対戦開始に同意しました。相手の同意を待っています…');
+      setGameStatus('対戦開始に同意しました。相手の同意を待っています…', 'agreement');
     } else {
-      setText(elements.status, '両者が「対戦開始に同意する」を押すと、対局が始まります。');
+      setGameStatus('両者が「対戦開始に同意する」を押すと、対局が始まります。', 'agreement');
     }
   } else if (room.gameState === 'reconnecting') {
     const remainingSeconds = Number.isFinite(room.reconnectDeadline) && room.reconnectDeadline > 0
       ? Math.max(0, Math.ceil((room.reconnectDeadline - Date.now()) / 1_000))
       : null;
-    setText(
-      elements.status,
+    setGameStatus(
       remainingSeconds === null
         ? '対戦相手の再接続を待っています。制限時間は停止中です。'
-        : `対戦相手の再接続を待っています。あと ${remainingSeconds} 秒で対局を終了します。制限時間は停止中です。`
+        : `対戦相手の再接続を待っています。あと ${remainingSeconds} 秒で対局を終了します。制限時間は停止中です。`,
+      'reconnecting'
     );
   } else if (room.gameState === 'playing') {
-    setText(elements.status, room.viewer.hasConfirmedSelection
+    setGameStatus(room.viewer.hasConfirmedSelection
       ? 'カードを伏せました。相手の選択を待っています…'
-      : '一枚を選び、相手の思考を読んでください。');
+      : '一枚を選び、相手の思考を読んでください。', room.viewer.hasConfirmedSelection ? 'waiting' : 'decision');
   } else if (room.gameState === 'finished') {
     if (room.finishReason?.type === 'system') {
-      setText(elements.status, '状態を安全に保つため、この対局を終了しました。もう一度開始してください。');
+      setGameStatus('状態を安全に保つため、この対局を終了しました。もう一度開始してください。', 'error');
       return;
     }
     const opponentDisconnected = opponent?.connected === false;
@@ -2532,21 +2941,21 @@ function renderStatus(room, me, opponent) {
       ? winnerSeat === mySeat ? 'あなたの勝利' : 'あなたの敗北'
       : ['引き分け', 'Draw'].includes(room.winner) ? '引き分け' : `${room.winner || '対戦者'} の勝利`;
     if (opponentDisconnected) {
-      setText(elements.status, '対戦相手の再接続を待っています。');
+      setGameStatus('対戦相手の再接続を待っています。', 'reconnecting');
     } else if (room.finishReason?.type === 'forfeit') {
       const forfeitedSeat = room.finishReason.forfeitedBySeat === 'p1' || room.finishReason.forfeitedBySeat === 'p2'
         ? room.finishReason.forfeitedBySeat
         : getUniqueNameSeat(room, room.finishReason.forfeitedBy);
       const forfeitedName = getSeatDisplayName(room, forfeitedSeat, room.finishReason.forfeitedBy || '対戦者');
-      setText(elements.status, `ゲーム終了 — ${finalOutcome}。${forfeitedName} が降参しました。`);
+      setGameStatus(`ゲーム終了 — ${finalOutcome}。${forfeitedName} が降参しました。`, 'final');
     } else if (room.players.length === 2 && room.players.every((player) => player.connected) && room.viewer.hasAgreedToStart) {
-      setText(elements.status, room.matchType === 'random'
+      setGameStatus(room.matchType === 'random'
         ? 'この相手との再戦を希望しました。相手の同意を待っています…'
-        : '再戦に同意しました。相手の同意を待っています…');
+        : '再戦に同意しました。相手の同意を待っています…', 'agreement');
     } else {
-      setText(elements.status, room.matchType === 'random'
+      setGameStatus(room.matchType === 'random'
         ? `ゲーム終了 — ${finalOutcome}。この相手と続けるか、別の相手を探せます。`
-        : `ゲーム終了 — ${finalOutcome}。再戦する場合は「再戦に同意する」を押してください。`);
+        : `ゲーム終了 — ${finalOutcome}。再戦する場合は「再戦に同意する」を押してください。`, 'final');
     }
   }
 }
@@ -2629,6 +3038,36 @@ function getPrivatePendingAction(room = currentRoom) {
   return pending?.active === true && room?.gameState === 'playing' ? pending : null;
 }
 
+function getPrivateActionRenderKey(action, target, canChoose) {
+  if (!action?.active) return '';
+  // `id` is only projected to the authorized actor. Other viewers get an
+  // expiry/phase key so they can learn that a new public pause started without
+  // receiving a nonce, candidate list, source card, or hidden card identity.
+  const actionId = typeof action.id === 'string' ? action.id : '';
+  const expiry = Number.isFinite(Number(action.expiresAt)) ? String(Math.trunc(Number(action.expiresAt))) : '';
+  return [
+    actionId || `visible:${expiry}`,
+    typeof action.phase === 'string' ? action.phase : '',
+    target?.surface || '',
+    target?.seat || '',
+    canChoose ? 'actor' : 'viewer'
+  ].join('|');
+}
+
+function setPrivateActionAnnouncementMode(announce = false) {
+  if (!elements.privateActionPanel) return;
+  // A fresh target action is useful status information. A restored action is
+  // still fully visible and labelled, but should not interrupt a returning
+  // player with a command they may already have heard.
+  elements.privateActionPanel.setAttribute('role', announce ? 'status' : 'region');
+  elements.privateActionPanel.setAttribute('aria-live', announce ? 'polite' : 'off');
+}
+
+function setPrivateActionSelectionAnnouncementMode(announce = false) {
+  if (!elements.privateActionSelection) return;
+  elements.privateActionSelection.setAttribute('aria-live', announce ? 'polite' : 'off');
+}
+
 function renderPrivateActionCountdown(room = currentRoom) {
   const pending = getPrivatePendingAction(room);
   if (!pending || !elements.privateActionTimer) return;
@@ -2652,7 +3091,7 @@ function submitPrivateActionChoice(action, candidateId) {
     if (privateActionSubmittingId !== submittedActionId) return;
     clearPrivateActionSubmission();
     if (getPrivatePendingAction(currentRoom)?.id === submittedActionId) {
-      setText(elements.status, '能力の対象を確認しています。通信状態を確認して、もう一度選んでください。');
+      setGameStatus('能力の対象を確認しています。通信状態を確認して、もう一度選んでください。', 'action');
       renderPrivatePendingAction(currentRoom);
     }
   }, 5_000);
@@ -2666,7 +3105,7 @@ function submitPrivateActionChoice(action, candidateId) {
     if (privateActionSubmittingId !== submittedActionId) return;
     clearPrivateActionSubmission();
     if (!result?.ok && getPrivatePendingAction(currentRoom)?.id === submittedActionId) {
-      setText(elements.status, result?.message || '対象を確定できませんでした。最新の表示を確認してください。');
+      setGameStatus(result?.message || '対象を確定できませんでした。最新の表示を確認してください。', 'error');
       renderPrivatePendingAction(currentRoom);
     }
   });
@@ -2690,6 +3129,7 @@ function getPrivateActionTarget(action) {
 function clearPrivateActionTargetSelection() {
   privateActionSelectedActionId = '';
   privateActionSelectedTargetId = '';
+  lastPrivateActionSelectionRenderKey = '';
 }
 
 function clearPrivateActionTargetTray(tray, label, cards) {
@@ -2742,6 +3182,9 @@ function renderPrivatePendingAction(room) {
   const action = getPrivatePendingAction(room);
   elements.privateActionPanel.classList.toggle('hidden', !action);
   if (!action) {
+    lastPrivateActionRenderKey = '';
+    setPrivateActionAnnouncementMode(false);
+    setPrivateActionSelectionAnnouncementMode(false);
     clearPrivateActionSubmission();
     clearPrivateActionTargetSelection();
     setText(elements.privateActionTimer, '—');
@@ -2763,6 +3206,10 @@ function renderPrivatePendingAction(room) {
   if (canChoose && !target.candidateIds.includes(privateActionSelectedTargetId)) {
     privateActionSelectedTargetId = '';
   }
+  const actionRenderKey = getPrivateActionRenderKey(action, target, canChoose);
+  const isNewAction = actionRenderKey !== lastPrivateActionRenderKey;
+  lastPrivateActionRenderKey = actionRenderKey;
+  setPrivateActionAnnouncementMode(isNewAction && !presentationHydrating);
   setText(elements.privateActionTitle, canChoose ? '能力の対象を選ぶ' : '能力の対象を選択中');
   setText(
     elements.privateActionInstruction,
@@ -2782,6 +3229,15 @@ function renderPrivatePendingAction(room) {
       : null);
   const hasSelection = canChoose && privateActionSelectedActionId === action.id && Boolean(selectedCard);
   if (elements.privateActionSelection) {
+    // Target ids never leave this authorized local render. The string is only
+    // used to decide whether the user made a fresh choice, so screen readers
+    // hear that choice once without leaking it through any shared event.
+    const selectionRenderKey = hasSelection
+      ? `${actionRenderKey}|selected:${privateActionSelectedTargetId}`
+      : '';
+    const isNewSelection = Boolean(selectionRenderKey && selectionRenderKey !== lastPrivateActionSelectionRenderKey);
+    lastPrivateActionSelectionRenderKey = selectionRenderKey;
+    setPrivateActionSelectionAnnouncementMode(isNewSelection && !presentationHydrating);
     elements.privateActionSelection.classList.toggle('hidden', !canChoose);
     setText(
       elements.privateActionSelection,
@@ -2799,16 +3255,51 @@ function renderPrivatePendingAction(room) {
 }
 
 function updateConfirmButton() {
+  const isPlaying = currentRoom?.gameState === 'playing';
+  const isPlayer = Boolean(currentRoom && !currentRoom.viewer.isSpectator);
+  const hasPendingAction = Boolean(getPrivatePendingAction(currentRoom));
+  const hasCommitted = Boolean(currentRoom?.viewer?.hasConfirmedSelection);
   const canConfirm = Boolean(
-    currentRoom
+    isPlayer
+    && isPlaying
     && socket?.connected
-    && !currentRoom.viewer.isSpectator
-    && currentRoom.gameState === 'playing'
-    && !currentRoom.viewer.hasConfirmedSelection
-    && !getPrivatePendingAction(currentRoom)
+    && !hasCommitted
+    && !hasPendingAction
     && mySelectedCardId
   );
+
+  // The primary button is a small, quiet checkpoint in the decision loop.
+  // Its state is derived solely from the authoritative room projection plus
+  // the player's local, unsubmitted card choice; it never reveals the choice
+  // to anyone else or attempts to infer game state on the client.
+  let label = '対局の開始を待っています';
+  let state = 'inactive';
+  let showIcon = false;
+  if (isPlayer && isPlaying) {
+    if (!socket?.connected) {
+      label = '通信を回復中です';
+      state = 'reconnecting';
+    } else if (hasPendingAction) {
+      label = '能力の対象を選んでください';
+      state = 'action';
+    } else if (hasCommitted) {
+      label = 'カードを伏せました';
+      state = 'committed';
+    } else if (mySelectedCardId) {
+      label = 'この一枚で勝負する';
+      state = 'ready';
+      showIcon = true;
+    } else {
+      label = 'カードを選んでください';
+      state = 'selection-needed';
+    }
+  }
+
   elements.confirmButton.disabled = !canConfirm;
+  elements.confirmButton.dataset.state = state;
+  elements.confirmButton.setAttribute('aria-label', label);
+  setText(elements.confirmButtonLabel, label);
+  elements.confirmButtonIcon?.classList.toggle('hidden', !showIcon);
 }
 
 function renderRoom(room) {
@@ -2826,6 +3317,15 @@ function renderRoom(room) {
       seatQueueLength: 0
     }
   };
+  const startsFreshGame = Boolean(
+    currentRoom?.id === roomView.id
+      && currentRoom.gameState !== 'playing'
+      && roomView.gameState === 'playing'
+      && roomView.round === 1
+      && !roomView.lastRound
+      && (!Array.isArray(roomView.history) || roomView.history.length === 0)
+  );
+  beginRoomPresentationScope(roomView, { newGame: startsFreshGame });
   randomSearchActive = false;
   randomSearchWanted = false;
   randomSearchRequestId = '';
@@ -2995,6 +3495,7 @@ function renderRoom(room) {
   if (!chatReady) setChatFeedback('チャットを準備しています…');
   updateChatControls();
   scheduleHorizontalScrollCueUpdate();
+  presentationHydrating = false;
 }
 
 function openCreditModal() {
@@ -3064,7 +3565,7 @@ elements.privateActionConfirm?.addEventListener('click', () => {
 
 elements.restartButton.addEventListener('click', () => {
   if (nextRandomMatchPending) {
-    setText(elements.status, '別の相手の検索開始を確認しています。しばらくお待ちください。');
+    setGameStatus('別の相手の検索開始を確認しています。しばらくお待ちください。', 'searching');
     return;
   }
   if (socket && currentRoomId) socket.emit('agree_to_start', { roomId: currentRoomId });
@@ -3084,7 +3585,7 @@ elements.nextRandomButton.addEventListener('click', () => {
   elements.restartButton.disabled = true;
   elements.switchSpectatorButton.disabled = true;
   elements.homeButton.disabled = true;
-  setText(elements.status, '別の対戦相手を探しています…');
+  setGameStatus('別の対戦相手を探しています…', 'searching');
   // Preserve the existing room/session until the server has atomically
   // accepted the transfer. The same request id is retried safely if its
   // acknowledgement is delayed, so a transient network loss cannot strand
@@ -3100,7 +3601,7 @@ elements.surrenderButton.addEventListener('click', () => {
 
 elements.switchSpectatorButton.addEventListener('click', () => {
   if (nextRandomMatchPending) {
-    setText(elements.status, '別の相手の検索開始を確認しています。しばらくお待ちください。');
+    setGameStatus('別の相手の検索開始を確認しています。しばらくお待ちください。', 'searching');
     return;
   }
   if (!socket?.connected || !currentRoomId || !currentRoom
@@ -3171,6 +3672,16 @@ elements.beginPrivateSettingsEditButton?.addEventListener('click', () => {
 
 elements.finishPrivateSettingsEditButton?.addEventListener('click', () => {
   requestPrivateSettingsEditMode(false);
+});
+
+elements.expandedDeckFilters?.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-deck-filter]');
+  const nextFilter = button?.dataset.deckFilter;
+  if (!nextFilter || !EXPANDED_DECK_FILTERS.includes(nextFilter) || nextFilter === expandedDeckFilter) return;
+  expandedDeckFilter = nextFilter;
+  // Filters are a local reading aid only. Re-rendering from the current
+  // server-authored rules snapshot must not create or mutate a setting.
+  if (currentRoom) renderRoomRules(currentRoom);
 });
 
 elements.expandedDeckList.addEventListener('click', (event) => {
@@ -3375,7 +3886,7 @@ window.addEventListener('keydown', primeChatSound, { once: true });
 
 elements.homeButton.addEventListener('click', () => {
   if (nextRandomMatchPending) {
-    setText(elements.status, '別の相手の検索開始を確認しています。しばらくお待ちください。');
+    setGameStatus('別の相手の検索開始を確認しています。しばらくお待ちください。', 'searching');
     return;
   }
   const roomIdToLeave = currentRoomId;
@@ -3474,7 +3985,7 @@ if (socket) {
     privateSettingsFeedback = payload.message || '設定担当を引き継ぎました。ルールやデッキを変更できます。';
     renderRoomRules(currentRoom);
     highlightPrivateSettingsOwnership();
-    setText(elements.status, privateSettingsFeedback);
+    setGameStatus(privateSettingsFeedback, 'waiting');
   });
 
   socket.on('random_match_interrupted', (payload) => {
@@ -3570,7 +4081,7 @@ if (socket) {
       clearSavedSession();
       setLoginMessage(message || '入室できませんでした。');
     } else {
-      setText(elements.status, message || '操作を完了できませんでした。');
+      setGameStatus(message || '操作を完了できませんでした。', 'error');
     }
   });
 } else {

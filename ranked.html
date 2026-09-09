@@ -6,10 +6,11 @@
   <meta name="theme-color" content="#090d1a">
   <meta name="robots" content="noindex">
   <title>OVERTHINKING — ソロ・ランク戦</title>
-  <link rel="stylesheet" href="/style.css?v=ranked-v10">
-  <link rel="stylesheet" href="/ranked.css?v=ranked-v10">
+  <link rel="stylesheet" href="/style.css?v=ranked-v13">
+  <link rel="stylesheet" href="/ranked.css?v=ranked-v13">
   <script src="/ranked-ui.js?v=ranked-v4" defer></script>
-  <script src="/ranked-client.js?v=ranked-v10" defer></script>
+  <script src="/presentation-events.js?v=presentation-v1" defer></script>
+  <script src="/ranked-client.js?v=ranked-v13" defer></script>
 </head>
 <body class="ranked-page">
   <div class="atmosphere" aria-hidden="true">
@@ -93,7 +94,7 @@
           </div>
           <div class="ranked-ai-state"><span>相手の残り手札</span><strong id="ranked-ai-remaining">7</strong><small>枚</small><span>スタック</span><strong id="ranked-stack">0</strong><small>枚</small></div>
           <div id="ranked-opponent-hand" class="ranked-opponent-hand" aria-label="ランダムの相手の残り手札"></div>
-          <div id="ranked-round-result" class="ranked-round-result hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+          <div id="ranked-round-result" class="ranked-round-result hidden" role="region" aria-label="ラウンド結果" aria-live="off" aria-atomic="true"></div>
           <p id="ranked-instruction" class="ranked-instruction">一枚を選んでください。</p>
           <div id="ranked-player-hand" class="ranked-card-row" aria-label="あなたのソロ・ランク戦の手札"></div>
           <div class="ranked-game-actions">
@@ -102,16 +103,17 @@
           </div>
         </div>
 
-        <section id="ranked-postgame" class="ranked-postgame hidden" aria-live="polite">
+        <section id="ranked-postgame" class="ranked-postgame hidden" role="region" aria-label="対局の最終結果" aria-live="off" aria-atomic="true">
           <span class="section-label">対局終了</span>
           <h3 id="ranked-postgame-result">—</h3>
           <div class="ranked-postgame-grid">
-            <article><span>最終スコア</span><strong id="ranked-postgame-score">—</strong></article>
-            <article><span>判断成績</span><strong id="ranked-postgame-performance">—</strong></article>
-            <article><span>選択損失</span><strong id="ranked-postgame-regret">—</strong></article>
-            <article><span>レーティング</span><strong id="ranked-postgame-rating">—</strong></article>
-            <article><span>結果運</span><strong id="ranked-postgame-luck">—</strong></article>
+            <article><span>最終スコア（実結果）</span><strong id="ranked-postgame-score">—</strong></article>
+            <article><span>判断成績（レート対象）</span><strong id="ranked-postgame-performance">—</strong></article>
+            <article><span>選択損失（低いほど良い）</span><strong id="ranked-postgame-regret">—</strong></article>
+            <article><span>レーティング（前 → 後）</span><strong id="ranked-postgame-rating">—</strong></article>
+            <article><span>結果運（実結果との差）</span><strong id="ranked-postgame-luck">—</strong></article>
           </div>
+          <p id="ranked-postgame-guide" class="ranked-postgame-guide">実際の勝敗と判断の評価は別です。今回のレーティング更新は判断成績を基準に計算され、結果運は実際の結果との差を示します。</p>
           <p id="ranked-seed-reveal" class="ranked-seed-reveal"></p>
           <button id="ranked-play-again" class="primary-button" type="button"><span>次のソロ・ランク戦へ</span><b aria-hidden="true">→</b></button>
         </section>

@@ -64,6 +64,37 @@ test('ソロ・ランク戦のカードもPvPと同じJk表記・中央書体・
   assert.match(css, /\.ranked-card-corner-pip\s*\{[^}]*font-family:\s*var\(--serif\);/);
   assert.match(css, /@media \(max-width: 760px\) \{[\s\S]*?\.ranked-card\s*\{\s*flex:\s*0 0 110px;/);
   assert.match(css, /@media \(max-width: 390px\) \{\s*\.ranked-card\s*\{\s*flex-basis:\s*102px;/);
-  assert.match(html, /ranked\.css\?v=ranked-v10/);
-  assert.match(html, /ranked-client\.js\?v=ranked-v10/);
+  assert.match(html, /ranked\.css\?v=ranked-v13/);
+  assert.match(html, /presentation-events\.js\?v=presentation-v1/);
+  assert.match(html, /ranked-client\.js\?v=ranked-v13/);
+});
+
+test('Ranked終了画面は実結果と判断評価を日本語で区別し、レート算出の基準を誤解させない', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'ranked.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, 'ranked.css'), 'utf8');
+
+  assert.match(html, /最終スコア（実結果）/);
+  assert.match(html, /判断成績（レート対象）/);
+  assert.match(html, /選択損失（低いほど良い）/);
+  assert.match(html, /結果運（実結果との差）/);
+  assert.match(html, /id="ranked-postgame-guide"/);
+  assert.match(html, /レーティング更新は判断成績を基準/);
+  assert.match(css, /\.ranked-postgame-guide\s*\{/);
+  assert.match(css, /\.ranked-postgame-grid article > span\s*\{[^}]*min-height:/);
+});
+
+test('Rankedの再開・再取得は既存の公開結果を再通知せず、新しいラウンド／終局だけをライブ通知する', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'ranked.html'), 'utf8');
+  const client = fs.readFileSync(path.join(__dirname, 'ranked-client.js'), 'utf8');
+
+  assert.match(html, /id="ranked-round-result"[^>]*role="region"[^>]*aria-live="off"/);
+  assert.match(html, /id="ranked-postgame"[^>]*role="region"[^>]*aria-live="off"/);
+  assert.match(client, /renderedRoundKey: null/);
+  assert.match(client, /renderedFinalKey: null/);
+  assert.match(client, /function setRankedRoundAnnouncement\(announce = false\)/);
+  assert.match(client, /function setRankedFinalAnnouncement\(announce = false\)/);
+  assert.match(client, /if \(state\.renderedRoundKey === nextRoundKey\) return;/);
+  assert.match(client, /setRankedRoundAnnouncement\(isNewRound\);/);
+  assert.match(client, /if \(state\.renderedFinalKey === finalRenderKey\) return;/);
+  assert.match(client, /setRankedFinalAnnouncement\(presentation\.isNewFinale\);/);
 });

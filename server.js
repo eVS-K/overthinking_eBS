@@ -3,7 +3,7 @@ const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
 const { Server } = require('socket.io');
-const { createInitialHand, resolveRound } = require('./game-rules');
+const { createInitialHand, resolveRoundDetails } = require('./game-rules');
 const {
   CLASSIC_PRIVATE_RULESET_ID,
   CLASSIC_ROUND_LIMIT,
@@ -2253,7 +2253,8 @@ function processTurn(room) {
 
   const [firstCard] = firstPlayer.hand.splice(firstIndex, 1);
   const [secondCard] = secondPlayer.hand.splice(secondIndex, 1);
-  const result = resolveRound(firstCard, secondCard);
+  const roundDetails = resolveRoundDetails(firstCard, secondCard);
+  const result = roundDetails.winner;
   const awardedCards = 2 + room.stack.length;
 
   let roundWinner = 'Draw';
@@ -2279,7 +2280,12 @@ function processTurn(room) {
     p2Card: secondCard,
     winner: roundWinner,
     winnerSeat: roundWinnerSeat,
-    awardedCards: result === 'draw' ? 0 : awardedCards
+    awardedCards: result === 'draw' ? 0 : awardedCards,
+    // This is a server-authored explanation code for an already public
+    // classic round. It never contains a hidden selection or client input.
+    comparison: roundDetails.comparison,
+    p1Strength: roundDetails.p1Strength,
+    p2Strength: roundDetails.p2Strength
   };
   room.history.push(resultRecord);
   room.lastRound = resultRecord;

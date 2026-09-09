@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createInitialHand, resolveRound } = require('./game-rules');
+const { createInitialHand, resolveRound, resolveRoundDetails } = require('./game-rules');
 
 const card = (id) => createInitialHand().find((item) => item.id === id);
 
@@ -20,6 +20,21 @@ test('Joker は相手の強さをコピーし、Joker 同士は引き分け', ()
   assert.equal(resolveRound(card('joker'), card('king')), 'draw');
   assert.equal(resolveRound(card('queen'), card('joker')), 'draw');
   assert.equal(resolveRound(card('joker'), card('joker')), 'draw');
+});
+
+test('公開用の比較理由は勝敗正本と同じ規則から作られる', () => {
+  assert.deepEqual(resolveRoundDetails(card('two'), card('ace')), {
+    winner: 'p1', p1Strength: 2, p2Strength: 14, comparison: 'two-beats-ace'
+  });
+  assert.deepEqual(resolveRoundDetails(card('three'), card('joker')), {
+    winner: 'p1', p1Strength: 3, p2Strength: 0, comparison: 'three-beats-joker'
+  });
+  assert.deepEqual(resolveRoundDetails(card('joker'), card('king')), {
+    winner: 'draw', p1Strength: 13, p2Strength: 13, comparison: 'joker-copies'
+  });
+  assert.deepEqual(resolveRoundDetails(card('king'), card('queen')), {
+    winner: 'p1', p1Strength: 13, p2Strength: 12, comparison: 'strength-compare'
+  });
 });
 
 test('各プレイヤーには独立した7枚の手札が配られる', () => {

@@ -7,22 +7,39 @@ const assert = require('node:assert/strict');
 
 const read = (file) => fs.readFileSync(path.join(__dirname, file), 'utf8');
 
-test('PvPの最終結果パネルは空いた手札領域を使い、一度だけライブ通知する', () => {
+test('PvPの最終結果パネルは空いた手札領域を使い、新しい終局だけをライブ通知する', () => {
   const html = read('index.html');
   const client = read('main.js');
   const css = read('style.css');
 
-  assert.match(html, /id="final-result-panel"[^>]*role="status"/);
+  assert.match(html, /id="final-result-panel"[^>]*role="region"[^>]*aria-live="off"/);
   assert.ok(
     html.indexOf('id="my-hand"') < html.indexOf('id="final-result-panel"'),
     '最終結果パネルは、終了時に空く自分の手札の直後に置く'
   );
   assert.match(client, /function renderFinalResult\(/);
   assert.match(client, /elements\.myHand\.classList\.toggle\('hidden', finished\);/);
-  assert.match(client, /if \(!isNewFinale\) return;/);
+  assert.match(client, /if \(!finaleChanged\) return;/);
+  assert.match(client, /function setFinalResultAnnouncement\(panel, announce = false\)/);
+  assert.match(client, /setFinalResultAnnouncement\(panel, isNewFinale\);/);
+  assert.match(client, /kind: 'match-final', priority: 100, exclusive: true/);
   assert.match(client, /winnerSeat/);
   assert.match(client, /forfeitedBySeat/);
   assert.match(css, /\.final-result-panel\s*\{[^}]*min-height:\s*clamp\(190px, 25vw, 265px\);/);
+});
+
+test('公開済みのラウンド結果は再接続・チャット更新で再描画／再通知せず、新しい公開結果だけを読み上げる', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+
+  assert.match(html, /id="reveal-area"[^>]*aria-live="off"/);
+  assert.match(client, /let lastRevealRenderKey = '';/);
+  assert.match(client, /function getRevealRenderKey\(lastRound, finishReason = null, winnerName = null\)/);
+  assert.match(client, /function setRevealAnnouncementMode\(announce = false\)/);
+  assert.match(client, /if \(!roundChanged && !hasNewExpandedEffect && lastRevealRenderKey === revealRenderKey\) return;/);
+  assert.match(client, /setRevealAnnouncementMode\(isNewRound \|\| shouldPlayExpandedEffect\);/);
+  assert.match(client, /setRevealAnnouncementMode\(false\);/);
+  assert.match(client, /lastRevealRenderKey = '';/);
 });
 
 test('カード能力は常設せず、選択中の自分のカードだけを手札直下で説明する', () => {
@@ -30,7 +47,7 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
   const client = read('main.js');
   const css = read('style.css');
 
-  assert.match(html, /id="selected-card-panel"[^>]*aria-live="polite"/);
+  assert.match(html, /id="selected-card-panel"[^>]*aria-live="off"/);
   assert.match(html, /id="selected-card-name"/);
   assert.match(html, /id="selected-card-strength"/);
   assert.match(html, /id="selected-card-description"/);
@@ -40,6 +57,11 @@ test('カード能力は常設せず、選択中の自分のカードだけを�
     '選択中カードの詳細は、手札の直下かつ最終結果パネルの前に表示する'
   );
   assert.match(client, /function renderSelectedCardDetails\(/);
+  assert.match(client, /let lastSelectedCardRenderKey = '';/);
+  assert.match(client, /function getSelectedCardRenderKey\(card, suitType\)/);
+  assert.match(client, /function setSelectedCardAnnouncementMode\(announce = false\)/);
+  assert.match(client, /if \(!selectionChanged\) \{/);
+  assert.match(client, /setSelectedCardAnnouncementMode\(!presentationHydrating\);/);
   assert.match(client, /function getCardBaseStrengthLabel\(/);
   assert.match(client, /baseStrength: Number\.isSafeInteger\(card\.baseStrength\)/);
   assert.match(client, /setText\(elements\.selectedCardStrength, strengthText\);/);
@@ -66,10 +88,11 @@ test('高度なTarotの対象選択は盤面上の札を選んでから確定し
   const server = read('server.js');
   const css = read('style.css');
 
-  assert.match(html, /id="private-action-panel"[^>]*aria-live="polite"/);
+  assert.match(html, /id="private-action-panel"[^>]*role="region"[^>]*aria-live="off"/);
+  assert.match(html, /id="private-action-selection"[^>]*aria-live="off"/);
   assert.match(html, /id="private-action-confirm"[^>]*type="button"/);
-  assert.match(html, /id="opp-action-target-tray"/);
-  assert.match(html, /id="my-action-target-tray"/);
+  assert.match(html, /id="opp-action-target-tray"[^>]*aria-live="off"/);
+  assert.match(html, /id="my-action-target-tray"[^>]*aria-live="off"/);
   assert.doesNotMatch(html, /id="private-action-candidates"/);
   assert.ok(
     html.indexOf('id="selected-card-panel"') < html.indexOf('id="private-action-panel"')
@@ -77,10 +100,18 @@ test('高度なTarotの対象選択は盤面上の札を選んでから確定し
     '対象を選んだ後の確定操作は選択中カードと最終結果の間に置く'
   );
   assert.match(client, /function getPrivateActionTarget\(/);
+  assert.match(client, /function getPrivateActionRenderKey\(action, target, canChoose\)/);
+  assert.match(client, /function setPrivateActionAnnouncementMode\(announce = false\)/);
+  assert.match(client, /function setPrivateActionSelectionAnnouncementMode\(announce = false\)/);
+  assert.match(client, /const isNewAction = actionRenderKey !== lastPrivateActionRenderKey;/);
+  assert.match(client, /setPrivateActionAnnouncementMode\(isNewAction && !presentationHydrating\);/);
+  assert.match(client, /const isNewSelection = Boolean\(selectionRenderKey && selectionRenderKey !== lastPrivateActionSelectionRenderKey\);/);
+  assert.match(client, /setPrivateActionSelectionAnnouncementMode\(isNewSelection && !presentationHydrating\);/);
   assert.match(client, /function renderPrivateActionTargetTrays\(/);
   assert.match(client, /privateActionSelectedTargetId/);
   assert.match(client, /card-effect-target/);
   assert.match(client, /effect-target-selected/);
+  assert.match(client, /cardElement\.setAttribute\('aria-pressed', String\(isEffectTargetSelected\)\);/);
   assert.match(client, /function renderPrivatePendingAction\(/);
   assert.match(client, /function submitPrivateActionChoice\(/);
   assert.match(client, /socket\.emit\('resolve_private_action'/);
@@ -103,6 +134,7 @@ test('ロック札とThe Starのノイズ札は、色だけに頼らず状態を
   assert.match(client, /const isLocked = card\?\.state\?\.locked === true;/);
   assert.match(client, /const isNoise = card\?\.category === 'noise' \|\| card\?\.state\?\.ownerOnlyNoise === true;/);
   assert.match(client, /const canChooseCard = isInteractive && !isLocked;/);
+  assert.match(client, /cardElement\.setAttribute\('aria-pressed', String\(isSelected\)\);/);
   assert.match(client, /ロック中のため、今は選べません。/);
   assert.match(client, /card-lock-badge/);
   assert.match(css, /\.card-locked\s*\{[^}]*border-style:\s*dashed;/);
@@ -174,17 +206,19 @@ test('ランダムマッチは相手退出時に自動で再検索し、観戦�
   assert.match(server, /room\.matchType === 'random'\) \{\s*emitError\(socket, 'ランダムマッチでは観戦者に切り替えられません。'\)/);
 });
 
-test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を使う', () => {
+test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を使い、効果・表示イベント基盤を先に読む', () => {
   const html = read('index.html');
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v36/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v36/);
+  assert.match(html, /style\.css\?v=pvp-v44/);
+  assert.match(html, /effect-language\.js\?v=effect-language-v1/);
+  assert.match(html, /presentation-events\.js\?v=presentation-v1/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v44/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v36/);
+  assert.match(loader, /main\.js\?v=pvp-v44/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -195,6 +229,94 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   assert.match(gatewayHtml, /対戦サーバーを起動しています/);
   assert.match(gatewayScript, /window\.fetch\(healthUrl/);
   assert.match(gatewayScript, /credentials: 'omit'/);
+});
+
+test('拡張効果は紫の説明帯と短い種別キューを保ち、生成・複製の✦を共通化する', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /effect-language\.js\?v=effect-language-v1/);
+  assert.match(client, /function getExpandedEffectPresentation\(/);
+  assert.match(client, /function createPublicEffectCue\(/);
+  assert.match(client, /getExpandedEffectPresentation\(lastRound\.effects\)/);
+  assert.match(client, /getExpandedEffectPresentation\(round\.effects\)/);
+  assert.match(client, /return getExpandedEffectPresentation\(effects\)\.primary\?\.id \|\| '';/);
+  assert.match(css, /\.round-outcome \.round-effect-detail\s*\{[^}]*background:\s*rgba\(103, 79, 164, \.2\);/);
+  assert.match(css, /\.effect-token-generate\s*\{[^}]*color:\s*#b9efff;/);
+  assert.match(css, /\.round-effect-detail\.effect-kind-generate\s*\{[^}]*border-inline-start-color:\s*#9be4f4;/);
+  assert.match(css, /\.history-detail \.history-effect\.effect-kind-generate/);
+});
+
+test('観戦を選んだ入口は観戦CTAと役割説明へ切り替わる', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="entry-mode-description"[^>]*role="status"/);
+  assert.match(html, /id="spectator-entry-note"[^>]*role="status"/);
+  assert.match(client, /const isSpectatorEntry = !isRandomMode && elements\.spectateModeInput\.checked;/);
+  assert.match(client, /isSpectatorEntry \? '観戦する' : '入室する'/);
+  assert.match(client, /観戦者として入室する/);
+  assert.match(client, /function syncSpectatorJoinOptions\([\s\S]*?renderEntryMode\(\);/);
+  assert.match(css, /\.join-form-spectator \.join-options/);
+  assert.match(css, /\.spectator-entry-note/);
+});
+
+test('対局状態は文言だけでなく意味別の状態バナーとして表示する', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="status-message"[^>]*data-state="waiting"/);
+  assert.match(client, /function setGameStatus\(value, state = 'neutral'\)/);
+  assert.match(client, /let lastGameStatusKey = '';/);
+  assert.match(client, /const statusKey = `\$\{normalizedState\}\|\$\{text\}`;/);
+  assert.match(client, /if \(statusKey === lastGameStatusKey\) return;/);
+  assert.match(client, /lastGameStatusKey = '';/);
+  assert.match(client, /カードを伏せました。相手の選択を待っています…/);
+  assert.match(client, /room\.viewer\.hasConfirmedSelection \? 'waiting' : 'decision'/);
+  assert.match(client, /setGameStatus\('対戦相手の再接続を待っています。', 'reconnecting'\)/);
+  assert.match(css, /\.status-msg\[data-state="decision"\]/);
+  assert.match(css, /\.status-msg\[data-state="reconnecting"\], \.status-msg\[data-state="error"\]/);
+});
+
+test('主ボタンはカード未選択・確定可能・伏せ札済みを区別し、現在の次操作を示す', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="confirmBtn"[^>]*aria-describedby="status-message"[^>]*data-state="selection-needed"/);
+  assert.match(html, /id="confirm-button-label">カードを選んでください/);
+  assert.match(html, /id="confirm-button-icon" class="hidden"/);
+  assert.match(client, /confirmButtonLabel: document\.getElementById\('confirm-button-label'\)/);
+  assert.match(client, /confirmButtonIcon: document\.getElementById\('confirm-button-icon'\)/);
+  assert.match(client, /function updateConfirmButton\(\) \{/);
+  assert.match(client, /let label = '対局の開始を待っています';/);
+  assert.match(client, /label = 'カードを選んでください';/);
+  assert.match(client, /label = 'この一枚で勝負する';/);
+  assert.match(client, /label = 'カードを伏せました';/);
+  assert.match(client, /elements\.confirmButton\.dataset\.state = state;/);
+  assert.match(client, /elements\.confirmButtonIcon\?\.classList\.toggle\('hidden', !showIcon\);/);
+  assert.match(css, /\.confirm-button\[data-state="selection-needed"\]:disabled/);
+  assert.match(css, /\.confirm-button\[data-state="committed"\]:disabled/);
+});
+
+test('クラシックの公開結果はサーバー確定の比較理由を表示し、クライアントで勝敗を推測しない', () => {
+  const client = read('main.js');
+  const server = read('server.js');
+  const rules = read('game-rules.js');
+  const css = read('style.css');
+
+  assert.match(rules, /function resolveRoundDetails\(/);
+  assert.match(server, /const roundDetails = resolveRoundDetails\(firstCard, secondCard\);/);
+  assert.match(server, /comparison: roundDetails\.comparison/);
+  assert.match(client, /function formatPublicRoundComparison\(round\)/);
+  assert.match(client, /ROUND_COMPARISON_LABELS\[comparison\]/);
+  assert.match(client, /comparison\.className = 'round-comparison';/);
+  assert.match(client, /comparisonDetail\.className = 'history-comparison';/);
+  assert.match(css, /\.round-outcome \.round-comparison/);
+  assert.match(css, /\.history-detail \.history-comparison/);
 });
 
 test('観戦中は空席参加予約の順番を部屋内で変更でき、席と勝敗の色・名前を対応させる', () => {
@@ -349,8 +471,9 @@ test('生成・総ラウンドTarotの効果は結果と履歴へ表示し、対
   assert.match(client, /function getExpandedEffectBurstKind\(/);
   assert.match(client, /function getExpandedEffectBurstId\(/);
   assert.match(client, /hasNewExpandedEffect/);
+  assert.match(client, /function scheduleExpandedRoundEffects\(/);
   assert.match(client, /function playExpandedRoundEffects\(/);
-  assert.match(client, /playExpandedRoundEffects\(lastRound\.effects\)/);
+  assert.match(client, /scheduleExpandedRoundEffects\(lastRound\.effects\)/);
   assert.match(client, /round-effect-detail/);
   assert.match(client, /history-effect/);
   assert.match(server, /function publicExpandedRoundEffect\(/);
@@ -453,6 +576,27 @@ test('拡張デッキ一覧は、続きがあるときにフェードとスク�
   assert.match(css, /\.expanded-deck-list\s*\{[^}]*max-height:\s*var\(--expanded-deck-list-height, 270px\)/);
   assert.match(css, /\.expanded-deck-height-control\s*\{/);
   assert.match(css, /\.deck-height-stepper\s*\{/);
+});
+
+test('拡張デッキの作業台はローカル表示だけを、採用状況とカード種別で絞り込める', () => {
+  const html = read('index.html');
+  const client = read('main.js');
+  const css = read('style.css');
+
+  assert.match(html, /id="expanded-deck-filters"[^>]*aria-label="表示するカードを絞り込む"/);
+  assert.match(html, /data-deck-filter="all"[^>]*aria-pressed="true"/);
+  assert.match(html, /data-deck-filter="included"/);
+  assert.match(html, /data-deck-filter="tarot"/);
+  assert.match(html, /data-deck-filter="normal"/);
+  assert.match(html, /id="expanded-deck-filter-summary"[^>]*aria-live="polite"/);
+  assert.match(client, /const EXPANDED_DECK_FILTERS = Object\.freeze\(\['all', 'included', 'tarot', 'normal'\]\)/);
+  assert.match(client, /function cardMatchesExpandedDeckFilter\(card, copies\)/);
+  assert.match(client, /catalog\.filter\(\(card\) => cardMatchesExpandedDeckFilter\(card, copiesById\.get\(card\.id\) \|\| 0\)\)/);
+  assert.match(client, /Filters are a local reading aid only/);
+  assert.match(client, /elements\.expandedDeckFilters\?\.addEventListener\('click'/);
+  assert.match(css, /\.expanded-deck-toolbar\s*\{/);
+  assert.match(css, /\.expanded-deck-filter\.is-active\s*\{/);
+  assert.match(css, /\.expanded-deck-filter-summary\s*\{/);
 });
 
 test('モバイルの手札と組み合わせ早見表は、横に続きがある側だけをフェードで示す', () => {

@@ -12,6 +12,34 @@
   const HANDLE_PATTERN = rankedUi.HANDLE_PATTERN || /^[A-Za-z0-9_-]{3,20}$/;
   const localizedErrorMessage = rankedUi.errorMessage || (() => '操作を完了できませんでした。通信状態を確認して、もう一度お試しください。');
   const localizedErrorKind = rankedUi.errorKind || (() => 'error');
+  const presentationEvents = window.OverthinkingPresentationEvents || {};
+  const rankedPresentationQueue = typeof presentationEvents.createPresentationEventQueue === 'function'
+    ? presentationEvents.createPresentationEventQueue()
+    : (() => {
+        let scopeId = '';
+        const seen = new Set();
+        let exclusivePriority = -1;
+        return {
+          beginScope(nextScopeId) {
+            if (nextScopeId === scopeId) return { changed: false };
+            scopeId = nextScopeId;
+            seen.clear();
+            exclusivePriority = -1;
+            return { changed: true };
+          },
+          claim(event, { animate = true } = {}) {
+            if (!event?.id || seen.has(event.id)) return { accepted: false };
+            seen.add(event.id);
+            const priority = Number.isSafeInteger(event.priority) ? event.priority : 0;
+            const blocked = exclusivePriority >= 0 && priority < exclusivePriority;
+            if (event.exclusive === true && !blocked) exclusivePriority = Math.max(exclusivePriority, priority);
+            return { accepted: Boolean(animate) && !blocked };
+          }
+        };
+      })();
+  const prefersReducedMotion = () => typeof presentationEvents.prefersReducedMotion === 'function'
+    ? presentationEvents.prefersReducedMotion(window)
+    : Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
   const state = {
     profile: null,
     game: null,
@@ -24,7 +52,9 @@
     timeoutSettleRetryAt: 0,
     messageTimer: null,
     csrfCookieName: '__Host-overthinking-csrf',
-    presentation: { gameId: null, status: null, roundKey: null, playerScore: null, aiScore: null }
+    presentation: { gameId: null, status: null, roundKey: null, playerScore: null, aiScore: null },
+    renderedRoundKey: null,
+    renderedFinalKey: null
   };
   const elements = Object.fromEntries([
     'ranked-loading', 'ranked-auth', 'ranked-auth-actions', 'ranked-auth-notice', 'ranked-dashboard', 'ranked-logout', 'ranked-auth-status', 'ranked-auth-status-label', 'ranked-start', 'ranked-empty-state', 'ranked-board',
@@ -221,14 +251,29 @@
       state.presentation = { gameId: null, status: null, roundKey: null, playerScore: null, aiScore: null };
       return { isNewRound: false, isNewFinale: false, playerGain: 0, aiGain: 0 };
     }
+    const scope = rankedPresentationQueue.beginScope(`ranked:${game.id}`);
     const last = game.history?.[game.history.length - 1];
     const nextRoundKey = roundKey(game, last);
-    if (state.presentation.gameId !== game.id) {
+    if (state.presentation.gameId !== game.id || scope.changed) {
+      if (last) rankedPresentationQueue.claim({ id: `round:${nextRoundKey}`, kind: 'round-reveal', priority: 60 }, { animate: false });
+      if (game.status !== 'active') {
+        rankedPresentationQueue.claim({ id: `final:${game.id}:${game.status}`, kind: 'match-final', priority: 100, exclusive: true }, { animate: false });
+      }
       state.presentation = { gameId: game.id, status: game.status, roundKey: nextRoundKey, playerScore: game.playerScore, aiScore: game.aiScore };
       return { isNewRound: false, isNewFinale: false, playerGain: 0, aiGain: 0 };
     }
-    const isNewRound = Boolean(last && state.presentation.roundKey !== nextRoundKey);
-    const isNewFinale = state.presentation.status === 'active' && game.status !== 'active';
+    const hasNewRound = Boolean(last && state.presentation.roundKey !== nextRoundKey);
+    const hasNewFinale = state.presentation.status === 'active' && game.status !== 'active';
+    // Terminal status is exclusive: a timeout, forfeit, or normal completion
+    // must not also replay a lower-priority round animation on the same view.
+    const finalPresentation = hasNewFinale
+      ? rankedPresentationQueue.claim({ id: `final:${game.id}:${game.status}`, kind: 'match-final', priority: 100, exclusive: true }, { animate: !prefersReducedMotion() })
+      : null;
+    const roundPresentation = hasNewRound
+      ? rankedPresentationQueue.claim({ id: `round:${nextRoundKey}`, kind: 'round-reveal', priority: 60 }, { animate: !prefersReducedMotion() })
+      : null;
+    const isNewRound = Boolean(roundPresentation?.accepted);
+    const isNewFinale = Boolean(finalPresentation?.accepted);
     const playerGain = isNewRound ? Math.max(0, game.playerScore - state.presentation.playerScore) : 0;
     const aiGain = isNewRound ? Math.max(0, game.aiScore - state.presentation.aiScore) : 0;
     state.presentation = { gameId: game.id, status: game.status, roundKey: nextRoundKey, playerScore: game.playerScore, aiScore: game.aiScore };
@@ -256,7 +301,7 @@
   }
 
   function triggerRoundImpact(winner) {
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (prefersReducedMotion()) return;
     const panel = elements['ranked-game-panel'];
     const impactClass = winner === 'player' ? 'round-impact-win' : winner === 'ai' ? 'round-impact-loss' : 'round-impact-draw';
     panel.classList.remove('round-impact-win', 'round-impact-loss', 'round-impact-draw');
@@ -264,14 +309,36 @@
     window.setTimeout(() => panel.classList.remove(impactClass), 720);
   }
 
+  function setRankedRoundAnnouncement(announce = false) {
+    const target = elements['ranked-round-result'];
+    if (!target) return;
+    target.setAttribute('role', announce ? 'status' : 'region');
+    target.setAttribute('aria-live', announce ? 'polite' : 'off');
+    target.setAttribute('aria-label', 'ラウンド結果');
+  }
+
+  function setRankedFinalAnnouncement(announce = false) {
+    const target = elements['ranked-postgame'];
+    if (!target) return;
+    target.setAttribute('role', announce ? 'status' : 'region');
+    target.setAttribute('aria-live', announce ? 'polite' : 'off');
+    target.setAttribute('aria-label', '対局の最終結果');
+  }
+
   function renderRoundResult(game, isNewRound) {
     const target = elements['ranked-round-result'];
     const last = game.history?.[game.history.length - 1];
     if (!last) {
+      state.renderedRoundKey = null;
+      setRankedRoundAnnouncement(false);
       target.className = 'ranked-round-result hidden';
       target.replaceChildren();
       return;
     }
+    const nextRoundKey = roundKey(game, last);
+    if (state.renderedRoundKey === nextRoundKey) return;
+    state.renderedRoundKey = nextRoundKey;
+    setRankedRoundAnnouncement(isNewRound);
     const outcome = last.winner === 'player' ? 'won' : last.winner === 'ai' ? 'lost' : 'draw';
     target.className = `ranked-round-result round-${outcome}${isNewRound ? ' round-new' : ''}`;
     const line = document.createElement('strong');
@@ -306,7 +373,13 @@
     setHidden(elements['ranked-empty-state'], Boolean(game));
     setHidden(elements['ranked-board'], !active);
     setHidden(elements['ranked-postgame'], !game || active);
-    if (!game) { renderHistory([]); return; }
+    if (!game) {
+      state.renderedRoundKey = null;
+      state.renderedFinalKey = null;
+      setRankedFinalAnnouncement(false);
+      renderHistory([]);
+      return;
+    }
     renderHistory(game.history);
     renderRoundResult(game, presentation.isNewRound);
     if (presentation.isNewRound) triggerRoundImpact(game.history[game.history.length - 1].winner);
@@ -333,8 +406,25 @@
           : '一枚を選び、ランダムの相手に挑んでください。';
       if (!versionBlocked) startTimer(game.deadline);
       else elements['ranked-timer'].textContent = '—';
+      state.renderedFinalKey = null;
+      setRankedFinalAnnouncement(false);
       return;
     }
+    const finalRenderKey = [
+      game.id,
+      game.status,
+      game.actualResult,
+      game.playerScore,
+      game.aiScore,
+      game.decisionPerformance,
+      game.totalRegret,
+      game.ratingBefore,
+      game.ratingAfter,
+      game.luck
+    ].join('|');
+    if (state.renderedFinalKey === finalRenderKey) return;
+    state.renderedFinalKey = finalRenderKey;
+    setRankedFinalAnnouncement(presentation.isNewFinale);
     const finalOutcome = game.actualResult === 'win' ? 'win' : game.actualResult === 'draw' ? 'draw' : game.actualResult === 'forfeit' ? 'forfeit' : 'loss';
     elements['ranked-postgame'].className = `ranked-postgame match-${finalOutcome}${presentation.isNewFinale ? ' match-new' : ''}`;
     elements['ranked-game-status'].textContent = game.status === 'forfeited' ? '投了' : '対局終了';

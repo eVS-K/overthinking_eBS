@@ -18,11 +18,21 @@ function createInitialHand() {
   return CARD_DEFINITIONS.map((card) => ({ ...card }));
 }
 
-function resolveRound(firstCard, secondCard) {
-  if (firstCard.id === 'two' && secondCard.id === 'ace') return 'p1';
-  if (secondCard.id === 'two' && firstCard.id === 'ace') return 'p2';
-  if (firstCard.id === 'three' && secondCard.id === 'joker') return 'p1';
-  if (secondCard.id === 'three' && firstCard.id === 'joker') return 'p2';
+function resolveRoundDetails(firstCard, secondCard) {
+  const rawFirstStrength = firstCard.strength;
+  const rawSecondStrength = secondCard.strength;
+  if (firstCard.id === 'two' && secondCard.id === 'ace') {
+    return { winner: 'p1', p1Strength: rawFirstStrength, p2Strength: rawSecondStrength, comparison: 'two-beats-ace' };
+  }
+  if (secondCard.id === 'two' && firstCard.id === 'ace') {
+    return { winner: 'p2', p1Strength: rawFirstStrength, p2Strength: rawSecondStrength, comparison: 'two-beats-ace' };
+  }
+  if (firstCard.id === 'three' && secondCard.id === 'joker') {
+    return { winner: 'p1', p1Strength: rawFirstStrength, p2Strength: rawSecondStrength, comparison: 'three-beats-joker' };
+  }
+  if (secondCard.id === 'three' && firstCard.id === 'joker') {
+    return { winner: 'p2', p1Strength: rawFirstStrength, p2Strength: rawSecondStrength, comparison: 'three-beats-joker' };
+  }
 
   const firstStrength = firstCard.id === 'joker'
     ? (secondCard.id === 'joker' ? 0 : secondCard.strength)
@@ -31,9 +41,17 @@ function resolveRound(firstCard, secondCard) {
     ? (firstCard.id === 'joker' ? 0 : firstCard.strength)
     : secondCard.strength;
 
-  if (firstStrength > secondStrength) return 'p1';
-  if (secondStrength > firstStrength) return 'p2';
-  return 'draw';
+  const comparison = firstCard.id === 'joker' || secondCard.id === 'joker'
+    ? 'joker-copies'
+    : firstStrength === secondStrength
+      ? 'equal-strength'
+      : 'strength-compare';
+  const winner = firstStrength > secondStrength ? 'p1' : secondStrength > firstStrength ? 'p2' : 'draw';
+  return { winner, p1Strength: firstStrength, p2Strength: secondStrength, comparison };
 }
 
-module.exports = { CARD_DEFINITIONS, createInitialHand, resolveRound };
+function resolveRound(firstCard, secondCard) {
+  return resolveRoundDetails(firstCard, secondCard).winner;
+}
+
+module.exports = { CARD_DEFINITIONS, createInitialHand, resolveRound, resolveRoundDetails };

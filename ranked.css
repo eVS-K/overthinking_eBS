@@ -190,7 +190,9 @@
 .ranked-postgame.match-new .ranked-postgame-grid { animation: ranked-finale-grid .54s ease-out .15s both; }
 .ranked-postgame-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; border: 1px solid var(--line); background: var(--line); }
 .ranked-postgame-grid article { min-width: 0; padding: 14px; background: rgba(5, 9, 20, .36); }
+.ranked-postgame-grid article > span { display: block; min-height: 2.8em; color: #c5d1e7; font-size: clamp(9px, 1.2vw, 11px); font-weight: 700; line-height: 1.4; }
 .ranked-postgame-grid strong { display: block; margin-top: 7px; overflow: hidden; color: var(--blue-bright); font-family: var(--mono); font-size: clamp(16px, 2.4vw, 21px); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.ranked-postgame-guide { margin: 14px 0 0; padding: 9px 11px; border: 1px solid rgba(141, 183, 255, .32); border-left: 3px solid rgba(141, 183, 255, .78); color: #c8d7ef; background: linear-gradient(100deg, rgba(43, 75, 132, .17), rgba(8, 15, 32, .22)); font-size: 11px; line-height: 1.65; }
 .ranked-seed-reveal { margin: 17px 0 0; overflow-wrap: anywhere; color: var(--faint); font-family: var(--mono); font-size: 10px; line-height: 1.6; }
 .ranked-postgame .primary-button { margin-top: 21px; }
 

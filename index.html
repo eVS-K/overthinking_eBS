@@ -11,9 +11,11 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
   <script src="page-redirect.js?v=security-v4"></script>
-  <link rel="stylesheet" href="style.css?v=pvp-v36">
+  <link rel="stylesheet" href="style.css?v=pvp-v44">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
-  <script src="socket-loader.js?v=pvp-v36"></script>
+  <script src="effect-language.js?v=effect-language-v1"></script>
+  <script src="presentation-events.js?v=presentation-v1"></script>
+  <script src="socket-loader.js?v=pvp-v44"></script>
 </head>
 <body>
   <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
@@ -44,10 +46,11 @@
         <nav class="mode-selector" aria-label="ゲームモード">
           <span class="mode-selector-label">ゲームモード</span>
           <div class="mode-selector-options">
-            <button id="private-mode-btn" class="mode-option mode-option-active" type="button" aria-pressed="true"><b>プライベート対戦</b><small>ルームキーで対戦</small></button>
-            <button id="random-mode-btn" class="mode-option" type="button" aria-pressed="false"><b>ランダムマッチ</b><small>オンラインの相手を探す</small></button>
-            <a id="ranked-mode-link" class="mode-option" href="https://overthinking-ebs.onrender.com/ranked"><b>ソロ・ランク戦</b><small>ランダムの相手 · ランキング</small></a>
+            <button id="private-mode-btn" class="mode-option mode-option-active" type="button" aria-pressed="true"><b>プライベート対戦</b><small>ルームキー・観戦・拡張設定</small></button>
+            <button id="random-mode-btn" class="mode-option" type="button" aria-pressed="false"><b>ランダムマッチ</b><small>すぐに対戦相手を探す</small></button>
+            <a id="ranked-mode-link" class="mode-option" href="https://overthinking-ebs.onrender.com/ranked"><b>ソロ・ランク戦</b><small>一人で判断力を競う · 要ログイン</small></a>
           </div>
+          <p id="entry-mode-description" class="entry-mode-description" role="status">ルームキーを共有して、友人と対戦・観戦できます。</p>
         </nav>
 
         <form id="join-form" class="join-form" novalidate>
@@ -73,7 +76,7 @@
             <small>同じ相手との再戦も、対局後に選べます。</small>
           </section>
 
-          <fieldset id="join-options" class="join-options">
+          <fieldset id="join-options" class="join-options" aria-describedby="spectator-entry-note">
             <legend>入室方法</legend>
             <label class="check-option" for="spectate-mode-input">
               <input id="spectate-mode-input" type="checkbox">
@@ -84,6 +87,8 @@
               <span><strong>空席ができたら対戦者として参加する</strong><small>希望した場合だけ、自動で対戦者に切り替わります。</small></span>
             </label>
           </fieldset>
+
+          <p id="spectator-entry-note" class="spectator-entry-note hidden" role="status">観戦として入室します。カードの選択・確定はできませんが、両者の手札、勝敗、チャットを確認できます。</p>
 
           <button id="joinBtn" class="primary-button" type="submit">
             <span id="join-button-label">入室する</span><b aria-hidden="true">→</b>
@@ -158,7 +163,7 @@
             <div id="opp-hand" class="card-row opponent-hand" aria-label="相手の手札" aria-describedby="opp-hand-scroll-description"></div>
             <span id="opp-hand-scroll-description" class="sr-only">相手の手札の続きは、横へスワイプまたは横スクロールして確認できます。</span>
           </div>
-          <section id="opp-action-target-tray" class="private-action-target-tray hidden" aria-live="polite" aria-atomic="true">
+          <section id="opp-action-target-tray" class="private-action-target-tray hidden" aria-live="off" aria-atomic="true">
             <p id="opp-action-target-label" class="private-action-target-label"></p>
             <div id="opp-action-target-cards" class="card-row private-action-target-cards" aria-label="能力の対象候補"></div>
           </section>
@@ -174,10 +179,10 @@
             <div class="stack-box"><span>持ち越し札</span><strong id="stack-count">0</strong><small>枚</small></div>
           </div>
 
-          <div id="reveal-area" class="reveal-area empty" aria-live="polite">
+          <div id="reveal-area" class="reveal-area empty" aria-live="off">
             <span class="reveal-placeholder">両者が一枚を伏せると、ここで勝負が明かされます</span>
           </div>
-          <p id="status-message" class="status-msg" role="status">接続を確認しています…</p>
+          <p id="status-message" class="status-msg" data-state="waiting" role="status">接続を確認しています…</p>
         </section>
 
         <section id="my-zone" class="player-zone my-zone" aria-label="あなたの手札">
@@ -189,11 +194,11 @@
             <div id="my-hand" class="card-row my-hand" aria-label="あなたの手札" aria-describedby="my-hand-scroll-description"></div>
             <span id="my-hand-scroll-description" class="sr-only">あなたの手札の続きは、横へスワイプまたは横スクロールして確認できます。</span>
           </div>
-          <section id="my-action-target-tray" class="private-action-target-tray hidden" aria-live="polite" aria-atomic="true">
+          <section id="my-action-target-tray" class="private-action-target-tray hidden" aria-live="off" aria-atomic="true">
             <p id="my-action-target-label" class="private-action-target-label"></p>
             <div id="my-action-target-cards" class="card-row private-action-target-cards" aria-label="能力の対象候補"></div>
           </section>
-          <section id="selected-card-panel" class="selected-card-panel hidden" aria-live="polite" aria-atomic="true" aria-labelledby="selected-card-label">
+          <section id="selected-card-panel" class="selected-card-panel hidden" aria-live="off" aria-atomic="true" aria-labelledby="selected-card-label">
             <span id="selected-card-suit" class="selected-card-suit" aria-hidden="true">♠</span>
             <div class="selected-card-copy">
               <span id="selected-card-label" class="section-label">選択中のカード</span>
@@ -202,7 +207,7 @@
               <p id="selected-card-description"></p>
             </div>
           </section>
-          <section id="private-action-panel" class="private-action-panel hidden" aria-live="polite" aria-atomic="true" aria-labelledby="private-action-title">
+          <section id="private-action-panel" class="private-action-panel hidden" role="region" aria-live="off" aria-atomic="true" aria-labelledby="private-action-title">
             <div class="private-action-heading">
               <div>
                 <span class="section-label">カード能力</span>
@@ -211,12 +216,12 @@
               <span id="private-action-timer" class="private-action-timer">—</span>
             </div>
             <p id="private-action-instruction" class="private-action-instruction"></p>
-            <p id="private-action-selection" class="private-action-selection">盤面上の発光している札を選んでください。</p>
+            <p id="private-action-selection" class="private-action-selection" aria-live="off" aria-atomic="true">盤面上の発光している札を選んでください。</p>
             <button id="private-action-confirm" class="private-action-confirm" type="button" disabled>この札に効果を適用する</button>
           </section>
-          <section id="final-result-panel" class="final-result-panel hidden" role="status" aria-live="polite" aria-atomic="true"></section>
+          <section id="final-result-panel" class="final-result-panel hidden" role="region" aria-label="対局の最終結果" aria-live="off" aria-atomic="true"></section>
           <div id="player-controls" class="controls">
-            <button id="confirmBtn" class="primary-button confirm-button" type="button" disabled><span>この一枚で勝負する</span><b aria-hidden="true">↗</b></button>
+            <button id="confirmBtn" class="primary-button confirm-button" type="button" disabled aria-describedby="status-message" data-state="selection-needed"><span id="confirm-button-label">カードを選んでください</span><b id="confirm-button-icon" class="hidden" aria-hidden="true">↗</b></button>
             <button id="surrenderBtn" class="surrender-button hidden" type="button">降参する</button>
             <button id="restartBtn" class="secondary-button hidden" type="button">対戦開始に同意する</button>
             <p id="start-agreement-status" class="start-agreement-status hidden" role="status" aria-live="polite"></p>
@@ -273,6 +278,15 @@
                 <div class="expanded-private-settings-heading">
                   <div><span class="section-label" id="expanded-private-settings-title">拡張デッキ</span><p>両者は同じ構成の手札を使います。</p></div>
                   <strong id="expanded-deck-total">0 / 14枚</strong>
+                </div>
+                <div class="expanded-deck-toolbar">
+                  <div id="expanded-deck-filters" class="expanded-deck-filters" role="group" aria-label="表示するカードを絞り込む">
+                    <button class="expanded-deck-filter is-active" type="button" data-deck-filter="all" aria-pressed="true" aria-controls="expanded-deck-list">すべて</button>
+                    <button class="expanded-deck-filter" type="button" data-deck-filter="included" aria-pressed="false" aria-controls="expanded-deck-list">採用中</button>
+                    <button class="expanded-deck-filter" type="button" data-deck-filter="tarot" aria-pressed="false" aria-controls="expanded-deck-list">Tarot</button>
+                    <button class="expanded-deck-filter" type="button" data-deck-filter="normal" aria-pressed="false" aria-controls="expanded-deck-list">通常札</button>
+                  </div>
+                  <output id="expanded-deck-filter-summary" class="expanded-deck-filter-summary" aria-live="polite">表示: 0 / 0 種</output>
                 </div>
                 <div id="expanded-deck-scroll" class="expanded-deck-scroll">
                   <div id="expanded-deck-list" class="expanded-deck-list" tabindex="0" aria-label="使用カードと枚数" aria-describedby="expanded-deck-scroll-description"></div>
