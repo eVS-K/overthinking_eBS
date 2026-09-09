@@ -10,6 +10,7 @@ const { createPrivatePendingAction } = require('./private-action-queue');
 const {
   CLASSIC_ROUND_LIMIT,
   CLASSIC_SCORE_TARGET,
+  FIRST_ROUND_TIME_BONUS_MS,
   MAX_CHAT_IPS_PER_ROOM,
   PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS,
   PRIVATE_ROOM_IDLE_TTL_MS,
@@ -33,6 +34,7 @@ const {
   getPublicRoomRules,
   getSelectableCardIds,
   getRoomTurnTimeLimitMs,
+  getRoomRoundTimeLimitMs,
   isPrivateRoomIdleExpired,
   normalizeJoinPreferences,
   processTurn,
@@ -540,8 +542,10 @@ test('選択したPrivateの制限時間は開始時に凍結され、対局タ�
   assert.equal(startWhenBothPlayersAgree(room), true);
   assert.equal(room.gameState, 'playing');
   assert.equal(room.activePrivateConfig.turnTimeLimitMs, 120_000);
-  assert.equal(room.pausedRemainingMs, 120_000);
+  assert.equal(FIRST_ROUND_TIME_BONUS_MS, 30_000);
+  assert.equal(room.pausedRemainingMs, 150_000);
   assert.equal(getRoomTurnTimeLimitMs(room), 120_000);
+  assert.equal(getRoomRoundTimeLimitMs(room), 150_000);
   assert.equal(finishGameByForfeit(room, room.players[0]), true);
 });
 
@@ -1063,16 +1067,16 @@ test('高度なPrivate対象操作は行為者だけに候補を公開し、一�
   assert.deepEqual(completePrivatePendingAction(room, target), { ok: false, code: 'missing' });
 });
 
-test('The Starは敗北時に相手へ候補を提示し、選ばれた札をノイズとして一度だけ追加する', (t) => {
+test('The Starは勝敗にかかわらず相手へ候補を提示し、選ばれた札をノイズとして一度だけ追加する', (t) => {
   const room = createAdvancedPrivateRoomForActionTest('advanced-star-action', [
-    'the-star', 'the-moon', 'ace', 'king', 'queen'
+    'the-star', 'ace', 'king', 'queen', 'jack'
   ], { roundLimit: 5 });
   t.after(() => {
     if (room.gameState !== 'finished') finishGameByForfeit(room, room.players[0]);
   });
   room.selections = {
     p1: handInstanceId(room, 'p1', 'the-star'),
-    p2: handInstanceId(room, 'p2', 'the-moon')
+    p2: handInstanceId(room, 'p2', 'ace')
   };
   processTurn(room);
 
@@ -1086,7 +1090,7 @@ test('The Starは敗北時に相手へ候補を提示し、選ばれた札をノ
   const actorView = createRoomView(room, 'p2');
   const otherView = createRoomView(room, 'p1');
   assert.equal(actorView.viewer.pendingAction.target.surface, 'addition');
-  assert.match(actorView.viewer.pendingAction.instruction, /敗北時のノイズ札追加/);
+  assert.match(actorView.viewer.pendingAction.instruction, /The Starの効果/);
   assert.ok(actorView.viewer.pendingAction.target.cards.some((card) => card.definitionId === 'king'));
   assert.equal(otherView.viewer.pendingAction.target, undefined);
 
@@ -1101,6 +1105,41 @@ test('The Starは敗北時に相手へ候補を提示し、選ばれた札をノ
   assert.equal(concealed.definitionId, undefined);
   assert.equal(concealed.desc, '正体は、この札が出されたときに公開されます。');
   assert.doesNotMatch(JSON.stringify(concealed), /king|King/);
+});
+
+test('The High Priestessの相手手札候補は行為者の盤面と同じ物理札IDで選べる', (t) => {
+  const room = createAdvancedPrivateRoomForActionTest('priestess-action', [
+    'the-high-priestess', 'ace', 'king', 'queen', 'jack'
+  ], { roundLimit: 5 });
+  t.after(() => {
+    if (room.gameState !== 'finished') finishGameByForfeit(room, room.players[0]);
+  });
+  room.selections = {
+    p1: handInstanceId(room, 'p1', 'the-high-priestess'),
+    p2: handInstanceId(room, 'p2', 'ace')
+  };
+  processTurn(room);
+
+  const pending = room.privatePendingAction;
+  assert.equal(pending?.action.type, 'copy-opponent-hand');
+  assert.equal(pending?.action.actorSeat, 'p1');
+  assert.equal(pending?.action.targetSeat, 'p2');
+  const actorView = createRoomView(room, 'p1');
+  const otherView = createRoomView(room, 'p2');
+  const target = actorView.viewer.pendingAction.target;
+  assert.equal(target.surface, 'hand');
+  assert.equal(target.seat, 'p2');
+  assert.ok(target.cards.length > 0);
+  assert.deepEqual(target.cards.map((card) => card.id), target.candidateIds);
+  assert.deepEqual(
+    actorView.players.find((player) => player.id === 'p2').hand.map((card) => card.id),
+    target.candidateIds
+  );
+  assert.equal(otherView.viewer.pendingAction.target, undefined);
+
+  assert.deepEqual(completePrivatePendingAction(room, target.candidateIds[0]), { ok: true, timedOut: false });
+  assert.equal(room.privateGameState.p1.hand.length, 5);
+  assert.equal(room.privateGameState.p1.hand.filter((card) => card.state.generated === true).length, 1);
 });
 
 test('The Sunの破棄対象は確定前には状態を変えず、選択後だけ同時ラウンドへ反映する', (t) => {

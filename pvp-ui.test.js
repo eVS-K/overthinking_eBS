@@ -84,7 +84,8 @@ test('開始前の拡張デッキ札は設定プレビューとして明示し�
   assert.match(client, /const isPreview = card\?\.preview === true;/);
   assert.match(client, /isPreview \? ' card-preview' : ''/);
   assert.match(client, /開始時に使う設定デッキの札です。/);
-  assert.match(client, /const canChooseCard = isInteractive && !isLocked;/);
+  assert.match(client, /const canChoosePlayableCard = isInteractive && !isLocked;/);
+  assert.match(client, /const canChooseCard = canChoosePlayableCard && !canChooseEffectTarget;/);
 });
 
 test('高度なTarotの対象選択は盤面上の札を選んでから確定し、候補情報は選択者だけが送る', () => {
@@ -116,7 +117,9 @@ test('高度なTarotの対象選択は盤面上の札を選んでから確定し
   assert.match(client, /privateActionSelectedTargetId/);
   assert.match(client, /card-effect-target/);
   assert.match(client, /effect-target-selected/);
+  assert.match(client, /document\.createElement\(canChooseEffectTarget \? 'button' : 'div'\)/);
   assert.match(client, /cardElement\.setAttribute\('aria-pressed', String\(isEffectTargetSelected\)\);/);
+  assert.match(client, /cardElement\.setAttribute\('aria-controls', 'private-action-confirm'\);/);
   assert.match(client, /function renderPrivatePendingAction\(/);
   assert.match(client, /function submitPrivateActionChoice\(/);
   assert.match(client, /socket\.emit\('resolve_private_action'/);
@@ -138,7 +141,8 @@ test('ロック札とThe Starのノイズ札は、色だけに頼らず状態を
 
   assert.match(client, /const isLocked = card\?\.state\?\.locked === true;/);
   assert.match(client, /const isNoise = card\?\.category === 'noise' \|\| card\?\.state\?\.ownerOnlyNoise === true;/);
-  assert.match(client, /const canChooseCard = isInteractive && !isLocked;/);
+  assert.match(client, /const canChoosePlayableCard = isInteractive && !isLocked;/);
+  assert.match(client, /const canChooseCard = canChoosePlayableCard && !canChooseEffectTarget;/);
   assert.match(client, /cardElement\.setAttribute\('aria-pressed', String\(isSelected\)\);/);
   assert.match(client, /ロック中のため、今は選べません。/);
   assert.match(client, /card-lock-badge/);
@@ -216,14 +220,14 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v45/);
+  assert.match(html, /style\.css\?v=pvp-v46/);
   assert.match(html, /effect-language\.js\?v=effect-language-v1/);
   assert.match(html, /presentation-events\.js\?v=presentation-v1/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v45/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v46/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v45/);
+  assert.match(loader, /main\.js\?v=pvp-v46/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);
@@ -373,11 +377,12 @@ test('Private対戦のルール概要と制限時間設定は、現在の設定�
   assert.match(client, /begin_private_settings_edit/);
   assert.match(client, /finish_private_settings_edit/);
   assert.match(client, /const canAgreeToStart = canShowStartAgreement && !settingsEditing;/);
-  assert.match(client, /開始に同意済み：\$\{agreedNames\.join\('・'\)\}/);
+  assert.match(client, /開始同意 \$\{readyCount\} \/ 2/);
   assert.match(client, /function isRoomHost\(room\) \{\s*return \(room\?\.viewer\?\.isRoomHost \?\? room\?\.viewer\?\.isHost\)/);
   assert.match(client, /socket\.emit\('update_private_settings'/);
   assert.match(client, /room\.matchType === 'random'/);
-  assert.match(client, /const timerLimitMs = pendingAction \? 30_000 : getRoomRules\(room\)\.turnTimeLimitMs;/);
+  assert.match(client, /const firstRoundBonusMs = Number\.isSafeInteger\(rules\.firstRoundTimeBonusMs\)/);
+  assert.match(client, /rules\.turnTimeLimitMs \+ \(room\.round === 1 \? firstRoundBonusMs : 0\)/);
   assert.match(client, /\(remainingMs \/ timerLimitMs\) \* 100/);
   assert.match(css, /\.room-rules-panel\s*\{/);
   assert.match(css, /\.private-settings-controls\s*\{/);
@@ -396,12 +401,15 @@ test('Private拡張では共通デッキ・終了条件・Blankを待機中だ�
 
   assert.match(html, /id="private-ruleset-select"/);
   assert.match(html, /id="expanded-deck-list"/);
-  assert.match(html, /id="expanded-round-limit-input"/);
+  assert.match(html, /id="expanded-round-limit-input"[^>]*max="24"/);
+  assert.match(html, /最大10ラウンドまで設定できます/);
+  assert.match(html, /id="expanded-score-target-input"[^>]*max="48"/);
   assert.match(html, /id="expanded-score-target-enabled"/);
   assert.match(html, /規定の獲得枚数で早期決着にする/);
   assert.match(html, /指定枚数を先取した時点で総ラウンドを待たずに終了します/);
   assert.match(html, /id="expanded-blank-enabled"/);
   assert.match(client, /function renderExpandedDeckEditor\(/);
+  assert.match(client, /function getExpandedRoundLimitMaximum\(totalCards\)/);
   assert.match(client, /function requestPrivateSettingsChange\(/);
   assert.match(client, /const nextDeck = entry\s*\? deck[\s\S]*?: \[\{ definitionId, copies: nextCopies \}, \.\.\.deck\];/);
   assert.match(client, /VIRTUAL_BLANK_CARD_ID/);
@@ -550,7 +558,7 @@ test('Joker・2・3の能力カードは青い通常札に半透明の緑を重�
   assert.match(css, /\.expanded-deck-card-has-ability\s*\{[^}]*border-color:\s*#8ccbb7;[^}]*rgba\(94, 174, 149, \.1\)/);
 });
 
-test('拡張デッキ一覧は、続きがあるときにフェードとスクロール案内を出し、コンパクトな上下ボタンで高さを調整できる', () => {
+test('拡張デッキ一覧は、続きがあるときにフェードとスクロール案内を出し、コンパクトなスライダーで高さを調整できる', () => {
   const html = read('index.html');
   const client = read('main.js');
   const css = read('style.css');
@@ -558,10 +566,9 @@ test('拡張デッキ一覧は、続きがあるときにフェードとスク�
   assert.match(html, /id="expanded-deck-scroll"/);
   assert.match(html, /id="expanded-deck-scroll-hint"/);
   assert.match(html, /id="expanded-deck-scroll-description"/);
-  assert.match(html, /id="expanded-deck-height-decrease"[^>]*aria-label="一覧を40px低くする"/);
-  assert.match(html, /id="expanded-deck-height-increase"[^>]*aria-label="一覧を40px高くする"/);
+  assert.match(html, /id="expanded-deck-height-range"[^>]*type="range"[^>]*min="180"[^>]*max="440"[^>]*step="20"/);
   assert.match(html, /id="expanded-deck-height-value"/);
-  assert.match(html, /一覧の高さは180pxから440pxまで、40pxずつ調整できます。/);
+  assert.match(html, /一覧の高さは180pxから440pxまで、20pxずつ調整できます。/);
   assert.match(html, /aria-describedby="expanded-deck-scroll-description"/);
   assert.match(html, /下へスクロールして、すべてのカードを見る/);
   assert.match(client, /function updateExpandedDeckScrollCue\(/);
@@ -569,18 +576,30 @@ test('拡張デッキ一覧は、続きがあるときにフェードとスク�
   assert.match(client, /function applyExpandedDeckListHeight\(/);
   assert.match(client, /EXPANDED_DECK_HEIGHT_MIN_PX = 180/);
   assert.match(client, /EXPANDED_DECK_HEIGHT_MAX_PX = 440/);
-  assert.match(client, /EXPANDED_DECK_HEIGHT_STEP_PX = 40/);
-  assert.match(client, /EXPANDED_DECK_HEIGHT_STOPS = Object\.freeze\(\[180, 220, 260, 300, 340, 380, 420, 440\]\)/);
-  assert.match(client, /function adjustExpandedDeckListHeight\(direction\)/);
-  assert.match(client, /expandedDeckHeightDecrease\?\.addEventListener\('click'/);
-  assert.match(client, /expandedDeckHeightIncrease\?\.addEventListener\('click'/);
+  assert.match(client, /EXPANDED_DECK_HEIGHT_STEP_PX = 20/);
+  assert.match(client, /expandedDeckHeightRange\?\.addEventListener\('input'/);
   assert.match(client, /elements\.expandedDeckList\.addEventListener\('scroll', updateExpandedDeckScrollCue/);
   assert.match(client, /window\.addEventListener\('resize', \(\) => \{[\s\S]*?updateExpandedDeckScrollCue\(\);/);
   assert.match(css, /\.expanded-deck-scroll\.has-more-below::after\s*\{\s*opacity:\s*1;/);
   assert.match(css, /\.expanded-deck-scroll\.has-more-below \.expanded-deck-scroll-hint\s*\{\s*opacity:\s*1;/);
   assert.match(css, /\.expanded-deck-list\s*\{[^}]*max-height:\s*var\(--expanded-deck-list-height, 270px\)/);
   assert.match(css, /\.expanded-deck-height-control\s*\{/);
-  assert.match(css, /\.deck-height-stepper\s*\{/);
+  assert.match(css, /\.expanded-deck-height-control input\[type="range"\]\s*\{/);
+});
+
+test('開始待機と大型画面は、合意状況と履歴・チャットを別系統で読みやすく見せる', () => {
+  const css = read('style.css');
+  const client = read('main.js');
+  const server = read('server.js');
+
+  assert.match(client, /開始同意 \$\{readyCount\} \/ 2/);
+  assert.match(server, /FIRST_ROUND_TIME_BONUS_MS = 30_000/);
+  assert.match(server, /function getRoomRoundTimeLimitMs\(room\)/);
+  assert.match(css, /\.start-agreement-status\s*\{[^}]*order:\s*-1;[^}]*flex:\s*0 0 100%;/);
+  assert.match(css, /\.controls \.secondary-button,[\s\S]*?white-space:\s*nowrap;/);
+  assert.match(css, /@media \(min-width: 1320px\)\s*\{[\s\S]*?\.sidebar\s*\{[\s\S]*?grid-template-columns:/);
+  assert.match(css, /\.reveal-area\s*\{[^}]*min-height:\s*172px;/);
+  assert.match(css, /\.effect-presentation-token\s*\{[^}]*white-space:\s*nowrap;/);
 });
 
 test('拡張デッキの作業台はローカル表示だけを、採用状況とカード種別で絞り込める', () => {

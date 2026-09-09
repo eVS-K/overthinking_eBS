@@ -1084,12 +1084,28 @@ function getTargetActionsForAdvancedRound(next, {
       const candidates = next[opponent].hand.map((target) => target.instanceId);
       if (candidates.length) actions.push({ ...base, type: 'lock-one', actorSeat: seat, targetSeat: opponent, candidates });
     }
-    if ((behaviorDefinitionId === 'the-hanged-man' || behaviorDefinitionId === 'the-star') && winnerSeat === opponent) {
+    if (behaviorDefinitionId === 'the-hanged-man' && winnerSeat === opponent) {
       const candidates = [...new Set(next.deck.map((entry) => entry.definitionId))]
         .filter((definitionId) => definitionId !== 'blank');
       if (candidates.length) actions.push({
         ...base,
-        type: behaviorDefinitionId === 'the-star' ? 'opponent-choose-noise' : 'opponent-choose-copy',
+        type: 'opponent-choose-copy',
+        actorSeat: opponent,
+        targetSeat: opponent,
+        candidates
+      });
+    }
+    // The Star is a play-triggered effect, not a consolation effect.  It
+    // therefore queues the opponent's Noise addition after any non-terminal
+    // round whether Star won, drew, or lost.  Terminal rounds are still
+    // skipped by the shared finalisation path below so a finished game never
+    // waits on an optional target picker.
+    if (behaviorDefinitionId === 'the-star') {
+      const candidates = [...new Set(next.deck.map((entry) => entry.definitionId))]
+        .filter((definitionId) => definitionId !== 'blank');
+      if (candidates.length) actions.push({
+        ...base,
+        type: 'opponent-choose-noise',
         actorSeat: opponent,
         targetSeat: opponent,
         candidates

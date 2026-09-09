@@ -9,6 +9,7 @@
 const {
   EXPANDED_PRIVATE_RULESET_ID,
   MAX_PRIVATE_INITIAL_CARDS_PER_SIDE,
+  MAX_PRIVATE_ROUND_EXTENSION_FROM_INITIAL_DECK,
   assertPrivateRuleset,
   getPrivateRulesetFeatures
 } = require('./private-ruleset');
@@ -112,8 +113,8 @@ function normalizePrivateDeckEntries(entries, ruleset) {
   if (totalCards < EXPANDED_DECK_MINIMUM_CARDS || totalCards > EXPANDED_DECK_MAXIMUM_CARDS) {
     throw new RangeError('private expanded deck size is outside the supported range');
   }
-  if (ruleset.roundLimit > totalCards) {
-    throw new RangeError('private expanded round limit cannot exceed deck size');
+  if (ruleset.roundLimit > totalCards + MAX_PRIVATE_ROUND_EXTENSION_FROM_INITIAL_DECK) {
+    throw new RangeError('private expanded round limit cannot exceed deck size plus the generation extension');
   }
   if (ruleset.scoreTarget !== null && ruleset.scoreTarget > ruleset.roundLimit * 2) {
     throw new RangeError('private expanded score target cannot exceed obtainable cards');

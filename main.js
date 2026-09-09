@@ -3,6 +3,7 @@ const GAME_SERVER_URL = ['localhost', '127.0.0.1'].includes(window.location.host
   : 'https://overthinking-ebs.onrender.com';
 const RANKED_APP_URL = new URL('/ranked', GAME_SERVER_URL).toString();
 const TURN_TIME_LIMIT_MS = 90_000;
+const FIRST_ROUND_TIME_BONUS_MS = 30_000;
 const RECONNECT_GRACE_MS = 10_000;
 const PRIVATE_TURN_TIME_OPTIONS_MS = new Set([60_000, 90_000, 120_000]);
 const CHAT_MESSAGE_LIMIT = 50;
@@ -33,11 +34,12 @@ const VIRTUAL_BLANK_CARD_ID = 'virtual-blank';
 const MIN_EXPANDED_DECK_SIZE = 5;
 const MAX_EXPANDED_DECK_SIZE = 14;
 const MAX_EXPANDED_CARD_COPIES = 3;
+const MAX_EXPANDED_ROUND_EXTENSION = 10;
+const MAX_EXPANDED_ROUND_LIMIT = MAX_EXPANDED_DECK_SIZE + MAX_EXPANDED_ROUND_EXTENSION;
 const MAX_PRIVATE_PRESETS = 10;
 const EXPANDED_DECK_HEIGHT_MIN_PX = 180;
 const EXPANDED_DECK_HEIGHT_MAX_PX = 440;
-const EXPANDED_DECK_HEIGHT_STEP_PX = 40;
-const EXPANDED_DECK_HEIGHT_STOPS = Object.freeze([180, 220, 260, 300, 340, 380, 420, 440]);
+const EXPANDED_DECK_HEIGHT_STEP_PX = 20;
 const EXPANDED_DECK_FILTERS = Object.freeze(['all', 'included', 'tarot', 'normal']);
 const DEFAULT_EXPANDED_DECK = Object.freeze([
   { definitionId: 'ace', copies: 1 },
@@ -329,8 +331,7 @@ const elements = {
   expandedDeckFilterSummary: document.getElementById('expanded-deck-filter-summary'),
   expandedDeckScroll: document.getElementById('expanded-deck-scroll'),
   expandedDeckList: document.getElementById('expanded-deck-list'),
-  expandedDeckHeightDecrease: document.getElementById('expanded-deck-height-decrease'),
-  expandedDeckHeightIncrease: document.getElementById('expanded-deck-height-increase'),
+  expandedDeckHeightRange: document.getElementById('expanded-deck-height-range'),
   expandedDeckHeightValue: document.getElementById('expanded-deck-height-value'),
   expandedRoundLimitInput: document.getElementById('expanded-round-limit-input'),
   expandedScoreTargetEnabled: document.getElementById('expanded-score-target-enabled'),
@@ -1287,6 +1288,13 @@ function deckCardCount(deck) {
   return (deck || []).reduce((total, entry) => total + entry.copies, 0);
 }
 
+function getExpandedRoundLimitMaximum(totalCards) {
+  return Math.min(
+    MAX_EXPANDED_ROUND_LIMIT,
+    Math.max(0, totalCards) + MAX_EXPANDED_ROUND_EXTENSION
+  );
+}
+
 function getExpandedDeckForEditing(rules) {
   return rules.ruleset === EXPANDED_PRIVATE_RULESET_ID && rules.deck.length > 0
     ? cloneDeckEntries(rules.deck)
@@ -1326,8 +1334,9 @@ function validateExpandedSettingsForClient(request) {
   if (totalCards < MIN_EXPANDED_DECK_SIZE || totalCards > MAX_EXPANDED_DECK_SIZE) {
     return 'デッキは1人あたり5〜14枚にしてください。';
   }
-  if (!Number.isSafeInteger(request.roundLimit) || request.roundLimit < 1 || request.roundLimit > totalCards) {
-    return '総ラウンド数は、デッキ枚数以内にしてください。';
+  const roundLimitMaximum = getExpandedRoundLimitMaximum(totalCards);
+  if (!Number.isSafeInteger(request.roundLimit) || request.roundLimit < 1 || request.roundLimit > roundLimitMaximum) {
+    return `総ラウンド数は、デッキ枚数から最大${MAX_EXPANDED_ROUND_EXTENSION}ラウンドまで増やせます。`;
   }
   if (request.scoreTarget !== null
     && (!Number.isSafeInteger(request.scoreTarget) || request.scoreTarget < 1 || request.scoreTarget > request.roundLimit * 2)) {
@@ -1348,9 +1357,10 @@ function updateExpandedDeckScrollCue() {
 function normalizeExpandedDeckListHeight(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
-  return EXPANDED_DECK_HEIGHT_STOPS.reduce((closest, candidate) => (
-    Math.abs(candidate - parsed) < Math.abs(closest - parsed) ? candidate : closest
-  ), EXPANDED_DECK_HEIGHT_MIN_PX);
+  const clamped = Math.min(EXPANDED_DECK_HEIGHT_MAX_PX, Math.max(EXPANDED_DECK_HEIGHT_MIN_PX, parsed));
+  const snapped = Math.round((clamped - EXPANDED_DECK_HEIGHT_MIN_PX) / EXPANDED_DECK_HEIGHT_STEP_PX)
+    * EXPANDED_DECK_HEIGHT_STEP_PX + EXPANDED_DECK_HEIGHT_MIN_PX;
+  return Math.min(EXPANDED_DECK_HEIGHT_MAX_PX, Math.max(EXPANDED_DECK_HEIGHT_MIN_PX, snapped));
 }
 
 function readExpandedDeckListHeight() {
@@ -1370,11 +1380,9 @@ function applyExpandedDeckListHeight(height, { persist = false } = {}) {
   if (elements.expandedDeckList) {
     elements.expandedDeckList.style.setProperty('--expanded-deck-list-height', `${normalized}px`);
   }
-  if (elements.expandedDeckHeightDecrease) {
-    elements.expandedDeckHeightDecrease.disabled = normalized <= EXPANDED_DECK_HEIGHT_MIN_PX;
-  }
-  if (elements.expandedDeckHeightIncrease) {
-    elements.expandedDeckHeightIncrease.disabled = normalized >= EXPANDED_DECK_HEIGHT_MAX_PX;
+  if (elements.expandedDeckHeightRange) {
+    elements.expandedDeckHeightRange.value = String(normalized);
+    elements.expandedDeckHeightRange.setAttribute('aria-valuetext', `${normalized}px`);
   }
   if (elements.expandedDeckHeightValue) setText(elements.expandedDeckHeightValue, `${normalized}px`);
   if (persist) {
@@ -1385,13 +1393,6 @@ function applyExpandedDeckListHeight(height, { persist = false } = {}) {
     }
   }
   window.requestAnimationFrame(updateExpandedDeckScrollCue);
-}
-
-function adjustExpandedDeckListHeight(direction) {
-  const current = normalizeExpandedDeckListHeight(expandedDeckListHeight) ?? EXPANDED_DECK_HEIGHT_MIN_PX;
-  const currentIndex = EXPANDED_DECK_HEIGHT_STOPS.indexOf(current);
-  const nextIndex = Math.max(0, Math.min(EXPANDED_DECK_HEIGHT_STOPS.length - 1, currentIndex + direction));
-  applyExpandedDeckListHeight(EXPANDED_DECK_HEIGHT_STOPS[nextIndex], { persist: true });
 }
 
 // On small screens, card rows and the rules matrix deliberately keep their
@@ -1555,7 +1556,7 @@ function renderExpandedDeckEditor(rules, { canEdit, isPending }) {
 
   elements.expandedRoundLimitInput.value = String(rules.roundLimit);
   elements.expandedRoundLimitInput.min = '1';
-  elements.expandedRoundLimitInput.max = String(totalCards);
+  elements.expandedRoundLimitInput.max = String(getExpandedRoundLimitMaximum(totalCards));
   elements.expandedRoundLimitInput.disabled = disabled;
   elements.expandedScoreTargetEnabled.checked = rules.scoreTarget !== null;
   elements.expandedScoreTargetEnabled.disabled = disabled;
@@ -1622,14 +1623,20 @@ function renderRoomRules(room) {
             ? '現在の設定担当者 — 編集を開始できます'
           : '現在の設定担当者が変更できます'
   );
-  setText(elements.roomRulesSummary, `共通の${deckCount}枚で最大${displayedRoundLimit}ラウンド。1ラウンド ${formatTurnTime(rules.turnTimeLimitMs)}、${immediateText}です。`);
+  const firstRoundBonusMs = Number.isSafeInteger(rules.firstRoundTimeBonusMs)
+    ? rules.firstRoundTimeBonusMs
+    : FIRST_ROUND_TIME_BONUS_MS;
+  const firstRoundTimeNote = firstRoundBonusMs > 0
+    ? `第1ラウンドは状況把握のため＋${formatTurnTime(firstRoundBonusMs)}`
+    : '';
+  setText(elements.roomRulesSummary, `共通の${deckCount}枚で最大${displayedRoundLimit}ラウンド。1ラウンド ${formatTurnTime(rules.turnTimeLimitMs)}${firstRoundTimeNote ? `（${firstRoundTimeNote}）` : ''}、${immediateText}です。`);
   setText(elements.roomRulesDeck, deckText);
   setText(elements.roomRulesEnd, rules.scoreTarget === null
     ? `第${displayedRoundLimit}ラウンド終了時に、獲得枚数が多い側の勝ちです。`
     : `${rules.scoreTarget}枚獲得、または第${displayedRoundLimit}ラウンド終了時に獲得枚数が多い側の勝ちです。`);
-  setText(elements.roomRulesTimeout, rules.blankEnabled
+  setText(elements.roomRulesTimeout, `${rules.blankEnabled
     ? '時間切れ時は、合法な手札と手札外のBlankからサーバーが1つをランダムに選びます。'
-    : '時間切れ時は、残った合法な手札からサーバーが1枚をランダムに選びます。');
+    : '時間切れ時は、残った合法な手札からサーバーが1枚をランダムに選びます。'}${firstRoundTimeNote ? ` ${firstRoundTimeNote}です。` : ''}`);
   const concepts = isExpanded ? rules.activeConcepts : [];
   if (elements.roomRulesConcepts && elements.roomRulesConceptsList) {
     elements.roomRulesConcepts.classList.toggle('hidden', concepts.length === 0);
@@ -1827,7 +1834,13 @@ function renderTimer(room) {
   }
   if (room.gameState !== 'playing' || !room.deadline) return;
   const pendingAction = getPrivatePendingAction(room);
-  const timerLimitMs = pendingAction ? 30_000 : getRoomRules(room).turnTimeLimitMs;
+  const rules = getRoomRules(room);
+  const firstRoundBonusMs = Number.isSafeInteger(rules.firstRoundTimeBonusMs)
+    ? rules.firstRoundTimeBonusMs
+    : FIRST_ROUND_TIME_BONUS_MS;
+  const timerLimitMs = pendingAction
+    ? 30_000
+    : rules.turnTimeLimitMs + (room.round === 1 ? firstRoundBonusMs : 0);
 
   const updateTimer = () => {
     const remainingMs = Math.max(0, room.deadline - Date.now());
@@ -1895,14 +1908,13 @@ function formatCardDisplayName(card) {
 }
 
 function createCard(card, suitType, isInteractive, { effectTargetAction = null } = {}) {
-  const cardElement = document.createElement('div');
   // 両プレイヤーは同じIDのカードを持つため、選択状態は操作できる自分の手札だけに適用する。
   const isLocked = card?.state?.locked === true;
   // The owner may know a Noise card's real definition, but the card remains
   // Noise for presentation and for the later reveal contract.
   const isNoise = card?.category === 'noise' || card?.state?.ownerOnlyNoise === true;
   const isPreview = card?.preview === true;
-  const canChooseCard = isInteractive && !isLocked;
+  const canChoosePlayableCard = isInteractive && !isLocked;
   const effectCandidateIds = Array.isArray(effectTargetAction?.target?.candidateIds)
     ? effectTargetAction.target.candidateIds
     : [];
@@ -1911,6 +1923,13 @@ function createCard(card, suitType, isInteractive, { effectTargetAction = null }
   const canChooseEffectTarget = isEffectCandidate
     && socket?.connected
     && privateActionSubmittingId !== effectTargetAction.id;
+  // A pending target operation owns the card interaction.  This avoids a
+  // target tap being interpreted as a normal hidden-card selection first,
+  // and uses a native button for the target so touch and keyboard activation
+  // remain reliable on an opponent's hand as well as the player's own hand.
+  const canChooseCard = canChoosePlayableCard && !canChooseEffectTarget;
+  const cardElement = document.createElement(canChooseEffectTarget ? 'button' : 'div');
+  if (canChooseEffectTarget) cardElement.type = 'button';
   const isSelected = canChooseCard && card.id === mySelectedCardId;
   const isCommitting = canChooseCard && card.id === committedCardId;
   const isEffectTargetSelected = isEffectCandidate
@@ -1974,6 +1993,12 @@ function createCard(card, suitType, isInteractive, { effectTargetAction = null }
     cardElement.setAttribute('role', 'button');
     cardElement.tabIndex = 0;
     cardElement.setAttribute('aria-pressed', String(isEffectTargetSelected));
+    cardElement.setAttribute('aria-controls', 'private-action-confirm');
+    // Keep this local affordance tied to the opaque server-projected action.
+    // It is useful for diagnostics and styling, but carries no card
+    // definition, nonce, or information that another viewer did not receive.
+    cardElement.dataset.effectActionId = effectTargetAction.id;
+    cardElement.dataset.effectTargetId = card.id;
     const selectEffectTarget = () => {
       const candidateId = card?.id;
       if (!currentRoom
@@ -3477,8 +3502,8 @@ function renderRoom(room) {
       settingsEditing
         ? `${roomView.settingsEditorName || '設定担当者'} が設定を編集中です。完了後に開始同意できます。`
         : agreedNames.length > 0
-          ? `開始に同意済み：${agreedNames.join('・')}（${readyCount} / 2）`
-          : '開始への同意：まだ誰も同意していません（0 / 2）'
+          ? `開始同意 ${readyCount} / 2 — ${agreedNames.join('・')} が準備完了`
+          : '開始同意 0 / 2 — 両者が同意すると対戦を始めます'
     );
   }
   elements.nextRandomButton.disabled = !socket?.connected || nextRandomMatchPending;
@@ -3720,17 +3745,14 @@ elements.expandedDeckList.addEventListener('click', (event) => {
       .filter((candidate) => candidate.copies > 0)
     : [{ definitionId, copies: nextCopies }, ...deck];
   const nextTotal = deckCardCount(nextDeck);
-  const nextRoundLimit = Math.min(rules.roundLimit, nextTotal);
+  const nextRoundLimit = Math.min(rules.roundLimit, getExpandedRoundLimitMaximum(nextTotal));
   const nextScoreTarget = rules.scoreTarget === null ? null : Math.min(rules.scoreTarget, nextRoundLimit * 2);
   requestPrivateSettingsChange({ deck: nextDeck, roundLimit: nextRoundLimit, scoreTarget: nextScoreTarget });
 });
 
 elements.expandedDeckList.addEventListener('scroll', updateExpandedDeckScrollCue, { passive: true });
-elements.expandedDeckHeightDecrease?.addEventListener('click', () => {
-  adjustExpandedDeckListHeight(-1);
-});
-elements.expandedDeckHeightIncrease?.addEventListener('click', () => {
-  adjustExpandedDeckListHeight(1);
+elements.expandedDeckHeightRange?.addEventListener('input', () => {
+  applyExpandedDeckListHeight(Number(elements.expandedDeckHeightRange.value), { persist: true });
 });
 applyExpandedDeckListHeight(expandedDeckListHeight);
 elements.myHand.addEventListener('scroll', () => updateHorizontalScrollCue(elements.myHand, elements.myHandScroll), { passive: true });

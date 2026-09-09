@@ -266,7 +266,7 @@ const FUTURE_PRIVATE_CARD_CATALOG = Object.freeze([
     requiresFeatures: ['conditional-strength-v1'], excludesTags: []
   },
   {
-    id: 'the-star', name: 'The Star', strength: 17, desc: '敗北時、相手が望む札をノイズ状態で相手手札へ加える', category: 'tarot',
+    id: 'the-star', name: 'The Star', strength: 17, desc: '出した後、相手が望む札をノイズ状態で相手手札へ加える', category: 'tarot',
     requiresFeatures: ['target-actions-v1', 'card-generation-v1', 'recipient-view-v1', 'noise-state-v1'], excludesTags: [], effectProfileId: 'opponent-choose-noise-v1'
   },
   {

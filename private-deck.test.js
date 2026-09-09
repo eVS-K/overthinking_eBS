@@ -69,7 +69,21 @@ test('Private拡張デッキは未実装カード、無効な枚数、未到達�
     { definitionId: 'queen', copies: 1 },
     { definitionId: 'jack', copies: 1 },
     { definitionId: 'ten', copies: 1 }
-  ], expandedRules({ roundLimit: 6 })), /round limit/);
+  ], expandedRules({ roundLimit: 16 })), /deck size plus the generation extension/);
+  assert.doesNotThrow(() => normalizePrivateDeckEntries([
+    { definitionId: 'ace', copies: 1 },
+    { definitionId: 'king', copies: 1 },
+    { definitionId: 'queen', copies: 1 },
+    { definitionId: 'jack', copies: 1 },
+    { definitionId: 'ten', copies: 1 }
+  ], expandedRules({ roundLimit: 15 })));
+  assert.throws(() => normalizePrivateDeckEntries([
+    { definitionId: 'ace', copies: 1 },
+    { definitionId: 'king', copies: 1 },
+    { definitionId: 'queen', copies: 1 },
+    { definitionId: 'jack', copies: 1 },
+    { definitionId: 'ten', copies: 1 }
+  ], expandedRules({ roundLimit: 16 })), /deck size plus the generation extension/);
   assert.throws(() => normalizePrivateDeckEntries([
     { definitionId: 'ace', copies: 1 },
     { definitionId: 'king', copies: 1 },

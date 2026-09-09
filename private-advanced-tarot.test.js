@@ -143,7 +143,7 @@ test('敗北時のコピーTarotは対象候補だけを使い、生成札は一
   assert.doesNotThrow(() => assertPrivateGameState(hierophant.state));
 });
 
-test('The Hanged Man と The Star は凍結デッキ内だけを生成し、Starは所有者以外へノイズ化する', () => {
+test('The Hanged Manは敗北時、The Starは結果にかかわらず凍結デッキ内だけを生成する', () => {
   const hangedState = makeState('advanced-hanged', ['the-hanged-man', 'ace', 'king', 'queen', 'jack']);
   const hangedStart = beginAdvancedPrivateRound(
     hangedState,
@@ -153,19 +153,13 @@ test('The Hanged Man と The Star は凍結デッキ内だけを生成し、Star
   const hanged = finalizeStarted(hangedStart, ['king']);
   assert.equal(hanged.state.p2.hand.filter((card) => card.definitionId === 'king').length, 2);
 
-  const starState = makeState('advanced-star', ['the-star', 'the-sun', 'ace', 'king', 'queen']);
-  const sun = applySunPreCommitAction(
-    starState,
-    'p2',
-    idFor(starState, 'p2', 'the-sun'),
-    idFor(starState, 'p2', 'ace')
-  );
+  const starState = makeState('advanced-star', ['the-star', 'ace', 'king', 'queen', 'jack']);
   const starStart = beginAdvancedPrivateRound(
     starState,
     idFor(starState, 'p1', 'the-star'),
-    idFor(starState, 'p2', 'the-sun'),
-    { preCommitEffects: [sun.effect] }
+    idFor(starState, 'p2', 'ace')
   );
+  assert.equal(starStart.record.winnerSeat, 'p1', 'Starの勝利時でも対象操作を作る');
   assert.equal(starStart.targetActions[0].type, 'opponent-choose-noise');
   const star = finalizeStarted(starStart, ['king']);
   const noise = star.state.p2.hand.find((card) => card.definitionId === 'king' && isNoiseCard(card));

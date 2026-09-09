@@ -7,6 +7,7 @@
  * recipient-specific view, and atomically consume a validated choice.
  */
 const crypto = require('crypto');
+const { MAX_PRIVATE_ROUNDS } = require('./private-ruleset');
 
 // Target effects are deliberate, potentially irreversible choices. Keep this
 // distinct from the normal turn clock and long enough to inspect a changing
@@ -42,7 +43,7 @@ function normalizeEngineAction(action) {
     || typeof action.type !== 'string' || action.type.length < 1 || action.type.length > 64
     || typeof action.sourceDefinitionId !== 'string' || action.sourceDefinitionId.length < 1
     || action.sourceDefinitionId.length > 64
-    || !Number.isSafeInteger(action.round) || action.round < 1 || action.round > 20) {
+    || !Number.isSafeInteger(action.round) || action.round < 1 || action.round > MAX_PRIVATE_ROUNDS) {
     throw new TypeError('private engine action is invalid');
   }
   const candidates = Array.isArray(action.candidates) ? action.candidates.map(normalizeTarget) : [];

@@ -11,11 +11,11 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://overthinking-ebs.onrender.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://overthinking-ebs.onrender.com wss://overthinking-ebs.onrender.com; frame-src 'none'; upgrade-insecure-requests">
   <title>OVERTHINKING — 2人対戦カードゲーム</title>
   <script src="page-redirect.js?v=security-v4"></script>
-  <link rel="stylesheet" href="style.css?v=pvp-v45">
+  <link rel="stylesheet" href="style.css?v=pvp-v46">
   <script src="oauth-recovery.js?v=oauth-recovery-v2"></script>
   <script src="effect-language.js?v=effect-language-v1"></script>
   <script src="presentation-events.js?v=presentation-v1"></script>
-  <script src="socket-loader.js?v=pvp-v45"></script>
+  <script src="socket-loader.js?v=pvp-v46"></script>
 </head>
 <body>
   <main id="legacy-startup-gate" class="legacy-startup-gate" aria-live="polite" aria-atomic="true">
@@ -293,19 +293,17 @@
                   <p id="expanded-deck-scroll-hint" class="expanded-deck-scroll-hint" aria-hidden="true">↓ 下へスクロールして、すべてのカードを見る</p>
                   <span id="expanded-deck-scroll-description" class="sr-only">カード一覧は下へスクロールして、すべてのカードを確認できます。</span>
                 </div>
-                <div class="expanded-deck-height-control" role="group" aria-labelledby="expanded-deck-height-label" aria-describedby="expanded-deck-height-description">
+                <label class="expanded-deck-height-control" for="expanded-deck-height-range" aria-describedby="expanded-deck-height-description">
                   <span id="expanded-deck-height-label">一覧の高さ</span>
-                  <div class="expanded-deck-height-actions">
-                    <button id="expanded-deck-height-decrease" class="deck-height-stepper" type="button" aria-label="一覧を40px低くする">−</button>
-                    <output id="expanded-deck-height-value" aria-live="polite">270px</output>
-                    <button id="expanded-deck-height-increase" class="deck-height-stepper" type="button" aria-label="一覧を40px高くする">＋</button>
-                  </div>
-                  <span id="expanded-deck-height-description" class="sr-only">一覧の高さは180pxから440pxまで、40pxずつ調整できます。</span>
+                  <input id="expanded-deck-height-range" type="range" min="180" max="440" step="20" value="270" aria-labelledby="expanded-deck-height-label" aria-valuetext="270px">
+                  <output id="expanded-deck-height-value" aria-live="polite">270px</output>
+                  <span id="expanded-deck-height-description" class="sr-only">一覧の高さは180pxから440pxまで、20pxずつ調整できます。</span>
+                </label>
                 </div>
                 <div class="expanded-rule-inputs">
-                  <label for="expanded-round-limit-input"><span>総ラウンド数</span><input id="expanded-round-limit-input" type="number" min="1" max="20" inputmode="numeric"></label>
+                  <label for="expanded-round-limit-input"><span>総ラウンド数</span><input id="expanded-round-limit-input" type="number" min="1" max="24" inputmode="numeric" aria-describedby="expanded-round-limit-note"><small id="expanded-round-limit-note">初期デッキ枚数を超える場合も、追加・複製を見込んで最大10ラウンドまで設定できます。</small></label>
                   <label class="expanded-immediate-toggle" for="expanded-score-target-enabled"><input id="expanded-score-target-enabled" type="checkbox"><span><strong>規定の獲得枚数で早期決着にする</strong><small>オンの場合、指定枚数を先取した時点で総ラウンドを待たずに終了します。</small></span></label>
-                  <label id="expanded-score-target-label" for="expanded-score-target-input"><span>早期決着の獲得枚数</span><input id="expanded-score-target-input" type="number" min="1" max="28" inputmode="numeric"></label>
+                  <label id="expanded-score-target-label" for="expanded-score-target-input"><span>早期決着の獲得枚数</span><input id="expanded-score-target-input" type="number" min="1" max="48" inputmode="numeric"></label>
                   <label class="expanded-blank-toggle" for="expanded-blank-enabled"><input id="expanded-blank-enabled" type="checkbox"><span><strong>Blankを使う</strong><small id="expanded-blank-note">手札外のBlankを選択でき、時間切れ時の抽選にも入ります。</small></span></label>
                 </div>
               </section>

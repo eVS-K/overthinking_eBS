@@ -143,9 +143,9 @@ Death、Temperance、The Devil、The Tower、Strength、The Chariotは実装済�
 | The Hierophant | 敗北時、自分札1枚のコピーを追加 | `target-selection`、`card-generation` | コピー元が伏せ札・ロック札の場合。 |
 | The Lovers | 勝利時King、敗北時相手へQueenを追加 | `card-generation` | 生成枚数上限。引き分け時は不発。 |
 | The Hanged Man | 敗北時、相手が望む札を相手手札へ追加 | `target-selection`、`card-generation` | 選択者の認可、対象定義の許可範囲。 |
-| Wheel of Fortune | 勝利時は総ラウンド数を+1、敗北時は-1 | `round-extension` | 現在完了済みのラウンド未満には縮めず、最大20ラウンド。 |
+| Wheel of Fortune | 勝利時は総ラウンド数を+1、敗北時は-1 | `round-extension` | 現在完了済みのラウンド未満には縮めず、最大24ラウンド。 |
 
-The Magician、The Lovers、Wheel of Fortuneは実装済みで、比較・得点・持ち越しを確定した後に一回だけ解決する。The Magicianがコピーするのは相手の**カード定義**であり、コピーの能力をその場で再発動しない。追加札にはサーバー発行の新しい`instanceId`を与え、手札24枚・両者合計64実体・総ラウンド20回の上限を超えない。Wheel of Fortuneは凍結済みの対局内`effectiveRoundLimit`だけを変え、次戦用のルール設定は変えない。結果履歴には追加した枚数とラウンド変化を公開するが、内部の生成`instanceId`は送らない。
+The Magician、The Lovers、Wheel of Fortuneは実装済みで、比較・得点・持ち越しを確定した後に一回だけ解決する。The Magicianがコピーするのは相手の**カード定義**であり、コピーの能力をその場で再発動しない。追加札にはサーバー発行の新しい`instanceId`を与え、手札24枚・両者合計64実体・総ラウンド24回の上限を超えない。初期デッキからは、追加・複製の余地として最大10ラウンド分まで設定できる。Wheel of Fortuneは凍結済みの対局内`effectiveRoundLimit`だけを変え、次戦用のルール設定は変えない。結果履歴には追加した枚数とラウンド変化を公開するが、内部の生成`instanceId`は送らない。
 
 The Fool／The Hermitは、解決済み強さと安全な勝敗判定能力だけを反響し、反響の
 再帰や対象選択・秘匿・獲得札操作はコピーしないものとして確定した。詳細は

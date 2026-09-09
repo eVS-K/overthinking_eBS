@@ -51,6 +51,10 @@ const app = express();
 const server = http.createServer(app);
 
 const TURN_TIME_LIMIT_MS = 90_000;
+// The opening round carries a small, server-enforced reading allowance.  It
+// applies to both Guest PvP modes (Private and Random), while Ranked keeps
+// its separately specified REST-side timer.
+const FIRST_ROUND_TIME_BONUS_MS = 30_000;
 // Classic Guest PvP remains the canonical seven-card, seven-round game.  The
 // only Phase-1 private-room customization is an explicitly allow-listed turn
 // duration; Random Match and Ranked deliberately continue to use the fixed
@@ -421,6 +425,13 @@ function getRoomTurnTimeLimitMs(room) {
     : TURN_TIME_LIMIT_MS;
 }
 
+function getRoomRoundTimeLimitMs(room) {
+  const baseLimitMs = getRoomTurnTimeLimitMs(room);
+  return room?.round === 1
+    ? baseLimitMs + FIRST_ROUND_TIME_BONUS_MS
+    : baseLimitMs;
+}
+
 function getPublicRoomRules(room) {
   const config = getRoomPrivateConfig(room) || createDefaultPrivateRoomConfig();
   // Wheel of Fortune changes the frozen match's effective end round without
@@ -449,6 +460,7 @@ function getPublicRoomRules(room) {
     : [];
   return {
     ...config,
+    firstRoundTimeBonusMs: FIRST_ROUND_TIME_BONUS_MS,
     effectiveRoundLimit: runtimeRoundLimit,
     deckCatalog: expandedDeckCatalog,
     activeConcepts: getPrivateRuleConceptsForDeck({
@@ -1267,7 +1279,7 @@ function startTurnTimer(room, durationMs) {
     || room.players.length !== 2 || !room.players.every((player) => player.connected)) return;
 
   room.reconnectDeadline = 0;
-  const turnTimeLimitMs = getRoomTurnTimeLimitMs(room);
+  const turnTimeLimitMs = getRoomRoundTimeLimitMs(room);
   const requestedDuration = Number.isFinite(durationMs) ? durationMs : turnTimeLimitMs;
   const safeDuration = Math.max(0, Math.min(Math.floor(requestedDuration), turnTimeLimitMs));
   room.deadline = Date.now() + safeDuration;
@@ -3035,6 +3047,7 @@ if (require.main === module) {
 module.exports = {
   CLASSIC_ROUND_LIMIT,
   CLASSIC_SCORE_TARGET,
+  FIRST_ROUND_TIME_BONUS_MS,
   MAX_CHAT_IPS_PER_ROOM,
   PRIVATE_TURN_TIME_LIMIT_OPTIONS_MS,
   PRIVATE_ROOM_IDLE_TTL_MS,
@@ -3057,6 +3070,7 @@ module.exports = {
   finishPrivateRoomSettingsEdit,
   getSelectableCardIds,
   getPublicRoomRules,
+  getRoomRoundTimeLimitMs,
   getRoomTurnTimeLimitMs,
   isPrivateSettingsEditPayload,
   isPrivateRoomIdleExpired,

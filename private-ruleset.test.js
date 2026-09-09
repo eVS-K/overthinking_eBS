@@ -10,6 +10,8 @@ const {
   CLASSIC_SCORE_TARGET,
   EXPANDED_PRIVATE_RULESET_ID,
   MAX_PRIVATE_CARD_INSTANCES,
+  MAX_PRIVATE_ROUND_EXTENSION_FROM_INITIAL_DECK,
+  MAX_PRIVATE_ROUNDS,
   assertClassicPrivateRuleset,
   assertExpandedPrivateRuleset,
   assertPrivateExpansionLimits,
@@ -90,7 +92,11 @@ test('Private拡張presetは総ラウンド・任意の即時勝利・タイム�
   assert.equal(rules.scoreTarget, null);
   assert.equal(rules.blankEnabled, true);
   assert.equal(rules.timeoutPolicy, 'random-legal-with-blank');
+  assert.equal(MAX_PRIVATE_ROUND_EXTENSION_FROM_INITIAL_DECK, 10);
+  assert.equal(MAX_PRIVATE_ROUNDS, 24);
+  assert.equal(createExpandedPrivateRuleset({ roundLimit: MAX_PRIVATE_ROUNDS }).roundLimit, MAX_PRIVATE_ROUNDS);
   assert.throws(() => createExpandedPrivateRuleset({ roundLimit: 0 }), /round limit/);
+  assert.throws(() => createExpandedPrivateRuleset({ roundLimit: MAX_PRIVATE_ROUNDS + 1 }), /round limit/);
   assert.throws(() => createExpandedPrivateRuleset({ scoreTarget: -1 }), /score target/);
   assert.equal(createExpandedPrivateRuleset({ timeoutPolicy: 'forged' }).timeoutPolicy, 'random-legal');
 });
