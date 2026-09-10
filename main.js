@@ -1875,6 +1875,7 @@ function getCurrentInteractiveHand() {
     me
     && currentRoom?.gameState === 'playing'
     && !currentRoom.viewer?.hasConfirmedSelection
+    && !currentRoom.viewer?.hasQueuedPreCommitAction
     && !getPrivatePendingAction(currentRoom)
   );
   return getSelectableDisplayHand(me?.hand, currentRoom, canChoose);
@@ -2009,12 +2010,11 @@ function createCard(card, suitType, isInteractive, { effectTargetAction = null }
       renderRoom(currentRoom);
     };
     cardElement.addEventListener('click', selectEffectTarget);
-    cardElement.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        selectEffectTarget();
-      }
-    });
+    // Target cards are native <button>s. Their built-in Enter/Space handling
+    // emits exactly one click; adding the generic card key handler here would
+    // toggle the local target twice and leave it looking as if it never
+    // selected. Ordinary playable cards remain div buttons and retain their
+    // explicit keyboard handler above.
   }
 
   const top = document.createElement('div');
@@ -2910,6 +2910,10 @@ function renderStatus(room, me, opponent) {
     );
     return;
   }
+  if (room.viewer.hasQueuedPreCommitAction) {
+    setGameStatus('能力の対象を選ぶ順番を待っています。あなたの番になったら30秒以内に選んでください。', 'action');
+    return;
+  }
   if (room.viewer.isSpectator) {
     const position = Number.isSafeInteger(room.viewer.seatQueuePosition) ? room.viewer.seatQueuePosition : 0;
     const length = Number.isSafeInteger(room.viewer.seatQueueLength) ? room.viewer.seatQueueLength : 0;
@@ -3291,11 +3295,13 @@ function updateConfirmButton() {
   const isPlayer = Boolean(currentRoom && !currentRoom.viewer.isSpectator);
   const hasPendingAction = Boolean(getPrivatePendingAction(currentRoom));
   const hasCommitted = Boolean(currentRoom?.viewer?.hasConfirmedSelection);
+  const hasQueuedPreCommitAction = Boolean(currentRoom?.viewer?.hasQueuedPreCommitAction);
   const canConfirm = Boolean(
     isPlayer
     && isPlaying
     && socket?.connected
     && !hasCommitted
+    && !hasQueuedPreCommitAction
     && !hasPendingAction
     && mySelectedCardId
   );
@@ -3314,6 +3320,9 @@ function updateConfirmButton() {
     } else if (hasPendingAction) {
       label = '能力の対象を選んでください';
       state = 'action';
+    } else if (hasQueuedPreCommitAction) {
+      label = '能力の対象の順番を待っています';
+      state = 'action-queued';
     } else if (hasCommitted) {
       label = 'カードを伏せました';
       state = 'committed';
@@ -3343,6 +3352,7 @@ function renderRoom(room) {
     viewer: room.viewer || {
       isSpectator: !room.players.some((player) => player.id === socket?.id),
       hasConfirmedSelection: Boolean(room.selections?.[socket?.id]),
+      hasQueuedPreCommitAction: false,
       hasAgreedToStart: false,
       autoJoinWhenSeatAvailable: false,
       seatQueuePosition: null,
@@ -3410,6 +3420,7 @@ function renderRoom(room) {
     && !roomView.viewer.isSpectator
     && roomView.gameState === 'playing'
     && !roomView.viewer.hasConfirmedSelection
+    && !roomView.viewer.hasQueuedPreCommitAction
     && !roomView.viewer.pendingAction?.active
   );
   const displayedBottomHand = getSelectableDisplayHand(displayedBottomPlayer?.hand, roomView, isInteractive);
@@ -3472,7 +3483,9 @@ function renderRoom(room) {
     && ['waiting', 'finished'].includes(roomView.gameState);
   elements.confirmButton.classList.toggle(
     'hidden',
-    !playerCanAct || roomView.gameState !== 'playing' || Boolean(roomView.viewer.pendingAction?.active)
+    !playerCanAct || roomView.gameState !== 'playing'
+      || Boolean(roomView.viewer.pendingAction?.active)
+      || Boolean(roomView.viewer.hasQueuedPreCommitAction)
   );
   elements.surrenderButton.classList.toggle('hidden', !canSurrender);
   elements.restartButton.classList.toggle('hidden', !canAgreeToStart);
@@ -3582,7 +3595,12 @@ elements.confirmButton.addEventListener('click', () => {
     if (committedCardId !== mySelectedCardId) return;
     committedCardId = null;
     const me = currentRoom?.players.find((player) => player.id === socket?.id);
-    const canChoose = Boolean(me && currentRoom?.gameState === 'playing' && !currentRoom.viewer.hasConfirmedSelection);
+    const canChoose = Boolean(
+      me
+      && currentRoom?.gameState === 'playing'
+      && !currentRoom.viewer.hasConfirmedSelection
+      && !currentRoom.viewer.hasQueuedPreCommitAction
+    );
     if (me) renderHand(elements.myHand, getSelectableDisplayHand(me.hand, currentRoom, canChoose), 'spade', canChoose);
   }, 620);
 });

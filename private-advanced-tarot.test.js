@@ -168,6 +168,28 @@ test('The Hanged Manは敗北時、The Starは結果にかかわらず凍結デ�
   assert.doesNotThrow(() => assertPrivateGameState(star.state));
 });
 
+test('The Starで生まれたノイズ札は、プレイした瞬間だけ公開状態になり履歴へ残る', () => {
+  const initial = makeState('advanced-star-noise-reveal', ['the-star', 'ace', 'king', 'queen', 'jack']);
+  const started = beginAdvancedPrivateRound(
+    initial,
+    idFor(initial, 'p1', 'the-star'),
+    idFor(initial, 'p2', 'ace')
+  );
+  const afterStar = finalizeStarted(started, ['king']).state;
+  const noise = afterStar.p2.hand.find((card) => card.definitionId === 'king' && isNoiseCard(card));
+  assert.ok(noise, 'The Star must add an owner-only noise card before it is played');
+  assert.equal(noise.state.visibility, 'noise-owner-only');
+
+  const revealed = applyPrivateRound(
+    afterStar,
+    idFor(afterStar, 'p1', 'queen'),
+    noise.instanceId
+  );
+  assert.equal(revealed.p2Card.state.visibility, 'public');
+  assert.equal(revealed.p2Card.state.revealOn, null);
+  assert.doesNotThrow(() => assertPrivateGameState(revealed.state));
+});
+
 test('The Moon、The Sun、Judgement、The World は獲得札・破棄札・履歴の上限を保つ', () => {
   let moonState = makeState('advanced-moon', ['the-moon', 'the-sun', 'ace', 'king', 'queen']);
   moonState = applyPrivateRound(moonState, idFor(moonState, 'p1', 'ace'), idFor(moonState, 'p2', 'king')).state;

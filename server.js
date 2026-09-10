@@ -961,6 +961,10 @@ function createRoom(id, { matchType = 'private', allowedRandomClientIds = [], cr
     privatePendingAction: null,
     privatePreCommitEffects: { p1: null, p2: null },
     privatePreCommitIntent: null,
+    // The Sun is selected before either hidden card is committed. Both
+    // players may choose it in the same round, so a second private choice
+    // must wait without replacing the first player's opaque action.
+    privatePreCommitQueue: [],
     privatePreCommitTurnDeadline: 0,
     pausedPrivateActionRemainingMs: 0,
     privateResolvedActionResults: new Map()
@@ -996,6 +1000,7 @@ function clearPrivateActionState(room) {
   room.privateActionQueue = [];
   room.privatePreCommitEffects = { p1: null, p2: null };
   room.privatePreCommitIntent = null;
+  room.privatePreCommitQueue = [];
   room.privatePreCommitTurnDeadline = 0;
   room.pausedPrivateActionRemainingMs = 0;
   room.privateResolvedActionResults = new Map();
@@ -1372,6 +1377,14 @@ function createRoomView(room, socketId) {
     && room.privatePreCommitTurnDeadline > 0
     ? room.privatePreCommitTurnDeadline
     : room.deadline;
+  // This is a recipient-only availability flag. It deliberately reveals
+  // neither the queued card nor the active opponent action, so a queued Sun
+  // cannot become an information leak before both hidden cards are fixed.
+  const hasQueuedPreCommitAction = Boolean(
+    viewerSeat
+      && Array.isArray(room.privatePreCommitQueue)
+      && room.privatePreCommitQueue.some((intent) => intent?.seat === viewerSeat)
+  );
   const startAgreements = room.startAgreements || new Set();
   const spectatorSeatQueue = getSpectatorSeatQueue(room, spectator);
   const isRoomHost = Boolean(
@@ -1437,6 +1450,7 @@ function createRoomView(room, socketId) {
       isHost: isRoomHost,
       isEditingSettings: Boolean(player && room.privateSettingsEditingClientId === player.clientId),
       hasConfirmedSelection: Boolean(player && room.selections[player.id]),
+      hasQueuedPreCommitAction,
       hasAgreedToStart: Boolean(player && startAgreements.has(player.clientId)),
       autoJoinWhenSeatAvailable: Boolean(spectator?.autoJoinWhenSeatAvailable),
       seatQueuePosition: spectatorSeatQueue.position,
@@ -2041,6 +2055,7 @@ function finalizeExpandedPrivateTurn(room) {
   room.privatePendingAction = null;
   room.privatePreCommitEffects = { p1: null, p2: null };
   room.privatePreCommitIntent = null;
+  room.privatePreCommitQueue = [];
   room.privatePreCommitTurnDeadline = 0;
   if (result.terminal) finishExpandedPrivateGame(room, result);
   else startTurnTimer(room);
@@ -2093,6 +2108,82 @@ function resumeTurnAfterSunPreCommit(room) {
   return true;
 }
 
+function getPrivatePreCommitQueue(room) {
+  if (!Array.isArray(room?.privatePreCommitQueue)) room.privatePreCommitQueue = [];
+  return room.privatePreCommitQueue;
+}
+
+function createSunPreCommitIntent(room, seat, sunInstanceId) {
+  const state = room?.privateGameState;
+  if (!state || !['p1', 'p2'].includes(seat) || typeof sunInstanceId !== 'string') return null;
+  const sun = state[seat]?.hand?.find((card) => card.instanceId === sunInstanceId);
+  if (!sun || !cardBehavesAs(state, seat, sun, 'the-sun')) return null;
+  const candidates = state[seat].hand
+    .filter((card) => card.instanceId !== sunInstanceId)
+    .map((card) => card.instanceId);
+  if (!candidates.length) return null;
+  return { seat, sunInstanceId };
+}
+
+function activateSunPreCommitAction(room, intent) {
+  const state = room?.privateGameState;
+  const normalizedIntent = createSunPreCommitIntent(room, intent?.seat, intent?.sunInstanceId);
+  if (!state || !normalizedIntent) return false;
+  const { seat, sunInstanceId } = normalizedIntent;
+  const candidates = state[seat].hand
+    .filter((card) => card.instanceId !== sunInstanceId)
+    .map((card) => card.instanceId);
+  const action = {
+    type: 'sun-destroy',
+    round: state.round,
+    sourceSeat: seat,
+    sourceDefinitionId: 'the-sun',
+    actorSeat: seat,
+    targetSeat: seat,
+    actionKey: `${state.round}:${seat}:the-sun:sun-destroy:${sunInstanceId}`,
+    candidates
+  };
+  try {
+    // A target choice is its own deliberate 30-second operation. The normal
+    // turn clock stays paused and is restored only after every simultaneous
+    // Sun choice has been resolved.
+    room.privatePendingAction = createPrivatePendingAction({
+      roomId: room.id,
+      gameRevision: nextPrivateGameRevision(room),
+      phase: 'pre-commit',
+      timeoutMs: PRIVATE_ACTION_TIMEOUT_MS,
+      action
+    });
+  } catch {
+    return false;
+  }
+  room.privatePreCommitIntent = normalizedIntent;
+  schedulePrivateActionTimer(room);
+  broadcastRoom(room);
+  return true;
+}
+
+function advanceSunPreCommitQueue(room) {
+  const queue = getPrivatePreCommitQueue(room);
+  while (queue.length > 0) {
+    const nextIntent = queue.shift();
+    if (activateSunPreCommitAction(room, nextIntent)) return true;
+  }
+  return false;
+}
+
+function resumeOrAdvanceSunPreCommit(room) {
+  if (advanceSunPreCommitQueue(room)) return true;
+  return resumeTurnAfterSunPreCommit(room);
+}
+
+function hasQueuedSunPreCommitAction(room, seat) {
+  return Boolean(
+    ['p1', 'p2'].includes(seat)
+      && getPrivatePreCommitQueue(room).some((intent) => intent?.seat === seat)
+  );
+}
+
 function completePrivatePendingAction(room, target, { timedOut = false } = {}) {
   const pending = room?.privatePendingAction;
   if (!room || !pending || room.gameState !== 'playing') return { ok: false, code: 'missing' };
@@ -2108,8 +2199,7 @@ function completePrivatePendingAction(room, target, { timedOut = false } = {}) {
       // The browser never supplies a source card here; this branch is only an
       // internal invariant guard for a superseded room action.
       room.privatePreCommitIntent = null;
-      startTurnTimer(room);
-      broadcastRoom(room);
+      resumeOrAdvanceSunPreCommit(room);
       return { ok: false, code: 'stale' };
     }
     try {
@@ -2123,12 +2213,11 @@ function completePrivatePendingAction(room, target, { timedOut = false } = {}) {
       room.selections[player.id] = intent.sunInstanceId;
       room.privatePreCommitIntent = null;
       rememberPrivateActionResult(room, pending, { timedOut });
-      resumeTurnAfterSunPreCommit(room);
+      resumeOrAdvanceSunPreCommit(room);
       return { ok: true, timedOut };
     } catch {
       room.privatePreCommitIntent = null;
-      startTurnTimer(room);
-      broadcastRoom(room);
+      resumeOrAdvanceSunPreCommit(room);
       return { ok: false, code: 'target' };
     }
   }
@@ -2152,42 +2241,31 @@ function completePrivatePendingAction(room, target, { timedOut = false } = {}) {
 }
 
 function beginSunPreCommitAction(room, player, seat, sunInstanceId) {
-  const state = room?.privateGameState;
-  const candidates = state?.[seat]?.hand
-    ?.filter((card) => card.instanceId !== sunInstanceId)
-    .map((card) => card.instanceId) || [];
-  if (!candidates.length) return false;
+  if (!player || !['p1', 'p2'].includes(seat)) return false;
+  const intent = createSunPreCommitIntent(room, seat, sunInstanceId);
+  if (!intent) return false;
+  const activeAction = room.privatePendingAction;
+  if (activeAction) {
+    // One pre-commit action is visible only to its actor. If both players
+    // select The Sun, keep the second choice in a server-only queue instead
+    // of overwriting the first action and losing its target/nonce.
+    if (activeAction.phase !== 'pre-commit'
+      || activeAction.action.actorSeat === seat
+      || hasQueuedSunPreCommitAction(room, seat)) return false;
+    const queue = getPrivatePreCommitQueue(room);
+    if (queue.length >= 1) return false;
+    queue.push(intent);
+    broadcastRoom(room);
+    return true;
+  }
+
   const now = Date.now();
   const originalDeadline = Number.isSafeInteger(room.deadline) && room.deadline > now
     ? room.deadline
     : now;
-  const action = {
-    type: 'sun-destroy',
-    round: state.round,
-    sourceSeat: seat,
-    sourceDefinitionId: 'the-sun',
-    actorSeat: seat,
-    targetSeat: seat,
-    actionKey: `${state.round}:${seat}:the-sun:sun-destroy:${sunInstanceId}`,
-    candidates
-  };
-  try {
-    room.privatePendingAction = createPrivatePendingAction({
-      roomId: room.id,
-      gameRevision: nextPrivateGameRevision(room),
-      phase: 'pre-commit',
-      timeoutMs: Math.max(1, Math.min(PRIVATE_ACTION_TIMEOUT_MS, originalDeadline - now)),
-      action
-    });
-  } catch {
-    return false;
-  }
-  room.privatePreCommitIntent = { seat, sunInstanceId };
   room.privatePreCommitTurnDeadline = originalDeadline;
   clearTurnTimer(room.id);
-  schedulePrivateActionTimer(room);
-  broadcastRoom(room);
-  return true;
+  return activateSunPreCommitAction(room, intent);
 }
 
 function processExpandedPrivateTurn(room) {
@@ -2204,6 +2282,7 @@ function processExpandedPrivateTurn(room) {
       room.selections = {};
       room.privatePreCommitEffects = { p1: null, p2: null };
       room.privatePreCommitIntent = null;
+      room.privatePreCommitQueue = [];
       startTurnTimer(room);
       broadcastRoom(room);
       return;
@@ -2212,6 +2291,7 @@ function processExpandedPrivateTurn(room) {
     room.selections = {};
     room.privatePreCommitEffects = { p1: null, p2: null };
     room.privatePreCommitIntent = null;
+    room.privatePreCommitQueue = [];
     room.privateGameRevision = nextPrivateGameRevision(room);
     room.privateActionQueue = [...started.targetActions];
     room.deadline = 0;
@@ -2746,7 +2826,11 @@ io.on('connection', (socket) => {
         && playerSeat
         && playerSeat !== room.privatePendingAction.action.actorSeat
     );
+    const playerHasQueuedSunPreCommit = Boolean(
+      playerSeat && hasQueuedSunPreCommitAction(room, playerSeat)
+    );
     if (!player || !player.connected || room.selections[player.id]
+      || playerHasQueuedSunPreCommit
       || (room.privatePendingAction && !otherPlayerMayCommitDuringSunPreCommit)) return;
     const cardId = normalizeText(payload.cardId, 96);
     const legalCardIds = getSelectableCardIds(room, player);

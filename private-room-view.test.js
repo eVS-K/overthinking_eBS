@@ -44,6 +44,24 @@ test('The Starのノイズ札は所有者以外のpayloadへ定義・能力・�
   }
 });
 
+test('仮想Blankは有効な局面だけに安全な強さプレビューを付け、実カード情報を持たない', () => {
+  const { state } = createState();
+  const withPreview = publicExpandedCardForViewer(
+    { virtual: true },
+    { state, ownerSeat: 'p1', viewerSeat: 'p1' }
+  );
+  assert.equal(withPreview.category, 'blank');
+  assert.equal(withPreview.faceLabel, 'Blank');
+  assert.deepEqual(withPreview.roundInfo, { strength: 0, detail: '', conditional: false });
+  assert.equal(withPreview.definitionId, 'blank');
+
+  const withoutPreview = publicExpandedCardForViewer(
+    { virtual: true },
+    { state, ownerSeat: 'p1', viewerSeat: 'p1', includeRoundPreview: false }
+  );
+  assert.equal(withoutPreview.roundInfo, undefined);
+});
+
 test('対象操作は行為者にだけ候補を見せ、ノイズ対象でも正体を漏らさない', () => {
   const { state, noise } = createState();
   const pending = createPrivatePendingAction({
@@ -64,6 +82,23 @@ test('対象操作は行為者にだけ候補を見せ、ノイズ対象でも�
   assert.doesNotMatch(JSON.stringify(actor), /king/);
   assert.equal(outsider.target, undefined);
   assert.equal(outsider.nonce, undefined);
+});
+
+test('再接続時に消えた対象は、選択可能な札へすり替えず使用不能として返す', () => {
+  const { state } = createState();
+  const pending = createPrivatePendingAction({
+    roomId: 'missing-target-view', gameRevision: 1, now: 100,
+    randomBytes: () => Buffer.from('1234567890123456'),
+    action: {
+      type: 'lock-one', round: 1, sourceSeat: 'p1', sourceDefinitionId: 'justice',
+      actorSeat: 'p1', targetSeat: 'p2', actionKey: '1:p1:justice:missing:0', candidates: ['missing-target-id']
+    }
+  });
+  const actor = publicPrivatePendingActionForViewer(pending, state, 'p1');
+  assert.deepEqual(actor.target.cards, [{
+    id: 'missing-target-id', name: '対象なし', desc: 'この対象は既に使えません。',
+    category: 'unavailable', displayMark: '—', faceLabel: '—', visualRole: 'unavailable', state: { locked: true }
+  }]);
 });
 
 test('太陽の確定前対象操作は、行為者以外へ操作中であること自体を公開しない', () => {

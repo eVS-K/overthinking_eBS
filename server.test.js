@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const { createInitialHand } = require('./game-rules');
 const { createExpandedPrivateRoomConfig } = require('./private-room-config');
 const { createExpandedPrivateGameState } = require('./private-game-engine');
-const { createPrivatePendingAction } = require('./private-action-queue');
+const { PRIVATE_ACTION_TIMEOUT_MS, createPrivatePendingAction } = require('./private-action-queue');
 const {
   CLASSIC_ROUND_LIMIT,
   CLASSIC_SCORE_TARGET,
@@ -1167,6 +1167,83 @@ test('The Sunの破棄対象は確定前には状態を変えず、選択後だ�
   assert.equal(room.privateGameState.p1.hand.some((card) => card.instanceId === aceId), false);
   assert.equal(room.privateGameState.discardPile.some((entry) => entry.card.instanceId === aceId && entry.reason === 'sun'), true);
   assert.equal(room.privateGameState.history[0].p1Card.definitionId, 'the-sun');
+});
+
+test('両者が同じラウンドでThe Sunを選んでも、対象選択を上書きせず順に解決する', (t) => {
+  const room = createAdvancedPrivateRoomForActionTest('advanced-double-sun', [
+    'the-sun', 'ace', 'king', 'queen', 'jack'
+  ], { roundLimit: 5 });
+  t.after(() => {
+    if (room.gameState !== 'finished') finishGameByForfeit(room, room.players[0]);
+  });
+  const p1Sun = handInstanceId(room, 'p1', 'the-sun');
+  const p2Sun = handInstanceId(room, 'p2', 'the-sun');
+  const p1Target = handInstanceId(room, 'p1', 'ace');
+  const p2Target = handInstanceId(room, 'p2', 'king');
+
+  assert.equal(beginSunPreCommitAction(room, room.players[0], 'p1', p1Sun), true);
+  const firstPending = room.privatePendingAction;
+  assert.equal(firstPending?.action.actorSeat, 'p1');
+  assert.equal(firstPending?.expiresAt - firstPending?.createdAt, PRIVATE_ACTION_TIMEOUT_MS);
+
+  assert.equal(beginSunPreCommitAction(room, room.players[1], 'p2', p2Sun), true);
+  assert.equal(room.privatePendingAction?.id, firstPending.id);
+  assert.deepEqual(room.privatePreCommitQueue, [{ seat: 'p2', sunInstanceId: p2Sun }]);
+  const p1ViewBefore = createRoomView(room, 'p1');
+  const p2ViewBefore = createRoomView(room, 'p2');
+  assert.equal(p1ViewBefore.viewer.hasQueuedPreCommitAction, false);
+  assert.equal(p2ViewBefore.viewer.hasQueuedPreCommitAction, true);
+  assert.equal(p2ViewBefore.viewer.pendingAction, null);
+
+  assert.deepEqual(completePrivatePendingAction(room, p1Target), { ok: true, timedOut: false });
+  assert.equal(room.privatePendingAction?.phase, 'pre-commit');
+  assert.equal(room.privatePendingAction?.action.actorSeat, 'p2');
+  assert.equal(room.privatePreCommitQueue.length, 0);
+  assert.equal(createRoomView(room, 'p1').viewer.pendingAction, null);
+  assert.equal(createRoomView(room, 'p2').viewer.hasQueuedPreCommitAction, false);
+
+  assert.deepEqual(completePrivatePendingAction(room, p2Target), { ok: true, timedOut: false });
+  assert.equal(room.privatePendingAction, null);
+  assert.equal(room.privateGameState.history.length, 1);
+  assert.equal(room.privateGameState.history[0].p1Card.definitionId, 'the-sun');
+  assert.equal(room.privateGameState.history[0].p2Card.definitionId, 'the-sun');
+  assert.equal(room.privateGameState.history[0].effects.filter((effect) => effect.type === 'destroy-card').length, 2);
+  assert.equal(room.privateGameState.p1.hand.some((card) => card.instanceId === p1Target), false);
+  assert.equal(room.privateGameState.p2.hand.some((card) => card.instanceId === p2Target), false);
+});
+
+test('同一ラウンドで複数のTarot対象操作が出ても、行為者別に一件ずつ処理される', (t) => {
+  const room = createAdvancedPrivateRoomForActionTest('advanced-double-target', [
+    'the-hanged-man', 'the-star', 'ace', 'king', 'queen', 'jack'
+  ], { roundLimit: 6 });
+  t.after(() => {
+    if (room.gameState !== 'finished') finishGameByForfeit(room, room.players[0]);
+  });
+  room.selections = {
+    p1: handInstanceId(room, 'p1', 'the-hanged-man'),
+    p2: handInstanceId(room, 'p2', 'the-star')
+  };
+  processTurn(room);
+
+  assert.equal(room.privatePendingAction?.action.type, 'opponent-choose-copy');
+  assert.equal(room.privatePendingAction?.action.actorSeat, 'p2');
+  assert.equal(createRoomView(room, 'p1').viewer.pendingAction.target, undefined);
+  assert.equal(createRoomView(room, 'p2').viewer.pendingAction.target.surface, 'addition');
+
+  assert.deepEqual(completePrivatePendingAction(room, 'king'), { ok: true, timedOut: false });
+  assert.equal(room.privatePendingAction?.action.type, 'opponent-choose-noise');
+  assert.equal(room.privatePendingAction?.action.actorSeat, 'p1');
+  assert.equal(createRoomView(room, 'p2').viewer.pendingAction.target, undefined);
+  assert.equal(createRoomView(room, 'p1').viewer.pendingAction.target.surface, 'addition');
+
+  assert.deepEqual(completePrivatePendingAction(room, 'queen'), { ok: true, timedOut: false });
+  assert.equal(room.privatePendingAction, null);
+  assert.equal(room.privateGameState.p2.hand.some((card) => (
+    card.definitionId === 'king' && card.state.generated === true
+  )), true);
+  assert.equal(room.privateGameState.p1.hand.some((card) => (
+    card.definitionId === 'queen' && card.state.visibility === 'noise-owner-only'
+  )), true);
 });
 
 test('対象選択中に切断しても、再接続後は同じ一回限りの操作だけを復帰する', (t) => {

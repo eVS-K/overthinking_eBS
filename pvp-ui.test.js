@@ -135,6 +135,45 @@ test('高度なTarotの対象選択は盤面上の札を選んでから確定し
   assert.match(css, /\.private-action-target-tray\s*\{/);
 });
 
+test('同時のThe Sun対象選択は待ち行列として扱い、待機側へ秘匿を壊さない案内を出す', () => {
+  const client = read('main.js');
+  const server = read('server.js');
+
+  assert.match(server, /privatePreCommitQueue: \[\]/);
+  assert.match(server, /function advanceSunPreCommitQueue\(/);
+  assert.match(server, /function hasQueuedSunPreCommitAction\(/);
+  assert.match(server, /hasQueuedPreCommitAction,/);
+  assert.match(server, /timeoutMs: PRIVATE_ACTION_TIMEOUT_MS/);
+  assert.match(client, /hasQueuedPreCommitAction/);
+  assert.match(client, /能力の対象を選ぶ順番を待っています/);
+  assert.match(client, /!roomView\.viewer\.hasQueuedPreCommitAction/);
+});
+
+test('能力対象のネイティブbuttonはEnter／Spaceで二重に選択解除されない', () => {
+  const client = read('main.js');
+  const start = client.indexOf("if (canChooseEffectTarget) {");
+  const end = client.indexOf('\nfunction renderHand(', start);
+  assert.ok(start >= 0 && end > start, 'the target-button interaction block must remain delimited');
+  const targetButtonBlock = client.slice(start, end);
+
+  assert.match(client, /document\.createElement\(canChooseEffectTarget \? 'button' : 'div'\)/);
+  assert.match(targetButtonBlock, /cardElement\.addEventListener\('click', selectEffectTarget\)/);
+  assert.match(targetButtonBlock, /native <button>s/);
+  assert.doesNotMatch(targetButtonBlock, /cardElement\.addEventListener\('keydown'/);
+});
+
+test('ノイズの結果演出は短く滑らかで、情報レールは内容の高さを保つ', () => {
+  const css = read('style.css');
+
+  assert.match(css, /\.reveal-area\.effect-burst-noise::before\s*\{[^}]*cubic-bezier\(/);
+  assert.doesNotMatch(css, /effect-burst-noise[^}]*steps\(/);
+  assert.match(css, /@keyframes effect-burst-noise\s*\{[^}]*translate\(-50%, -50%\)/);
+  assert.match(css, /@media \(min-width: 1000px\) \{[\s\S]*?\.sidebar\s*\{\s*align-self:\s*start;/);
+  assert.match(css, /@media \(min-width: 1120px\) \{[\s\S]*?grid-template-rows:\s*auto auto;/);
+  assert.match(css, /\.history-list\s*\{[^}]*align-self:\s*start;/);
+  assert.match(css, /\.chat-panel\s*\{[^}]*align-self:\s*start;/);
+});
+
 test('ロック札とThe Starのノイズ札は、色だけに頼らず状態を明示して操作不能にする', () => {
   const client = read('main.js');
   const css = read('style.css');
@@ -220,14 +259,14 @@ test('GitHub PagesのPvP読み込みチェーンは同じキャッシュ版を�
   const loader = read('socket-loader.js');
   const redirect = read('page-redirect.js');
 
-  assert.match(html, /style\.css\?v=pvp-v47/);
+  assert.match(html, /style\.css\?v=pvp-v49/);
   assert.match(html, /effect-language\.js\?v=effect-language-v1/);
   assert.match(html, /presentation-events\.js\?v=presentation-v1/);
-  assert.match(html, /socket-loader\.js\?v=pvp-v47/);
+  assert.match(html, /socket-loader\.js\?v=pvp-v49/);
   assert.match(html, /page-redirect\.js\?v=security-v4/);
   assert.match(html, /id="legacy-startup-gate"/);
   assert.match(html, /id="connection-notice"/);
-  assert.match(loader, /main\.js\?v=pvp-v47/);
+  assert.match(loader, /main\.js\?v=pvp-v49/);
   assert.match(loader, /__overthinkingLegacyStartup/);
   assert.match(redirect, /play\.html/);
   assert.match(redirect, /window\.location\.replace\(gateway\.toString\(\)\)/);

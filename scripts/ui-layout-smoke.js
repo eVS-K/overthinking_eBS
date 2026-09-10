@@ -18,6 +18,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { setTimeout: delay } = require('node:timers/promises');
 const WebSocket = require('ws');
+const { io: connectSocketIo } = require('socket.io-client');
 
 const ROOT = path.resolve(__dirname, '..');
 const APP_PORT = Number(process.env.OVERTHINKING_UI_PORT || 3000);
@@ -152,7 +153,7 @@ async function evaluate(cdp, expression) {
   return result.result.value;
 }
 
-async function openLocalGame({ chromePath, debugPort, viewport, roomId }) {
+async function openLocalGame({ chromePath, debugPort, viewport, roomId, onReady = null }) {
   const profileDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'overthinking-ui-'));
   const chrome = spawn(chromePath, [
     '--headless=new',
@@ -212,6 +213,7 @@ async function openLocalGame({ chromePath, debugPort, viewport, roomId }) {
       !document.getElementById('game-screen').classList.contains('hidden')
       && document.querySelector('.sidebar') !== null
     `));
+    if (typeof onReady === 'function') await onReady({ cdp, viewport, roomId });
 
     const metrics = await evaluate(cdp, `(() => {
       const rect = (selector) => {
@@ -221,6 +223,9 @@ async function openLocalGame({ chromePath, debugPort, viewport, roomId }) {
         return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height };
       };
       const game = document.getElementById('game-screen');
+      const reveal = document.getElementById('reveal-area');
+      reveal.classList.add('effect-burst-noise');
+      const noiseBurst = getComputedStyle(reveal, '::before');
       return {
         innerWidth: window.innerWidth,
         innerHeight: window.innerHeight,
@@ -237,7 +242,9 @@ async function openLocalGame({ chromePath, debugPort, viewport, roomId }) {
         shell: rect('.game-shell'),
         sidebar: rect('.sidebar'),
         history: rect('.history-list'),
-        chat: rect('.chat-panel')
+        chat: rect('.chat-panel'),
+        noiseAnimationName: noiseBurst.animationName,
+        noiseAnimationTiming: noiseBurst.animationTimingFunction
       };
     })()`);
     return metrics;
@@ -249,11 +256,193 @@ async function openLocalGame({ chromePath, debugPort, viewport, roomId }) {
   }
 }
 
+function connectLocalSocket() {
+  return new Promise((resolve, reject) => {
+    const socket = connectSocketIo(`http://localhost:${APP_PORT}`, {
+      transports: ['websocket'],
+      forceNew: true,
+      extraHeaders: { Origin: `http://localhost:${APP_PORT}` }
+    });
+    const timeout = setTimeout(() => {
+      socket.disconnect();
+      reject(new Error('local Socket.IO player connection timed out'));
+    }, STARTUP_TIMEOUT_MS);
+    socket.once('connect', () => {
+      clearTimeout(timeout);
+      resolve(socket);
+    });
+    socket.once('connect_error', (error) => {
+      clearTimeout(timeout);
+      socket.disconnect();
+      reject(error);
+    });
+  });
+}
+
+function emitWithAck(socket, eventName, payload, timeoutMs = 6_000) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`${eventName} acknowledgement timed out`)), timeoutMs);
+    socket.emit(eventName, payload, (result) => {
+      clearTimeout(timeout);
+      resolve(result);
+    });
+  });
+}
+
+async function runPrivateActionInteractionSmoke(chromePath) {
+  const roomId = `ui-action-${process.pid}`;
+  const host = await connectLocalSocket();
+  let hostRoom = null;
+  host.on('room_updated', (room) => {
+    hostRoom = room;
+  });
+  try {
+    host.emit('join_room', {
+      roomId,
+      playerName: 'UI host',
+      clientId: `ui-action-host-${process.pid}`,
+      joinAsSpectator: false
+    });
+    await waitFor('UI対象選択用のホスト入室', () => hostRoom?.players?.length === 1);
+
+    const viewport = { name: 'desktop-target-action', width: 1280, height: 720, desktop: true };
+    const debugPort = await getFreePort();
+    const metrics = await openLocalGame({
+      chromePath,
+      debugPort,
+      viewport,
+      roomId,
+      onReady: async ({ cdp }) => {
+        await waitFor('UI対象選択用の二人目の入室', () => hostRoom?.players?.length === 2);
+        const begin = await emitWithAck(host, 'begin_private_settings_edit', { roomId });
+        assert.equal(begin?.ok, true, 'the local host must be able to open settings editing');
+        await waitFor('設定編集状態', () => hostRoom?.settingsEditing === true);
+        const update = await emitWithAck(host, 'update_private_settings', {
+          roomId,
+          configRevision: hostRoom.rules?.configRevision,
+          ruleset: 'private-expanded-v1',
+          turnTimeLimitMs: 90_000,
+          roundLimit: 5,
+          scoreTarget: null,
+          blankEnabled: false,
+          deck: [
+            { definitionId: 'the-high-priestess', copies: 1 },
+            { definitionId: 'ace', copies: 1 },
+            { definitionId: 'king', copies: 1 },
+            { definitionId: 'queen', copies: 1 },
+            { definitionId: 'jack', copies: 1 }
+          ]
+        });
+        assert.equal(update?.ok, true, 'the isolated action deck must be accepted by the server');
+        const finish = await emitWithAck(host, 'finish_private_settings_edit', { roomId });
+        assert.equal(finish?.ok, true, 'the local host must be able to finish settings editing');
+
+        await waitFor('ブラウザ側の開始同意', async () => evaluate(cdp, `
+          !document.getElementById('restartBtn').classList.contains('hidden')
+          && !document.getElementById('restartBtn').disabled
+        `));
+        await evaluate(cdp, `document.getElementById('restartBtn').click()`);
+        host.emit('agree_to_start', { roomId });
+        await waitFor('拡張Private対局の開始', async () => (
+          hostRoom?.gameState === 'playing'
+          && await evaluate(cdp, `document.querySelectorAll('#my-hand .card').length === 5`)
+        ));
+
+        const priestessSelection = await evaluate(cdp, `(() => {
+          const card = Array.from(document.querySelectorAll('#my-hand .card.card-action'))
+            .find((element) => element.textContent.includes('High Priestess'));
+          if (!card) {
+            return {
+              selected: false,
+              cards: Array.from(document.querySelectorAll('#my-hand .card')).map((element) => ({
+                text: element.textContent.trim(), className: element.className
+              }))
+            };
+          }
+          card.click();
+          return {
+            selected: Boolean(document.querySelector('#my-hand .card.selected')),
+            confirmDisabled: document.getElementById('confirmBtn').disabled,
+            className: document.querySelector('#my-hand .card.selected')?.className || ''
+          };
+        })()`);
+        assert.equal(
+          priestessSelection?.selected && priestessSelection.confirmDisabled === false,
+          true,
+          `the browser player must be able to select The High Priestess (${JSON.stringify(priestessSelection)})`
+        );
+        await evaluate(cdp, `document.getElementById('confirmBtn').click()`);
+
+        await waitFor('ホスト側の拡張手札', () => (
+          hostRoom?.gameState === 'playing'
+          && hostRoom.players?.[0]?.hand?.some((card) => card.definitionId === 'ace')
+        ));
+        const hostAce = hostRoom.players[0].hand.find((card) => card.definitionId === 'ace');
+        host.emit('confirm_card', { roomId, cardId: hostAce.id });
+
+        await waitFor('High Priestessの盤面対象候補', async () => evaluate(cdp, `
+          document.querySelectorAll('#opp-hand button.card-effect-target').length > 0
+          && !document.getElementById('private-action-confirm').classList.contains('hidden')
+        `));
+        const targetMeta = await evaluate(cdp, `(() => {
+          const target = document.querySelector('#opp-hand button.card-effect-target');
+          if (!target) return null;
+          target.focus();
+          return {
+            tag: target.tagName,
+            pressed: target.getAttribute('aria-pressed'),
+            candidateId: target.dataset.effectTargetId || ''
+          };
+        })()`);
+        assert.equal(targetMeta?.tag, 'BUTTON', 'a physical hand target must be a native button');
+        assert.equal(targetMeta?.pressed, 'false', 'the target must begin unselected');
+        assert.ok(targetMeta?.candidateId, 'the authorized candidate must retain its opaque id locally');
+
+        // Native buttons already synthesize one click for Enter. This catches
+        // the regression where a second manual key handler immediately toggled
+        // the target back off, leaving the confirmation control disabled.
+        await cdp.call('Input.dispatchKeyEvent', {
+          type: 'keyDown', key: 'Enter', code: 'Enter', text: '\r', unmodifiedText: '\r',
+          windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13
+        });
+        await cdp.call('Input.dispatchKeyEvent', {
+          type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13
+        });
+        await waitFor('キーボードで選んだ能力対象', async () => evaluate(cdp, `(() => {
+          const selected = document.querySelector('#opp-hand button.effect-target-selected');
+          return Boolean(selected)
+            && selected.getAttribute('aria-pressed') === 'true'
+            && !document.getElementById('private-action-confirm').disabled;
+        })()`));
+        await evaluate(cdp, `document.getElementById('private-action-confirm').click()`);
+        await waitFor('能力対象の確定と複製札の表示', async () => evaluate(cdp, `
+          document.querySelectorAll('.card-effect-target').length === 0
+          && document.querySelectorAll('#my-hand .card-generated').length >= 1
+        `));
+      }
+    });
+    assertLayout(viewport, metrics);
+    console.log('✓ desktop-target-action: High Priestess target selection works by keyboard and resolves once');
+  } finally {
+    host.disconnect();
+  }
+}
+
 function assertLayout(viewport, metrics) {
   assert.ok(metrics.shell && metrics.sidebar && metrics.history && metrics.chat, `${viewport.name}: required layout regions are present`);
   assert.ok(
     metrics.scrollWidth <= metrics.innerWidth + 1,
     `${viewport.name}: page must not horizontally overflow (${metrics.scrollWidth}px > ${metrics.innerWidth}px)`
+  );
+  assert.equal(
+    metrics.noiseAnimationName,
+    'effect-burst-noise',
+    `${viewport.name}: the public Noise cue must use its dedicated result animation`
+  );
+  assert.doesNotMatch(
+    metrics.noiseAnimationTiming,
+    /steps/i,
+    `${viewport.name}: the Noise cue must animate smoothly rather than jump between frames`
   );
   if (viewport.desktop) {
     assert.ok(
@@ -267,6 +456,10 @@ function assertLayout(viewport, metrics) {
     assert.ok(
       Math.abs(metrics.chat.top - metrics.history.top) <= 2 && metrics.chat.left >= metrics.history.right + 8,
       `${viewport.name}: history and chat must be separate side-by-side columns`
+    );
+    assert.ok(
+      metrics.history.height < Math.max(180, metrics.sidebar.height * .45),
+      `${viewport.name}: an empty history must keep its content height instead of stretching down the rail`
     );
   } else {
     assert.ok(
@@ -314,6 +507,7 @@ async function main() {
       assertLayout(viewport, metrics);
       console.log(`✓ ${viewport.name}: board/sidebar geometry and overflow are valid`);
     }
+    await runPrivateActionInteractionSmoke(chromePath);
   } finally {
     app.kill();
     await new Promise((resolve) => app.once('exit', resolve));

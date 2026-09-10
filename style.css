@@ -423,7 +423,7 @@ input::placeholder { color: #65708b; }
 .reveal-area.effect-burst-skipped { color: #bfc9df; }
 .reveal-area.effect-burst-destroy::before { content: '×'; animation: effect-burst .85s cubic-bezier(.16,.88,.26,1) both; }
 .reveal-area.effect-burst-lock::before { content: '⌁'; animation: effect-burst .85s cubic-bezier(.16,.88,.26,1) both; }
-.reveal-area.effect-burst-noise::before { content: '?'; animation: effect-burst-noise .85s steps(2, end) both; }
+.reveal-area.effect-burst-noise::before { content: '?'; animation: effect-burst-noise .8s cubic-bezier(.18,.8,.28,1) both; }
 .reveal-area.effect-burst-generate::before { content: '✦'; animation: effect-burst .85s cubic-bezier(.16,.88,.26,1) both; }
 .reveal-area.effect-burst-round::before { content: '↺'; animation: effect-burst .85s cubic-bezier(.16,.88,.26,1) both; }
 .reveal-area.effect-burst-skipped::before { content: '—'; animation: effect-burst .85s cubic-bezier(.16,.88,.26,1) both; }
@@ -516,7 +516,7 @@ input::placeholder { color: #65708b; }
 .confirm-button[data-state="selection-needed"]:disabled { border-color: rgba(141, 183, 255, .42); color: #c8dcfb; background: linear-gradient(100deg, rgba(50, 81, 139, .38), rgba(23, 38, 73, .62)); opacity: .88; }
 .confirm-button[data-state="ready"] { box-shadow: 0 8px 24px rgba(242, 189, 105, .16); }
 .confirm-button[data-state="committed"]:disabled { border-color: rgba(141, 183, 255, .62); color: #dceaff; background: linear-gradient(100deg, rgba(54, 95, 157, .5), rgba(26, 52, 100, .64)); opacity: .92; }
-.confirm-button[data-state="reconnecting"]:disabled, .confirm-button[data-state="action"]:disabled { border-color: rgba(180, 202, 253, .38); color: #b8c7e4; background: rgba(30, 45, 78, .5); opacity: .8; }
+.confirm-button[data-state="reconnecting"]:disabled, .confirm-button[data-state="action"]:disabled, .confirm-button[data-state="action-queued"]:disabled { border-color: rgba(180, 202, 253, .38); color: #b8c7e4; background: rgba(30, 45, 78, .5); opacity: .8; }
 .confirm-button[data-state="inactive"]:disabled { opacity: .55; }
 .surrender-button, .spectator-switch-button { min-height: 42px; padding: 10px 13px; border: 1px solid var(--line-strong); background: rgba(6, 11, 25, .46); cursor: pointer; font-size: 10px; font-weight: 700; letter-spacing: .04em; transition: border-color .2s, color .2s, background .2s, transform .2s; }
 .surrender-button { border-color: rgba(255, 119, 143, .46); color: #ffabbc; }
@@ -763,7 +763,7 @@ input::placeholder { color: #65708b; }
 @keyframes target-tray-enter { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes generated-card-glitch { 0%, 72%, 100% { opacity: .36; transform: translateX(0); } 76% { opacity: .62; transform: translateX(-2px); } 80% { opacity: .28; transform: translateX(2px); } 84% { opacity: .55; transform: translateY(1px); } }
 @keyframes effect-burst { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.3) rotate(-14deg); } 22% { opacity: 1; transform: translate(-50%, -50%) scale(1.2) rotate(6deg); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.7) rotate(0); } }
-@keyframes effect-burst-noise { 0% { opacity: 0; transform: translate(calc(-50% - 8px), -50%) scale(.5); } 28% { opacity: 1; transform: translate(calc(-50% + 5px), calc(-50% - 2px)) scale(1.18); } 58% { opacity: .82; transform: translate(calc(-50% - 4px), calc(-50% + 2px)) scale(1.36); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1.7); } }
+@keyframes effect-burst-noise { 0% { opacity: 0; filter: blur(3px); transform: translate(-50%, -50%) scale(.54); } 30% { opacity: 1; filter: blur(0); transform: translate(-50%, -50%) scale(1.16); } 66% { opacity: .72; filter: blur(.35px); transform: translate(-50%, -50%) scale(1.34); } 100% { opacity: 0; filter: blur(1px); transform: translate(-50%, -50%) scale(1.64); } }
 @keyframes effect-detail-enter { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes settings-owner-arrived { 0% { border-color: rgba(242, 189, 105, .28); box-shadow: none; } 25% { border-color: rgba(255, 243, 206, .86); box-shadow: 0 0 0 3px rgba(242, 189, 105, .17), 0 0 24px rgba(242, 189, 105, .24); } 100% { border-color: rgba(242, 189, 105, .28); box-shadow: none; } }
 @keyframes settings-edit-reveal { from { opacity: 0; transform: translateY(-9px) scale(.985); } 70% { opacity: 1; transform: translateY(1px) scale(1.004); } to { opacity: 1; transform: translateY(0) scale(1); } }
@@ -787,13 +787,16 @@ input::placeholder { color: #65708b; }
    one-column page, leaving the right half of the window unused. */
 @media (min-width: 1000px) {
   #game-screen { grid-template-columns: minmax(0, 1.55fr) minmax(360px, .9fr); width: min(calc(100% - 32px), 1480px); }
+  /* The information rail has its own content height. Stretching it to the
+     board's height makes an empty history look like a broken blank panel. */
+  .sidebar { align-self: start; }
 }
 
 @media (min-width: 1120px) {
-  .sidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto 1fr; column-gap: 20px; align-content: start; }
+  .sidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto; column-gap: 20px; align-content: start; align-items: start; }
   .sidebar-heading { grid-column: 1 / -1; }
-  .history-list { grid-column: 1; min-width: 0; margin-top: 13px; }
-  .chat-panel { grid-column: 2; min-width: 0; margin-top: 13px; padding-top: 0; padding-inline-start: 20px; border-top: 0; border-inline-start: 1px solid var(--line); }
+  .history-list { grid-column: 1; align-self: start; min-width: 0; margin-top: 13px; }
+  .chat-panel { grid-column: 2; align-self: start; min-width: 0; margin-top: 13px; padding-top: 0; padding-inline-start: 20px; border-top: 0; border-inline-start: 1px solid var(--line); }
   .chat-list { max-height: 260px; }
 }
 
